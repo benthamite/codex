@@ -21,21 +21,22 @@ Requires Emacs 30.0 or later.
 ### package-vc (built-in since Emacs 30)
 
 ```emacs-lisp
-(package-vc-install "https://github.com/benthamite/codex")
+(use-package codex
+  :vc (:url "https://github.com/benthamite/codex"))
 ```
 
 ### Elpaca
 
 ```emacs-lisp
 (use-package codex
-  :ensure (codex :host github :repo "benthamite/codex"))
+  :ensure (:host github :repo "benthamite/codex"))
 ```
 
 ### straight.el
 
 ```emacs-lisp
-(straight-use-package
- '(codex :type git :host github :repo "benthamite/codex"))
+(use-package codex
+  :straight (:host github :repo "benthamite/codex"))
 ```
 
 ### Dependencies
