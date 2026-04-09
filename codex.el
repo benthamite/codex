@@ -1435,6 +1435,97 @@ Intended as :after advice on `eat--process-output-queue'."
              codex-card-background
              codex-light-background-threshold)))))))
 
+;;;; Diagnostic helpers
+
+(defun codex-diagnose-faces-at-point ()
+  "Show face diagnostic information at point in a Codex buffer.
+Reports the face plist, resolved colors, contrast ratio, and
+whether the background remapping would process this span."
+  (interactive)
+  (let* ((face (get-text-property (point) 'face))
+         (fl-face (get-text-property (point) 'font-lock-face))
+         (fg (and (consp face) (plist-get face :foreground)))
+         (bg (and (consp face) (plist-get face :background)))
+         (effective-bg (or bg (face-background 'default)))
+         (effective-fg (or fg (face-foreground 'default)))
+         (contrast (codex--contrast-ratio effective-fg effective-bg))
+         (next (next-single-property-change (point) 'face))
+         (text (buffer-substring-no-properties
+                (point) (min (+ (point) 40) (or next (point-max))))))
+    (message
+     (concat "Face: %S\nfont-lock-face: %S\n"
+             "FG: %s  BG: %s  Contrast: %.1f:1 %s\n"
+             "Would remap: %s\nSpan: %S")
+     face fl-face
+     (or fg "default") (or bg "default")
+     (or contrast 0.0) (codex--contrast-label contrast)
+     (codex--would-remap-p bg)
+     text)))
+
+(defun codex--contrast-ratio (fg bg)
+  "Return the WCAG contrast ratio between colors FG and BG."
+  (when-let* ((fg-lum (codex--color-luminance fg))
+              (bg-lum (codex--color-luminance bg)))
+    (let ((l1 (max fg-lum bg-lum))
+          (l2 (min fg-lum bg-lum)))
+      (/ (+ l1 0.05) (+ l2 0.05)))))
+
+(defun codex--contrast-label (ratio)
+  "Return a human-readable label for contrast RATIO."
+  (cond ((null ratio) "")
+        ((< ratio 3.0) "<< LOW CONTRAST")
+        ((< ratio 4.5) "< marginal")
+        (t "OK")))
+
+(defun codex--would-remap-p (bg)
+  "Return a description of whether BG would be remapped."
+  (if (and bg (> (or (codex--color-luminance bg) 0)
+                 codex-light-background-threshold))
+      "YES" "no"))
+
+(defun codex-diagnose-faces-in-region (beg end)
+  "Audit face properties between BEG and END for low-contrast spans.
+With no active region, audits the visible portion of the buffer."
+  (interactive
+   (if (use-region-p)
+       (list (region-beginning) (region-end))
+     (list (window-start) (window-end))))
+  (let ((pos beg)
+        (problems nil))
+    (while (< pos end)
+      (let* ((next (or (next-single-property-change pos 'face nil end) end))
+             (problem (codex--diagnose-span pos next)))
+        (when problem (push problem problems))
+        (setq pos next)))
+    (codex--report-diagnostic-results problems)))
+
+(defun codex--diagnose-span (pos next)
+  "Return a diagnostic string for the face span from POS to NEXT.
+Returns nil if the span has adequate contrast or is whitespace."
+  (let* ((face (get-text-property pos 'face))
+         (fg (and (consp face) (plist-get face :foreground)))
+         (bg (and (consp face) (plist-get face :background)))
+         (effective-fg (or fg (face-foreground 'default)))
+         (effective-bg (or bg (face-background 'default)))
+         (contrast (codex--contrast-ratio effective-fg effective-bg))
+         (text (string-trim
+                (buffer-substring-no-properties
+                 pos (min (+ pos 60) next)))))
+    (when (and contrast (< contrast 3.0)
+               (not (string-match-p "\\`[ \t\n]*\\'" text)))
+      (format "  L%d: contrast %.1f:1, fg=%s bg=%s text=%S"
+              (line-number-at-pos pos) contrast
+              (or fg "default") (or bg "default")
+              (truncate-string-to-width text 40)))))
+
+(defun codex--report-diagnostic-results (problems)
+  "Display PROBLEMS found by face diagnostics."
+  (if problems
+      (message "Found %d low-contrast spans:\n%s"
+               (length problems)
+               (string-join (nreverse problems) "\n"))
+    (message "No low-contrast spans found in region.")))
+
 ;;;; Notification system
 
 (defun codex--pulse-modeline ()
