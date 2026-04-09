@@ -1237,9 +1237,13 @@ If FORCE-SWITCH-TO-BUFFER is non-nil, always switch to the Codex buffer."
       (when switch-after
         (pop-to-buffer buffer)))))
 
-(defun codex--start-subcommand (subcommand &optional last-flag)
+(defun codex--start-subcommand (subcommand &optional last-flag extra-args
+                                                       instance-name)
   "Start Codex with SUBCOMMAND (e.g., \"resume\" or \"fork\").
 When LAST-FLAG is non-nil, pass `--last' to the subcommand.
+EXTRA-ARGS is an optional list of additional arguments appended
+after the subcommand and its flags.  When INSTANCE-NAME is
+non-nil, use it directly instead of prompting.
 Codex subcommands run as separate processes."
   (let* ((dir (codex--directory))
          (backend codex-terminal-backend)
@@ -1249,13 +1253,16 @@ Codex subcommands run as separate processes."
                                             (or (codex--buffer-instance-name-for buf)
                                                 "default"))
                                           existing-buffers))
-         (instance-name (codex--prompt-for-instance-name dir existing-instance-names t))
+         (instance-name (or instance-name
+                            (codex--prompt-for-instance-name
+                             dir existing-instance-names)))
          (buffer-name (codex--buffer-name instance-name))
          (cli-args (codex--build-cli-args))
          (program-switches (append codex-program-switches
                                    cli-args
                                    (list subcommand)
-                                   (when last-flag '("--last"))))
+                                   (when last-flag '("--last"))
+                                   extra-args))
          (process-adaptive-read-buffering nil)
          (extra-env-variables (apply #'append
                                      (mapcar (lambda (func)

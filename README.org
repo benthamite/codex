@@ -226,9 +226,9 @@ The command ~codex~ starts a Codex instance in the current project root or, if n
 
 The command ~codex-start-in-directory~ always prompts for a directory before starting Codex, regardless of the current project.  With a prefix argument, it also switches to the Codex buffer.
 
-The command ~codex-resume~ resumes a previous Codex session by running ~codex resume~.  You are always prompted for an instance name.  With a prefix argument, it passes ~--last~ to resume the most recent session.
+The command ~codex-resume~ resumes a previous Codex session by running ~codex resume~.  If other instances already exist for the directory, you are prompted for an instance name; otherwise the name defaults to ="default"=.  With a prefix argument, it passes ~--last~ to resume the most recent session.
 
-The command ~codex-fork~ forks a previous session by running ~codex fork~.  Like ~codex-resume~, it prompts for an instance name and accepts a prefix argument for ~--last~.
+The command ~codex-fork~ forks a previous session by running ~codex fork~.  Like ~codex-resume~, it only prompts for an instance name when other instances exist, and accepts a prefix argument for ~--last~.
 
 The command ~codex-new-instance~ creates a new Codex instance and always prompts for an instance name, even if no other instances are running.  This is useful when you want to name your instance from the start.  It accepts the same prefix argument conventions as ~codex~.
 
