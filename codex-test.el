@@ -827,6 +827,37 @@ When only :inherit remains, the face is removed entirely."
     (codex--remap-light-backgrounds-in-region 1 6 nil 0.5)
     (should-not (get-text-property 1 'face))))
 
+(ert-deftest codex-test-contrast-ratio-white-black ()
+  "Contrast between white and black is approximately 21:1."
+  (let ((ratio (codex--contrast-ratio "#ffffff" "#000000")))
+    (should (> ratio 20))
+    (should (< ratio 22))))
+
+(ert-deftest codex-test-contrast-ratio-identical ()
+  "Contrast between identical colors is 1:1."
+  (should (= (codex--contrast-ratio "#808080" "#808080") 1.0)))
+
+(ert-deftest codex-test-strip-low-contrast-fg ()
+  "Low-contrast foreground is stripped, leaving the rest of the face."
+  (let ((face '(:foreground "#a60000" :background "#4a221d"
+                :inherit (eat-term-font-0))))
+    (let ((result (codex--strip-low-contrast-fg face 3.0)))
+      (should-not (plist-get result :foreground))
+      (should (equal (plist-get result :background) "#4a221d"))
+      (should (equal (plist-get result :inherit) '(eat-term-font-0))))))
+
+(ert-deftest codex-test-strip-low-contrast-fg-preserves-high-contrast ()
+  "High-contrast foreground is preserved."
+  (let* ((face '(:foreground "#ffffff" :background "#000000"))
+         (result (codex--strip-low-contrast-fg face 3.0)))
+    (should (eq result face))))
+
+(ert-deftest codex-test-strip-low-contrast-fg-no-foreground ()
+  "Face without foreground is returned unchanged."
+  (let* ((face '(:background "#1a1a2e" :inherit (eat-term-font-0)))
+         (result (codex--strip-low-contrast-fg face 3.0)))
+    (should (eq result face))))
+
 (provide 'codex-test)
 
 ;;; codex-test.el ends here

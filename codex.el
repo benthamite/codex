@@ -169,6 +169,19 @@ remapped when `codex-remap-light-backgrounds' is non-nil."
   :type 'number
   :group 'codex)
 
+(defcustom codex-minimum-contrast-ratio 3.0
+  "Minimum WCAG contrast ratio for CLI-emitted foreground colors.
+When non-nil and `codex-remap-light-backgrounds' is enabled,
+foreground colors whose contrast with their effective background
+falls below this ratio are stripped so the Emacs theme's default
+foreground takes over.  This keeps text readable when the CLI's
+internal theme is mismatched with the Emacs theme (e.g. light
+CLI palette on a dark Emacs theme, or vice versa).  Set to nil
+to disable contrast-based remapping while keeping background
+remapping."
+  :type '(choice (const :tag "Disabled" nil) number)
+  :group 'codex)
+
 ;;;; Notification customization
 (defcustom codex-enable-notifications t
   "Whether to show notifications when Codex finishes and awaits input."
@@ -1359,6 +1372,16 @@ COLOR is a hex string like \"#EEEEEE\" or a named color."
   (when-let* ((rgb (color-name-to-rgb color)))
     (+ (* 0.299 (nth 0 rgb)) (* 0.587 (nth 1 rgb)) (* 0.114 (nth 2 rgb)))))
 
+(defun codex--contrast-ratio (color-a color-b)
+  "Return the WCAG contrast ratio between COLOR-A and COLOR-B.
+Both arguments are color strings.  Returns nil if either color
+cannot be resolved."
+  (when-let* ((la (codex--color-luminance color-a))
+              (lb (codex--color-luminance color-b)))
+    (let ((l1 (max la lb))
+          (l2 (min la lb)))
+      (/ (+ l1 0.05) (+ l2 0.05)))))
+
 (defun codex--compute-card-background ()
   "Compute a card background slightly lighter than the default face."
   (let* ((bg (or (face-background 'default) "#000000"))
@@ -1425,8 +1448,9 @@ since these can cause font-weight mismatches."
         (setq pos next)))))
 
 (defun codex--remap-light-backgrounds-after-output (buffer)
-  "Remap light backgrounds in BUFFER after terminal output.
-Intended as :after advice on `eat--process-output-queue'."
+  "Remap light backgrounds and low-contrast foregrounds in BUFFER.
+Intended as :after advice on `eat--process-output-queue'.
+BUFFER is the eat buffer whose output was just processed."
   (when (and codex-remap-light-backgrounds
              (buffer-live-p buffer))
     (with-current-buffer buffer
@@ -1440,7 +1464,44 @@ Intended as :after advice on `eat--process-output-queue'."
             (codex--remap-light-backgrounds-in-region
              beg end
              codex-card-background
-             codex-light-background-threshold)))))))
+             codex-light-background-threshold)
+            (when codex-minimum-contrast-ratio
+              (codex--remap-low-contrast-fg-in-region
+               beg end codex-minimum-contrast-ratio))))))))
+
+(defun codex--remap-low-contrast-fg-in-region (beg end threshold)
+  "Strip low-contrast foregrounds in the region from BEG to END.
+A foreground is considered low-contrast when its WCAG ratio
+against the effective background (explicit or default) is below
+THRESHOLD.  Stripping lets the Emacs theme's default foreground
+show through, which is always well-contrasted with the default
+background."
+  (let ((pos beg))
+    (while (< pos end)
+      (let* ((next (or (next-single-property-change pos 'face nil end) end))
+             (face (get-text-property pos 'face))
+             (new-face (codex--strip-low-contrast-fg face threshold)))
+        (unless (eq new-face face)
+          (put-text-property pos next 'face new-face)
+          (put-text-property pos next 'font-lock-face new-face))
+        (setq pos next)))))
+
+(defun codex--strip-low-contrast-fg (face threshold)
+  "Return FACE with `:foreground' stripped if its contrast is too low.
+Contrast is measured between the explicit foreground and the
+effective background (explicit, or the default face's background
+if unspecified).  When the ratio is below THRESHOLD, the
+foreground is removed so the theme's default foreground can take
+over.  Returns FACE unchanged when it has adequate contrast, no
+foreground, or no resolvable colors."
+  (if (not (consp face))
+      face
+    (let* ((fg (plist-get face :foreground))
+           (bg (or (plist-get face :background) (face-background 'default)))
+           (ratio (and fg bg (stringp bg) (codex--contrast-ratio fg bg))))
+      (if (and ratio (< ratio threshold))
+          (codex--strip-plist-key face :foreground)
+        face))))
 
 ;;;; Diagnostic helpers
 
@@ -1468,14 +1529,6 @@ whether the background remapping would process this span."
      (or contrast 0.0) (codex--contrast-label contrast)
      (codex--would-remap-p bg)
      text)))
-
-(defun codex--contrast-ratio (fg bg)
-  "Return the WCAG contrast ratio between colors FG and BG."
-  (when-let* ((fg-lum (codex--color-luminance fg))
-              (bg-lum (codex--color-luminance bg)))
-    (let ((l1 (max fg-lum bg-lum))
-          (l2 (min fg-lum bg-lum)))
-      (/ (+ l1 0.05) (+ l2 0.05)))))
 
 (defun codex--contrast-label (ratio)
   "Return a human-readable label for contrast RATIO."

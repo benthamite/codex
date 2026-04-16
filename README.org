@@ -110,7 +110,7 @@ The user option ~codex-hooks-config-path~ is the path to the Codex ~config.toml~
 
 The user option ~codex-hooks-json-path~ is the path to the Codex ~hooks.json~ file.  The default is ~"~/.codex/hooks.json"~.
 
-** Background color remapping
+** Background and contrast remapping
 :PROPERTIES:
 :CUSTOM_ID: h:background-color-remapping
 :END:
@@ -118,14 +118,17 @@ The user option ~codex-hooks-json-path~ is the path to the Codex ~hooks.json~ fi
 #+vindex: codex-remap-light-backgrounds
 #+vindex: codex-card-background
 #+vindex: codex-light-background-threshold
+#+vindex: codex-minimum-contrast-ratio
 
-Some CLI tools use near-white background colors for card-like UI elements (code blocks, tool outputs, etc.).  On dark Emacs themes, these render as bright rectangles.  The background color remapping feature detects these light backgrounds and strips them after each batch of terminal output.
+The Codex CLI has its own theme system, and the colors it emits do not always match the Emacs theme.  Two kinds of mismatch can make terminal text unreadable: light backgrounds on a dark Emacs theme (bright rectangles containing dark text) and low-contrast foreground colors that wash out against the effective background (e.g. bright cyan on a light default background, or dark red on a dark diff background).  The remapping system runs after each batch of terminal output and addresses both kinds of mismatch.
 
-The user option ~codex-remap-light-backgrounds~ enables or disables this feature.  The default is ~t~.  When non-nil, background colors whose perceived luminance exceeds ~codex-light-background-threshold~ are stripped (or replaced; see below).
+The user option ~codex-remap-light-backgrounds~ is the master switch.  The default is ~t~.  When non-nil, background colors whose perceived luminance exceeds ~codex-light-background-threshold~ are stripped (or replaced), and --- when ~codex-minimum-contrast-ratio~ is also non-nil --- low-contrast foregrounds are stripped as well.
 
-The user option ~codex-card-background~ specifies the replacement color.  When ~nil~ (the default), light backgrounds are stripped entirely so the terminal's default background shows through.  Set this to a color string (e.g. ~"#1a1b2e"~) to use a fixed replacement color instead.
+The user option ~codex-card-background~ specifies the replacement color for light backgrounds.  When ~nil~ (the default), light backgrounds are stripped entirely so the terminal's default background shows through.  Set this to a color string (e.g. ~"#1a1b2e"~) to use a fixed replacement color instead.
 
 The user option ~codex-light-background-threshold~ is a number from 0.0 to 1.0 representing the perceived luminance above which a background is considered too light.  The default is ~0.5~.
+
+The user option ~codex-minimum-contrast-ratio~ is a WCAG contrast ratio below which the explicit foreground is stripped so the Emacs theme's default foreground takes over.  The default is ~3.0~.  Set this to ~nil~ to disable contrast-based remapping while keeping background remapping.  Stripping the foreground rather than the background preserves the semantic tint of diff-added and diff-removed backgrounds while ensuring the text itself remains readable.
 
 ** Notifications
 :PROPERTIES:
