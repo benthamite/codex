@@ -33,6 +33,8 @@ The main capabilities of =codex.el= can be grouped thematically:
 
 The package requires Emacs 30.0 or later, =transient= 0.9.3 or later, and =inheritenv=.  You must also have one of the supported terminal emulator packages installed: =eat= (the default) or =vterm=.
 
+The development repository is on [[https://github.com/benthamite/codex][GitHub]].
+
 * User options
 :PROPERTIES:
 :CUSTOM_ID: h:user-options
