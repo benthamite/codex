@@ -145,6 +145,58 @@ When nil, the CLI default is used."
   :type 'string
   :group 'codex)
 
+;;;; Background color remapping
+(defcustom codex-remap-light-backgrounds t
+  "Whether to remap CLI backgrounds that clash with the Emacs theme.
+Some CLI tools paint backgrounds for card-like UI elements (input
+prompts, diff blocks, etc.) using a palette tuned for their own
+light or dark theme.  When that palette disagrees with the Emacs
+theme, those backgrounds render as visible rectangles regardless
+of which direction the mismatch runs (light-on-dark or
+dark-on-light).
+
+When non-nil, backgrounds whose WCAG contrast against the Emacs
+default background exceeds `codex-background-contrast-threshold'
+are replaced with `codex-card-background' (or stripped entirely
+when that is nil)."
+  :type 'boolean
+  :group 'codex)
+
+(defcustom codex-card-background nil
+  "Background color for remapped card areas.
+When nil (the default), clashing backgrounds are stripped entirely.
+When a color string (e.g. \"#1a1b2e\"), used as the replacement."
+  :type '(choice (const :tag "Strip background" nil) color)
+  :group 'codex)
+
+(defcustom codex-background-contrast-threshold 3.0
+  "WCAG contrast ratio above which CLI backgrounds are remapped.
+CLI-emitted backgrounds whose ratio against the Emacs default
+background exceeds this value are treated as clashing with the
+Emacs theme.  The default of 3.0 matches the WCAG AA threshold
+for large text: anything below blends well enough to leave alone,
+anything above is likely to render as a visible rectangle when
+the CLI's palette disagrees with the Emacs theme on
+light-vs-dark."
+  :type 'number
+  :group 'codex)
+
+(make-obsolete-variable 'codex-light-background-threshold
+                        'codex-background-contrast-threshold "0.2.0")
+
+(defcustom codex-minimum-contrast-ratio 3.0
+  "Minimum WCAG contrast ratio for CLI-emitted foreground colors.
+When non-nil and `codex-remap-light-backgrounds' is enabled,
+foreground colors whose contrast with their effective background
+falls below this ratio are stripped so the Emacs theme's default
+foreground takes over.  This keeps text readable when the CLI's
+internal theme is mismatched with the Emacs theme (e.g. light
+CLI palette on a dark Emacs theme, or vice versa).  Set to nil
+to disable contrast-based remapping while keeping background
+remapping."
+  :type '(choice (const :tag "Disabled" nil) number)
+  :group 'codex)
+
 ;;;; Notification customization
 (defcustom codex-enable-notifications t
   "Whether to show notifications when Codex finishes and awaits input."
@@ -641,6 +693,10 @@ _BACKEND is the terminal backend type (should be \\='eat)."
   (setq-local eat--synchronize-scroll-function #'codex--eat-synchronize-scroll)
   (when (bound-and-true-p eat-terminal)
     (eval '(setf (eat-term-parameter eat-terminal 'ring-bell-function) #'codex--notify)))
+  (when codex-remap-light-backgrounds
+    (codex--acquire-managed-advice 'eat--process-output-queue
+                                   :after
+                                   #'codex--remap-light-backgrounds-after-output))
   (sleep-for codex-startup-delay))
 
 (cl-defmethod codex--term-customize-faces ((_backend (eql eat)))
@@ -1164,8 +1220,7 @@ If FORCE-SWITCH-TO-BUFFER is non-nil, always switch to the Codex buffer."
                                      (mapcar (lambda (func)
                                                (funcall func buffer-name dir))
                                              codex-process-environment-functions)))
-         (process-environment (append `(,(format "CODEX_BUFFER_NAME=%s" buffer-name)
-                                        "COLORTERM=")
+         (process-environment (append `(,(format "CODEX_BUFFER_NAME=%s" buffer-name))
                                       extra-env-variables
                                       process-environment)))
 
@@ -1241,8 +1296,7 @@ Codex subcommands run as separate processes."
                                      (mapcar (lambda (func)
                                                (funcall func buffer-name dir))
                                              codex-process-environment-functions)))
-         (process-environment (append `(,(format "CODEX_BUFFER_NAME=%s" buffer-name)
-                                        "COLORTERM=")
+         (process-environment (append `(,(format "CODEX_BUFFER_NAME=%s" buffer-name))
                                       extra-env-variables
                                       process-environment)))
 
@@ -1324,6 +1378,239 @@ the default font."
       (dolist (face '(eat-term-bold eat-term-faint eat-term-italic
                       eat-term-slow-blink eat-term-fast-blink))
         (face-remap-add-relative face :family family)))))
+
+;;;; Background color remapping
+
+(defun codex--color-luminance (color)
+  "Return the perceived luminance (0.0–1.0) of COLOR.
+COLOR is a hex string like \"#EEEEEE\" or a named color."
+  (when-let* ((rgb (color-name-to-rgb color)))
+    (+ (* 0.299 (nth 0 rgb)) (* 0.587 (nth 1 rgb)) (* 0.114 (nth 2 rgb)))))
+
+(defun codex--contrast-ratio (color-a color-b)
+  "Return the WCAG contrast ratio between COLOR-A and COLOR-B.
+Both arguments are color strings.  Returns nil if either color
+cannot be resolved."
+  (when-let* ((la (codex--color-luminance color-a))
+              (lb (codex--color-luminance color-b)))
+    (let ((l1 (max la lb))
+          (l2 (min la lb)))
+      (/ (+ l1 0.05) (+ l2 0.05)))))
+
+(defun codex--compute-card-background ()
+  "Compute a card background slightly lighter than the default face."
+  (let* ((bg (or (face-background 'default) "#000000"))
+         (rgb (or (color-name-to-rgb bg) '(0.0 0.0 0.0)))
+         (lift 0.06))
+    (format "#%02x%02x%02x"
+            (round (* 255 (min 1.0 (+ (nth 0 rgb) lift))))
+            (round (* 255 (min 1.0 (+ (nth 1 rgb) lift))))
+            (round (* 255 (min 1.0 (+ (nth 2 rgb) lift)))))))
+
+(defun codex--strip-plist-key (plist key)
+  "Return a copy of PLIST with KEY and its value removed."
+  (let (result)
+    (while plist
+      (let ((k (pop plist))
+            (v (pop plist)))
+        (unless (eq k key)
+          (setq result (nconc result (list k v))))))
+    result))
+
+(defun codex--face-inherit-only-p (face)
+  "Return non-nil if FACE is a plist with only :inherit and no visual attributes."
+  (and (consp face)
+       (not (plist-get face :foreground))
+       (not (plist-get face :background))
+       (not (plist-get face :weight))
+       (not (plist-get face :slant))
+       (not (plist-get face :underline))
+       (not (plist-get face :overline))
+       (not (plist-get face :strike-through))
+       (not (plist-get face :box))
+       (not (plist-get face :inverse-video))))
+
+(defun codex--remap-light-backgrounds-in-region (beg end card-bg threshold)
+  "Replace clashing backgrounds between BEG and END with CARD-BG.
+CARD-BG is the replacement color, or nil to strip backgrounds entirely.
+Backgrounds whose WCAG contrast against the Emacs default
+background exceeds THRESHOLD are remapped.  Also strips
+inherit-only faces on trailing whitespace that carry no visual
+attributes, since these can cause font-weight mismatches."
+  (let ((pos beg)
+        (theme-bg (face-background 'default)))
+    (while (< pos end)
+      (let* ((next (or (next-single-property-change pos 'face nil end) end))
+             (face (get-text-property pos 'face))
+             (bg (and (consp face) (plist-get face :background))))
+        (cond
+         ((codex--background-clashes-p bg theme-bg threshold)
+          (let ((new-face (if card-bg
+                              (plist-put (copy-sequence face) :background card-bg)
+                            (codex--strip-plist-key face :background))))
+            (when (and (null card-bg) (codex--face-inherit-only-p new-face))
+              (setq new-face nil))
+            (put-text-property pos next 'face new-face)
+            (put-text-property pos next 'font-lock-face new-face)))
+         ((and (null card-bg)
+               (codex--face-inherit-only-p face)
+               (save-excursion
+                 (goto-char pos)
+                 (looking-at-p "[ \t]*$")))
+          (put-text-property pos next 'face nil)
+          (put-text-property pos next 'font-lock-face nil)))
+        (setq pos next)))))
+
+(defun codex--background-clashes-p (bg theme-bg threshold)
+  "Return non-nil when BG clashes with THEME-BG past THRESHOLD.
+The test is a WCAG contrast ratio between BG and THEME-BG: a
+ratio above THRESHOLD means the two colors fall on opposite sides
+of the light/dark divide strongly enough that BG will render as a
+visible rectangle against THEME-BG."
+  (when-let* ((bg)
+              (theme-bg)
+              (ratio (codex--contrast-ratio bg theme-bg)))
+    (> ratio threshold)))
+
+(defun codex--remap-light-backgrounds-after-output (buffer)
+  "Remap light backgrounds and low-contrast foregrounds in BUFFER.
+Intended as :after advice on `eat--process-output-queue'.
+BUFFER is the eat buffer whose output was just processed."
+  (when (and codex-remap-light-backgrounds
+             (buffer-live-p buffer))
+    (with-current-buffer buffer
+      (when (and (codex--buffer-p buffer)
+                 (bound-and-true-p eat-terminal))
+        (let ((beg (eat-term-beginning eat-terminal))
+              (end (eat-term-end eat-terminal))
+              (inhibit-read-only t)
+              (inhibit-modification-hooks t))
+          (when (and beg end)
+            (codex--remap-light-backgrounds-in-region
+             beg end
+             codex-card-background
+             codex-background-contrast-threshold)
+            (when codex-minimum-contrast-ratio
+              (codex--remap-low-contrast-fg-in-region
+               beg end codex-minimum-contrast-ratio))))))))
+
+(defun codex--remap-low-contrast-fg-in-region (beg end threshold)
+  "Strip low-contrast foregrounds in the region from BEG to END.
+A foreground is considered low-contrast when its WCAG ratio
+against the effective background (explicit or default) is below
+THRESHOLD.  Stripping lets the Emacs theme's default foreground
+show through, which is always well-contrasted with the default
+background."
+  (let ((pos beg))
+    (while (< pos end)
+      (let* ((next (or (next-single-property-change pos 'face nil end) end))
+             (face (get-text-property pos 'face))
+             (new-face (codex--strip-low-contrast-fg face threshold)))
+        (unless (eq new-face face)
+          (put-text-property pos next 'face new-face)
+          (put-text-property pos next 'font-lock-face new-face))
+        (setq pos next)))))
+
+(defun codex--strip-low-contrast-fg (face threshold)
+  "Return FACE with `:foreground' stripped if its contrast is too low.
+Contrast is measured between the explicit foreground and the
+effective background (explicit, or the default face's background
+if unspecified).  When the ratio is below THRESHOLD, the
+foreground is removed so the theme's default foreground can take
+over.  Returns FACE unchanged when it has adequate contrast, no
+foreground, or no resolvable colors."
+  (if (not (consp face))
+      face
+    (let* ((fg (plist-get face :foreground))
+           (bg (or (plist-get face :background) (face-background 'default)))
+           (ratio (and fg bg (stringp bg) (codex--contrast-ratio fg bg))))
+      (if (and ratio (< ratio threshold))
+          (codex--strip-plist-key face :foreground)
+        face))))
+
+;;;; Diagnostic helpers
+
+(defun codex-diagnose-faces-at-point ()
+  "Show face diagnostic information at point in a Codex buffer.
+Reports the face plist, resolved colors, contrast ratio, and
+whether the background remapping would process this span."
+  (interactive)
+  (let* ((face (get-text-property (point) 'face))
+         (fl-face (get-text-property (point) 'font-lock-face))
+         (fg (and (consp face) (plist-get face :foreground)))
+         (bg (and (consp face) (plist-get face :background)))
+         (effective-bg (or bg (face-background 'default)))
+         (effective-fg (or fg (face-foreground 'default)))
+         (contrast (codex--contrast-ratio effective-fg effective-bg))
+         (next (next-single-property-change (point) 'face))
+         (text (buffer-substring-no-properties
+                (point) (min (+ (point) 40) (or next (point-max))))))
+    (message
+     (concat "Face: %S\nfont-lock-face: %S\n"
+             "FG: %s  BG: %s  Contrast: %.1f:1 %s\n"
+             "Would remap: %s\nSpan: %S")
+     face fl-face
+     (or fg "default") (or bg "default")
+     (or contrast 0.0) (codex--contrast-label contrast)
+     (codex--would-remap-p bg)
+     text)))
+
+(defun codex--contrast-label (ratio)
+  "Return a human-readable label for contrast RATIO."
+  (cond ((null ratio) "")
+        ((< ratio 3.0) "<< LOW CONTRAST")
+        ((< ratio 4.5) "< marginal")
+        (t "OK")))
+
+(defun codex--would-remap-p (bg)
+  "Return a description of whether BG would be remapped."
+  (if (codex--background-clashes-p bg
+                                   (face-background 'default)
+                                   codex-background-contrast-threshold)
+      "YES" "no"))
+
+(defun codex-diagnose-faces-in-region (beg end)
+  "Audit face properties between BEG and END for low-contrast spans.
+With no active region, audits the visible portion of the buffer."
+  (interactive
+   (if (use-region-p)
+       (list (region-beginning) (region-end))
+     (list (window-start) (window-end))))
+  (let ((pos beg)
+        (problems nil))
+    (while (< pos end)
+      (let* ((next (or (next-single-property-change pos 'face nil end) end))
+             (problem (codex--diagnose-span pos next)))
+        (when problem (push problem problems))
+        (setq pos next)))
+    (codex--report-diagnostic-results problems)))
+
+(defun codex--diagnose-span (pos next)
+  "Return a diagnostic string for the face span from POS to NEXT.
+Returns nil if the span has adequate contrast or is whitespace."
+  (let* ((face (get-text-property pos 'face))
+         (fg (and (consp face) (plist-get face :foreground)))
+         (bg (and (consp face) (plist-get face :background)))
+         (effective-fg (or fg (face-foreground 'default)))
+         (effective-bg (or bg (face-background 'default)))
+         (contrast (codex--contrast-ratio effective-fg effective-bg))
+         (text (string-trim
+                (buffer-substring-no-properties
+                 pos (min (+ pos 60) next)))))
+    (when (and contrast (< contrast 3.0)
+               (not (string-match-p "\\`[ \t\n]*\\'" text)))
+      (format "  L%d: contrast %.1f:1, fg=%s bg=%s text=%S"
+              (line-number-at-pos pos) contrast
+              (or fg "default") (or bg "default")
+              (truncate-string-to-width text 40)))))
+
+(defun codex--report-diagnostic-results (problems)
+  "Display PROBLEMS found by face diagnostics."
+  (if problems
+      (message "Found %d low-contrast spans:\n%s"
+               (length problems)
+               (string-join (nreverse problems) "\n"))
+    (message "No low-contrast spans found in region.")))
 
 ;;;; Notification system
 
