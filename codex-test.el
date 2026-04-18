@@ -785,47 +785,81 @@
     (should (string-match-p "^#[0-9a-f]\\{6\\}$" card))
     (should-not (equal card "#000000"))))
 
-(ert-deftest codex-test-remap-strips-light-backgrounds ()
-  "Light backgrounds are stripped when card-bg is nil.
+(ert-deftest codex-test-remap-strips-light-bg-on-dark-theme ()
+  "Light CLI bg is stripped against a dark Emacs theme.
 When only :inherit remains, the face is removed entirely."
-  (with-temp-buffer
-    (insert "hello")
-    (put-text-property 1 6 'face '(:background "#EEEEEE" :inherit (eat-term-font-0)))
-    (codex--remap-light-backgrounds-in-region 1 6 nil 0.5)
-    (should-not (get-text-property 1 'face))))
+  (cl-letf (((symbol-function 'face-background) (lambda (&rest _) "#0d0e1c")))
+    (with-temp-buffer
+      (insert "hello")
+      (put-text-property 1 6 'face '(:background "#EEEEEE" :inherit (eat-term-font-0)))
+      (codex--remap-light-backgrounds-in-region 1 6 nil 3.0)
+      (should-not (get-text-property 1 'face)))))
 
-(ert-deftest codex-test-remap-strips-keeps-foreground ()
+(ert-deftest codex-test-remap-strips-dark-bg-on-light-theme ()
+  "Dark CLI bg is stripped against a light Emacs theme."
+  (cl-letf (((symbol-function 'face-background) (lambda (&rest _) "#fbf7f0")))
+    (with-temp-buffer
+      (insert "hello")
+      (put-text-property 1 6 'face '(:background "#2a2a37" :inherit (eat-term-font-0)))
+      (codex--remap-light-backgrounds-in-region 1 6 nil 3.0)
+      (should-not (get-text-property 1 'face)))))
+
+(ert-deftest codex-test-remap-preserves-matching-bg-on-dark-theme ()
+  "Dark CLI bg that blends with a dark Emacs theme is left alone."
+  (cl-letf (((symbol-function 'face-background) (lambda (&rest _) "#0d0e1c")))
+    (with-temp-buffer
+      (insert "hello")
+      (put-text-property 1 6 'face '(:background "#1a1a2e"))
+      (codex--remap-light-backgrounds-in-region 1 6 nil 3.0)
+      (should (equal (plist-get (get-text-property 1 'face) :background) "#1a1a2e")))))
+
+(ert-deftest codex-test-remap-preserves-matching-bg-on-light-theme ()
+  "Light CLI bg that blends with a light Emacs theme is left alone."
+  (cl-letf (((symbol-function 'face-background) (lambda (&rest _) "#fbf7f0")))
+    (with-temp-buffer
+      (insert "hello")
+      (put-text-property 1 6 'face '(:background "#ede7da"))
+      (codex--remap-light-backgrounds-in-region 1 6 nil 3.0)
+      (should (equal (plist-get (get-text-property 1 'face) :background) "#ede7da")))))
+
+(ert-deftest codex-test-remap-keeps-foreground-when-stripping-bg ()
   "When foreground is present, face is kept after stripping background."
-  (with-temp-buffer
-    (insert "hello")
-    (put-text-property 1 6 'face '(:background "#EEEEEE" :foreground "#00ff00" :inherit (eat-term-font-0)))
-    (codex--remap-light-backgrounds-in-region 1 6 nil 0.5)
-    (let ((face (get-text-property 1 'face)))
-      (should-not (plist-get face :background))
-      (should (equal (plist-get face :foreground) "#00ff00")))))
+  (cl-letf (((symbol-function 'face-background) (lambda (&rest _) "#0d0e1c")))
+    (with-temp-buffer
+      (insert "hello")
+      (put-text-property 1 6 'face
+                         '(:background "#EEEEEE" :foreground "#00ff00"
+                                       :inherit (eat-term-font-0)))
+      (codex--remap-light-backgrounds-in-region 1 6 nil 3.0)
+      (let ((face (get-text-property 1 'face)))
+        (should-not (plist-get face :background))
+        (should (equal (plist-get face :foreground) "#00ff00"))))))
 
-(ert-deftest codex-test-remap-replaces-light-with-card-bg ()
-  "Light backgrounds are replaced when card-bg is a color."
-  (with-temp-buffer
-    (insert "hello")
-    (put-text-property 1 6 'face '(:background "#EEEEEE"))
-    (codex--remap-light-backgrounds-in-region 1 6 "#1c1d2b" 0.5)
-    (should (equal (plist-get (get-text-property 1 'face) :background) "#1c1d2b"))))
-
-(ert-deftest codex-test-remap-preserves-dark-backgrounds ()
-  "Dark backgrounds are left untouched."
-  (with-temp-buffer
-    (insert "hello")
-    (put-text-property 1 6 'face '(:background "#1a1a2e"))
-    (codex--remap-light-backgrounds-in-region 1 6 nil 0.5)
-    (should (equal (plist-get (get-text-property 1 'face) :background) "#1a1a2e"))))
+(ert-deftest codex-test-remap-replaces-clashing-with-card-bg ()
+  "Clashing backgrounds are replaced when card-bg is a color."
+  (cl-letf (((symbol-function 'face-background) (lambda (&rest _) "#0d0e1c")))
+    (with-temp-buffer
+      (insert "hello")
+      (put-text-property 1 6 'face '(:background "#EEEEEE"))
+      (codex--remap-light-backgrounds-in-region 1 6 "#1c1d2b" 3.0)
+      (should (equal (plist-get (get-text-property 1 'face) :background) "#1c1d2b")))))
 
 (ert-deftest codex-test-remap-no-face ()
   "Text without faces is left untouched."
-  (with-temp-buffer
-    (insert "hello")
-    (codex--remap-light-backgrounds-in-region 1 6 nil 0.5)
-    (should-not (get-text-property 1 'face))))
+  (cl-letf (((symbol-function 'face-background) (lambda (&rest _) "#0d0e1c")))
+    (with-temp-buffer
+      (insert "hello")
+      (codex--remap-light-backgrounds-in-region 1 6 nil 3.0)
+      (should-not (get-text-property 1 'face)))))
+
+(ert-deftest codex-test-background-clashes-p ()
+  "Contrast predicate flags cross-theme backgrounds in both directions."
+  (should (codex--background-clashes-p "#EEEEEE" "#0d0e1c" 3.0))
+  (should (codex--background-clashes-p "#2a2a37" "#fbf7f0" 3.0))
+  (should-not (codex--background-clashes-p "#1a1a2e" "#0d0e1c" 3.0))
+  (should-not (codex--background-clashes-p "#ede7da" "#fbf7f0" 3.0))
+  (should-not (codex--background-clashes-p nil "#0d0e1c" 3.0))
+  (should-not (codex--background-clashes-p "#2a2a37" nil 3.0)))
 
 (ert-deftest codex-test-contrast-ratio-white-black ()
   "Contrast between white and black is approximately 21:1."

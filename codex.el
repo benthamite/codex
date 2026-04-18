@@ -147,27 +147,42 @@ When nil, the CLI default is used."
 
 ;;;; Background color remapping
 (defcustom codex-remap-light-backgrounds t
-  "Whether to remap light background colors to match the Emacs theme.
-Some CLI tools use near-white backgrounds for card-like UI elements.
-When non-nil, backgrounds with luminance above
-`codex-light-background-threshold' are replaced with
-`codex-card-background' (or an auto-computed equivalent)."
+  "Whether to remap CLI backgrounds that clash with the Emacs theme.
+Some CLI tools paint backgrounds for card-like UI elements (input
+prompts, diff blocks, etc.) using a palette tuned for their own
+light or dark theme.  When that palette disagrees with the Emacs
+theme, those backgrounds render as visible rectangles regardless
+of which direction the mismatch runs (light-on-dark or
+dark-on-light).
+
+When non-nil, backgrounds whose WCAG contrast against the Emacs
+default background exceeds `codex-background-contrast-threshold'
+are replaced with `codex-card-background' (or stripped entirely
+when that is nil)."
   :type 'boolean
   :group 'codex)
 
 (defcustom codex-card-background nil
   "Background color for remapped card areas.
-When nil (the default), light backgrounds are stripped entirely.
+When nil (the default), clashing backgrounds are stripped entirely.
 When a color string (e.g. \"#1a1b2e\"), used as the replacement."
   :type '(choice (const :tag "Strip background" nil) color)
   :group 'codex)
 
-(defcustom codex-light-background-threshold 0.5
-  "Luminance threshold above which backgrounds are considered too light.
-Colors with perceived luminance above this value (0.0–1.0) are
-remapped when `codex-remap-light-backgrounds' is non-nil."
+(defcustom codex-background-contrast-threshold 3.0
+  "WCAG contrast ratio above which CLI backgrounds are remapped.
+CLI-emitted backgrounds whose ratio against the Emacs default
+background exceeds this value are treated as clashing with the
+Emacs theme.  The default of 3.0 matches the WCAG AA threshold
+for large text: anything below blends well enough to leave alone,
+anything above is likely to render as a visible rectangle when
+the CLI's palette disagrees with the Emacs theme on
+light-vs-dark."
   :type 'number
   :group 'codex)
+
+(make-obsolete-variable 'codex-light-background-threshold
+                        'codex-background-contrast-threshold "0.2.0")
 
 (defcustom codex-minimum-contrast-ratio 3.0
   "Minimum WCAG contrast ratio for CLI-emitted foreground colors.
@@ -1416,19 +1431,20 @@ cannot be resolved."
        (not (plist-get face :inverse-video))))
 
 (defun codex--remap-light-backgrounds-in-region (beg end card-bg threshold)
-  "Replace light backgrounds between BEG and END with CARD-BG.
+  "Replace clashing backgrounds between BEG and END with CARD-BG.
 CARD-BG is the replacement color, or nil to strip backgrounds entirely.
-Backgrounds with luminance above THRESHOLD are remapped.
-Also strips inherit-only faces that carry no visual attributes,
-since these can cause font-weight mismatches."
-  (let ((pos beg))
+Backgrounds whose WCAG contrast against the Emacs default
+background exceeds THRESHOLD are remapped.  Also strips
+inherit-only faces on trailing whitespace that carry no visual
+attributes, since these can cause font-weight mismatches."
+  (let ((pos beg)
+        (theme-bg (face-background 'default)))
     (while (< pos end)
       (let* ((next (or (next-single-property-change pos 'face nil end) end))
              (face (get-text-property pos 'face))
              (bg (and (consp face) (plist-get face :background))))
         (cond
-         ;; Light background: strip or replace
-         ((and bg (> (or (codex--color-luminance bg) 0) threshold))
+         ((codex--background-clashes-p bg theme-bg threshold)
           (let ((new-face (if card-bg
                               (plist-put (copy-sequence face) :background card-bg)
                             (codex--strip-plist-key face :background))))
@@ -1436,8 +1452,6 @@ since these can cause font-weight mismatches."
               (setq new-face nil))
             (put-text-property pos next 'face new-face)
             (put-text-property pos next 'font-lock-face new-face)))
-         ;; No background but inherit-only face on whitespace: strip to
-         ;; avoid font-weight differences between faced and unfaced text.
          ((and (null card-bg)
                (codex--face-inherit-only-p face)
                (save-excursion
@@ -1446,6 +1460,17 @@ since these can cause font-weight mismatches."
           (put-text-property pos next 'face nil)
           (put-text-property pos next 'font-lock-face nil)))
         (setq pos next)))))
+
+(defun codex--background-clashes-p (bg theme-bg threshold)
+  "Return non-nil when BG clashes with THEME-BG past THRESHOLD.
+The test is a WCAG contrast ratio between BG and THEME-BG: a
+ratio above THRESHOLD means the two colors fall on opposite sides
+of the light/dark divide strongly enough that BG will render as a
+visible rectangle against THEME-BG."
+  (when-let* ((bg)
+              (theme-bg)
+              (ratio (codex--contrast-ratio bg theme-bg)))
+    (> ratio threshold)))
 
 (defun codex--remap-light-backgrounds-after-output (buffer)
   "Remap light backgrounds and low-contrast foregrounds in BUFFER.
@@ -1464,7 +1489,7 @@ BUFFER is the eat buffer whose output was just processed."
             (codex--remap-light-backgrounds-in-region
              beg end
              codex-card-background
-             codex-light-background-threshold)
+             codex-background-contrast-threshold)
             (when codex-minimum-contrast-ratio
               (codex--remap-low-contrast-fg-in-region
                beg end codex-minimum-contrast-ratio))))))))
@@ -1539,8 +1564,9 @@ whether the background remapping would process this span."
 
 (defun codex--would-remap-p (bg)
   "Return a description of whether BG would be remapped."
-  (if (and bg (> (or (codex--color-luminance bg) 0)
-                 codex-light-background-threshold))
+  (if (codex--background-clashes-p bg
+                                   (face-background 'default)
+                                   codex-background-contrast-threshold)
       "YES" "no"))
 
 (defun codex-diagnose-faces-in-region (beg end)
