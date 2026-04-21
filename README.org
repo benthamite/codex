@@ -132,6 +132,14 @@ The user option ~codex-background-contrast-threshold~ is a WCAG contrast ratio a
 
 The user option ~codex-minimum-contrast-ratio~ is a WCAG contrast ratio below which the explicit foreground is stripped so the Emacs theme's default foreground takes over.  The default is ~3.0~.  Set this to ~nil~ to disable contrast-based foreground remapping while keeping background remapping.  Stripping the foreground rather than the background preserves the semantic tint of diff-added and diff-removed backgrounds while ensuring the text itself remains readable.
 
+*** Why is this a post-hoc remap instead of a clean fix?
+
+This feature exists because the Codex CLI emits 24-bit RGB escape codes for card backgrounds and some foregrounds.  Those land as literal ~:foreground~ / ~:background~ text properties in the eat buffer, bypassing the Emacs face system entirely — there is no indirection point where the Emacs theme gets to participate.
+
+The clean alternative would be to downgrade Codex to 256-color (which eat routes through ~eat-term-color-*~ faces that the Emacs theme already controls).  That was attempted by setting ~COLORTERM=~ (empty) in the Codex subprocess environment.  It did not work: Codex's Rust UI code calls ~Color::Rgb(...)~ directly in several places (chat composer, diff blocks), bypassing its own ~stdout_color_level()~ detection.  No env var or config key currently turns those call sites off, and ~NO_COLOR=1~ is too aggressive (it disables all color).
+
+This machinery should be revisited and deleted if Codex stops hardcoding ~Color::Rgb~ in its UI code, grows a config option to use the terminal palette, or starts honoring ~COLORTERM~ consistently.  To verify: start a fresh Codex session and check whether the buffer contains literal ~#RRGGBB~ hex colors in its face text properties — if all colors route through ~eat-term-color-*~ faces, this whole section can go.
+
 ** Notifications
 :PROPERTIES:
 :CUSTOM_ID: h:notifications

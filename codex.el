@@ -146,6 +146,40 @@ When nil, the CLI default is used."
   :group 'codex)
 
 ;;;; Background color remapping
+;;
+;; Why this section exists: Codex emits 24-bit RGB escape codes for
+;; card backgrounds and some foregrounds.  Those land as literal
+;; `:foreground' / `:background' text properties in the eat buffer,
+;; bypassing the Emacs face system entirely — there is no indirection
+;; point where the Emacs theme can participate.  The result is
+;; visible rectangles (bright on dark themes, dark on light themes)
+;; and sometimes unreadable text.
+;;
+;; The clean fix would be to downgrade Codex to 256-color, which eat
+;; routes through `eat-term-color-*' faces that the Emacs theme
+;; already controls.  We tried this by setting COLORTERM="" in the
+;; Codex subprocess environment (commit 9485496, reverted by
+;; e2de9bb).  It did not work: Codex's Rust UI code calls
+;; `Color::Rgb(...)' directly in several places (chat composer,
+;; diff blocks), bypassing its own `stdout_color_level()'
+;; detection.  No env var or config key currently turns those call
+;; sites off, and `NO_COLOR=1' is too aggressive (kills all color).
+;;
+;; So we do the next best thing: after each batch of Codex output
+;; lands in the buffer, walk the face text properties and remap
+;; backgrounds whose WCAG contrast against the Emacs default
+;; background exceeds a threshold (the same logic handles
+;; light-on-dark and dark-on-light mismatches).  Then strip
+;; foregrounds that become unreadable after the bg strip.
+;;
+;; Revisit and delete this section if Codex stops hardcoding
+;; `Color::Rgb' in its UI code, grows a config option to use the
+;; terminal palette, or starts honoring COLORTERM consistently.
+;; Verify by starting a fresh Codex session and checking whether
+;; the buffer contains literal `#RRGGBB' hex colors in its face
+;; text properties — if all colors route through `eat-term-color-*'
+;; faces, this whole machinery can go.
+
 (defcustom codex-remap-light-backgrounds t
   "Whether to remap CLI backgrounds that clash with the Emacs theme.
 Some CLI tools paint backgrounds for card-like UI elements (input
