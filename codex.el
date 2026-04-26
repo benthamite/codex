@@ -1415,11 +1415,27 @@ the default font."
 
 ;;;; Background color remapping
 
+(defvar codex--color-luminance-cache (make-hash-table :test 'equal)
+  "Memoization cache mapping color string to luminance (or nil).")
+
+(defun codex--color-luminance--compute (color)
+  "Return the uncached luminance for COLOR, or nil if unresolvable."
+  (when-let* ((rgb (color-name-to-rgb color)))
+    (+ (* 0.299 (nth 0 rgb))
+       (* 0.587 (nth 1 rgb))
+       (* 0.114 (nth 2 rgb)))))
+
 (defun codex--color-luminance (color)
   "Return the perceived luminance (0.0–1.0) of COLOR.
-COLOR is a hex string like \"#EEEEEE\" or a named color."
-  (when-let* ((rgb (color-name-to-rgb color)))
-    (+ (* 0.299 (nth 0 rgb)) (* 0.587 (nth 1 rgb)) (* 0.114 (nth 2 rgb)))))
+COLOR is a hex string like \"#EEEEEE\" or a named color.  Results are
+memoized in `codex--color-luminance-cache' to keep eat-output remapping
+cheap."
+  (let ((cached (gethash color codex--color-luminance-cache 'miss)))
+    (if (not (eq cached 'miss))
+        cached
+      (let ((value (codex--color-luminance--compute color)))
+        (puthash color value codex--color-luminance-cache)
+        value))))
 
 (defun codex--contrast-ratio (color-a color-b)
   "Return the WCAG contrast ratio between COLOR-A and COLOR-B.
