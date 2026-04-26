@@ -203,15 +203,22 @@ When a color string (e.g. \"#1a1b2e\"), used as the replacement."
   :type '(choice (const :tag "Strip background" nil) color)
   :group 'codex)
 
-(defcustom codex-background-contrast-threshold 3.0
+(defcustom codex-background-contrast-threshold 1.0
   "WCAG contrast ratio above which CLI backgrounds are remapped.
 CLI-emitted backgrounds whose ratio against the Emacs default
 background exceeds this value are treated as clashing with the
-Emacs theme.  The default of 3.0 matches the WCAG AA threshold
-for large text: anything below blends well enough to leave alone,
-anything above is likely to render as a visible rectangle when
-the CLI's palette disagrees with the Emacs theme on
-light-vs-dark."
+Emacs theme.
+
+The default of 1.0 strips any explicit background that is not
+identical to the Emacs default background.  This is the most
+aggressive setting and gives the cleanest result for users who
+want their Emacs theme to fully own the rendering.  Codex's diff
+foregrounds (the colored `+' / `-' glyphs) still distinguish
+added and removed lines after the bg strip.
+
+Raise to 3.0 (WCAG AA for large text) to keep subtle low-contrast
+backgrounds (e.g. light-green diff tints on a light theme that
+contrast 1.04:1) and only strip clashing rectangles."
   :type 'number
   :group 'codex)
 
