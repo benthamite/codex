@@ -85,6 +85,39 @@ is displayed before Codex is fully initialized."
   :type 'boolean
   :group 'codex)
 
+(defcustom codex-newline-keybinding-style 'newline-on-shift-return
+  "Key binding style for entering newlines and sending messages.
+This controls how the return key and its modifiers behave in Codex
+buffers:
+
+- \\='newline-on-shift-return: S-return enters a line break, RET sends
+  the command (default).
+
+- \\='newline-on-alt-return: M-return enters a line break, RET sends
+  the command.
+
+- \\='shift-return-to-send: RET enters a line break, S-return sends the
+  command.
+
+- \\='super-return-to-send: RET enters a line break, s-return sends the
+  command.
+
+`\"S\"' is the shift key.  `\"s\"' is the hyper key, which is the
+COMMAND key on macOS.
+
+The line-break action is delivered to Codex as Ctrl+J, which the Codex
+CLI binds to its `insert_newline' editor action by default."
+  :type '(choice
+          (const :tag "Newline on shift-return (S-return for newline, RET to send)"
+                 newline-on-shift-return)
+          (const :tag "Newline on alt-return (M-return for newline, RET to send)"
+                 newline-on-alt-return)
+          (const :tag "Shift-return to send (RET for newline, S-return to send)"
+                 shift-return-to-send)
+          (const :tag "Super-return to send (RET for newline, s-return to send)"
+                 super-return-to-send))
+  :group 'codex)
+
 ;;;; Sandbox and approval customization
 (defcustom codex-sandbox-mode nil
   "Sandbox mode for Codex.
@@ -762,12 +795,32 @@ _BACKEND is the terminal backend type (should be \\='eat)."
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map (current-local-map))
     (define-key map (kbd "C-g") #'codex-send-escape)
+    (pcase codex-newline-keybinding-style
+      ('newline-on-shift-return
+       (define-key map (kbd "<S-return>") #'codex--eat-insert-newline)
+       (define-key map (kbd "<return>") #'codex--eat-send-return))
+      ('newline-on-alt-return
+       (define-key map (kbd "<M-return>") #'codex--eat-insert-newline)
+       (define-key map (kbd "<return>") #'codex--eat-send-return))
+      ('shift-return-to-send
+       (define-key map (kbd "<return>") #'codex--eat-insert-newline)
+       (define-key map (kbd "<S-return>") #'codex--eat-send-return))
+      ('super-return-to-send
+       (define-key map (kbd "<return>") #'codex--eat-insert-newline)
+       (define-key map (kbd "<s-return>") #'codex--eat-send-return)))
     (use-local-map map)))
 
 (defun codex--eat-send-return ()
   "Send <return> to eat."
   (interactive)
   (eat-term-send-string eat-terminal (kbd "RET")))
+
+(defun codex--eat-insert-newline ()
+  "Insert a line break in the Codex prompt without submitting.
+Sends Ctrl+J, which Codex's TUI binds to its `insert_newline' editor
+action.  Plain Return still submits the prompt."
+  (interactive)
+  (eat-term-send-string eat-terminal "\C-j"))
 
 (cl-defmethod codex--term-get-adjust-process-window-size-fn ((_backend (eql eat)))
   "Get the eat-specific function that adjusts window size.
@@ -886,12 +939,32 @@ _BACKEND is the terminal backend type (should be \\='vterm)."
   (interactive)
   (vterm-send-key "\C-m"))
 
+(defun codex--vterm-insert-newline ()
+  "Insert a line break in the Codex prompt without submitting.
+Sends Ctrl+J, which Codex's TUI binds to its `insert_newline' editor
+action.  Plain Return still submits the prompt."
+  (interactive)
+  (vterm-send-key "j" nil nil t))
+
 (cl-defmethod codex--term-setup-keymap ((_backend (eql vterm)))
   "Set up the local keymap for Codex vterm buffers.
 _BACKEND is the terminal backend type (should be \\='vterm)."
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map (current-local-map))
     (define-key map (kbd "C-g") #'codex--vterm-send-escape)
+    (pcase codex-newline-keybinding-style
+      ('newline-on-shift-return
+       (define-key map (kbd "<S-return>") #'codex--vterm-insert-newline)
+       (define-key map (kbd "<return>") #'codex--vterm-send-return))
+      ('newline-on-alt-return
+       (define-key map (kbd "<M-return>") #'codex--vterm-insert-newline)
+       (define-key map (kbd "<return>") #'codex--vterm-send-return))
+      ('shift-return-to-send
+       (define-key map (kbd "<return>") #'codex--vterm-insert-newline)
+       (define-key map (kbd "<S-return>") #'codex--vterm-send-return))
+      ('super-return-to-send
+       (define-key map (kbd "<return>") #'codex--vterm-insert-newline)
+       (define-key map (kbd "<s-return>") #'codex--vterm-send-return)))
     (use-local-map map)))
 
 (cl-defmethod codex--term-get-adjust-process-window-size-fn ((_backend (eql vterm)))

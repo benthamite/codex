@@ -137,6 +137,7 @@ The development repository is on @uref{https://github.com/benthamite/codex, GitH
 @vindex codex-term-name
 @vindex codex-startup-delay
 @vindex codex-confirm-kill
+@vindex codex-newline-keybinding-style
 
 The user option @code{codex-program} specifies the path to the Codex binary.  The default value is @code{"codex"}, which relies on the binary being in your @code{PATH}.  Change this if you have installed Codex to a non-standard location. @*
 
@@ -151,6 +152,8 @@ The user option @code{codex-term-name} sets the terminal type reported to Codex.
 The user option @code{codex-startup-delay} is a number of seconds to wait after starting the Codex process before displaying the buffer.  The default is @code{0.1}.  Increasing this value can help fix terminal layout issues that occur when the buffer is displayed before Codex has fully initialized. @*
 
 The user option @code{codex-confirm-kill} controls whether @code{codex-kill} and @code{codex-kill-all} ask for confirmation before killing instances.  The default is @code{t}.  Set it to @code{nil} if you prefer to kill instances without a prompt. @*
+
+The user option @code{codex-newline-keybinding-style} controls how the return key behaves in Codex buffers.  The default, @code{newline-on-shift-return}, makes @code{S-RET} insert a line break and plain @code{RET} submit the prompt, mirroring the behavior of @samp{claude-code.el}.  The other choices are @code{newline-on-alt-return} (@code{M-RET} for newline, @code{RET} to submit), @code{shift-return-to-send} (@code{RET} for newline, @code{S-RET} to submit), and @code{super-return-to-send} (@code{RET} for newline, @code{s-RET} — the COMMAND key on macOS — to submit).  The line-break action is delivered to Codex as @code{Ctrl+J} (byte @code{0x0A}), which the Codex CLI binds to its @code{insert_newline} editor action by default; submission is delivered as a plain @code{Return}. @*
 
 @node Sandbox and approval
 @section Sandbox and approval
@@ -205,9 +208,11 @@ The user option @code{codex-remap-light-backgrounds} is the master switch.  The 
 
 The user option @code{codex-card-background} specifies the replacement color for clashing backgrounds.  When @code{nil} (the default), clashing backgrounds are stripped entirely so the Emacs buffer background shows through.  Set this to a color string (e.g. @code{"#1a1b2e"}) to use a fixed replacement color instead. @*
 
-The user option @code{codex-background-contrast-threshold} is a WCAG contrast ratio above which a CLI background is considered to clash with the Emacs theme.  The default is @code{3.0} (the WCAG AA threshold for large text).  A background with lower contrast blends well enough with the Emacs default background to leave alone; a background with higher contrast will render as a visible rectangle when the CLI's palette and the Emacs theme disagree on light-vs-dark, and so is remapped.  Because the comparison is against the Emacs default background, the same threshold handles mismatches in either direction. @*
+The user option @code{codex-background-contrast-threshold} is a WCAG contrast ratio above which a CLI background is considered to clash with the Emacs theme.  The default is @code{1.0}, which strips any explicit background that is not identical to the Emacs default background --- the cleanest result for users who want the Emacs theme to fully own the rendering.  Codex's diff foregrounds (colored @code{+} / @code{-} glyphs) still distinguish added and removed lines after the bg strip.  Raise this to @code{3.0} (the WCAG AA threshold for large text) to preserve subtle low-contrast tints (e.g. light-green diff backgrounds on a light theme at contrast @code{1.04:1}) and only strip clashing rectangles.  Because the comparison is against the Emacs default background, the same threshold handles mismatches in either direction. @*
 
 The user option @code{codex-minimum-contrast-ratio} is a WCAG contrast ratio below which the explicit foreground is stripped so the Emacs theme's default foreground takes over.  The default is @code{3.0}.  Set this to @code{nil} to disable contrast-based foreground remapping while keeping background remapping.  Stripping the foreground rather than the background preserves the semantic tint of diff-added and diff-removed backgrounds while ensuring the text itself remains readable. @*
+
+Because the remapping pass runs after every batch of terminal output and inspects every face segment in the eat buffer, perceived luminance results are memoized in @code{codex--color-luminance-cache} — a process-wide hash table keyed by color string.  The cache is small (one entry per distinct color) and is preserved across reloads of the package, so repeated contrast comparisons reduce to O(1) hash lookups instead of repeated @code{color-name-to-rgb} calls. @*
 
 @menu
 * Why is this a post-hoc remap instead of a clean fix?::

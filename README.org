@@ -52,6 +52,7 @@ The development repository is on [[https://github.com/benthamite/codex][GitHub]]
 #+vindex: codex-term-name
 #+vindex: codex-startup-delay
 #+vindex: codex-confirm-kill
+#+vindex: codex-newline-keybinding-style
 
 The user option ~codex-program~ specifies the path to the Codex binary.  The default value is ~"codex"~, which relies on the binary being in your ~PATH~.  Change this if you have installed Codex to a non-standard location.
 
@@ -66,6 +67,8 @@ The user option ~codex-term-name~ sets the terminal type reported to Codex.  The
 The user option ~codex-startup-delay~ is a number of seconds to wait after starting the Codex process before displaying the buffer.  The default is ~0.1~.  Increasing this value can help fix terminal layout issues that occur when the buffer is displayed before Codex has fully initialized.
 
 The user option ~codex-confirm-kill~ controls whether ~codex-kill~ and ~codex-kill-all~ ask for confirmation before killing instances.  The default is ~t~.  Set it to ~nil~ if you prefer to kill instances without a prompt.
+
+The user option ~codex-newline-keybinding-style~ controls how the return key behaves in Codex buffers.  The default, ~newline-on-shift-return~, makes ~S-RET~ insert a line break and plain ~RET~ submit the prompt, mirroring the behavior of =claude-code.el=.  The other choices are ~newline-on-alt-return~ (~M-RET~ for newline, ~RET~ to submit), ~shift-return-to-send~ (~RET~ for newline, ~S-RET~ to submit), and ~super-return-to-send~ (~RET~ for newline, ~s-RET~ — the COMMAND key on macOS — to submit).  The line-break action is delivered to Codex as ~Ctrl+J~ (byte ~0x0A~), which the Codex CLI binds to its ~insert_newline~ editor action by default; submission is delivered as a plain ~Return~.
 
 ** Sandbox and approval
 :PROPERTIES:
