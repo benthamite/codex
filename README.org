@@ -205,8 +205,11 @@ The hook ~codex-event-hook~ runs when the Codex CLI triggers lifecycle events th
 :END:
 
 #+vindex: codex-eat-read-only-mode-cursor-type
+#+vindex: codex-eat-scrollback-size
 
 The user option ~codex-eat-read-only-mode-cursor-type~ specifies the cursor appearance when the eat terminal is in read-only mode.  The value is a list of the form ~(CURSOR-ON BLINKING-FREQUENCY CURSOR-OFF)~.  The default is ~(box nil nil)~, which shows a non-blinking filled box cursor.
+
+The user option ~codex-eat-scrollback-size~ controls how much scrollback eat keeps for Codex buffers.  The default is ~nil~, meaning unlimited scrollback.  This avoids losing earlier Codex output in long sessions; set it to a number of characters if you want a bounded buffer.
 
 The package also defines faces for the eat terminal that inherit from the corresponding =eat= faces: ~codex-eat-prompt-annotation-running-face~, ~codex-eat-prompt-annotation-success-face~, ~codex-eat-prompt-annotation-failure-face~, ~codex-eat-term-bold-face~, ~codex-eat-term-faint-face~, ~codex-eat-term-italic-face~, ~codex-eat-term-slow-blink-face~, ~codex-eat-term-fast-blink-face~, and font faces ~codex-eat-term-font-0-face~ through ~codex-eat-term-font-9-face~.  Customize these faces if you want the Codex terminal to look different from other eat buffers.
 
@@ -217,10 +220,13 @@ The package also defines faces for the eat terminal that inherit from the corres
 
 #+vindex: codex-vterm-buffer-multiline-output
 #+vindex: codex-vterm-multiline-delay
+#+vindex: codex-vterm-max-scrollback
 
 The user option ~codex-vterm-buffer-multiline-output~ controls whether multi-line terminal output is buffered to prevent flickering.  The default is ~t~.  When enabled, rapid successive output chunks containing cursor movement sequences are accumulated and flushed as a single update.
 
 The user option ~codex-vterm-multiline-delay~ sets the delay (in seconds) before processing buffered vterm output.  The default is ~0.01~.  Increase this if you still see flickering with the buffering enabled.
+
+The user option ~codex-vterm-max-scrollback~ controls how many scrollback lines vterm keeps for Codex buffers.  The default is ~100000~, which is vterm's built-in maximum unless its native module is recompiled with a larger limit.
 
 * Commands
 :PROPERTIES:

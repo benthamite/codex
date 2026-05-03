@@ -792,6 +792,59 @@
           (should (eq redrawn 'eat)))
       (kill-buffer buf))))
 
+;;;; Terminal backend configuration tests
+
+(ert-deftest codex-test-eat-configure-disables-scrollback-truncation ()
+  "Eat Codex buffers keep unlimited scrollback by default."
+  (let ((codex-eat-scrollback-size nil)
+        (codex-remap-light-backgrounds nil)
+        (codex-startup-delay 0))
+    (with-temp-buffer
+      (let ((eat-term-scrollback-size 131072))
+        (cl-letf (((symbol-function 'codex--ensure-eat)
+                   #'ignore))
+          (codex--term-configure 'eat))
+        (should (null (buffer-local-value 'eat-term-scrollback-size
+                                          (current-buffer))))))))
+
+(ert-deftest codex-test-eat-configure-honors-scrollback-size ()
+  "Eat Codex buffers honor an explicitly bounded scrollback size."
+  (let ((codex-eat-scrollback-size 4096)
+        (codex-remap-light-backgrounds nil)
+        (codex-startup-delay 0))
+    (with-temp-buffer
+      (let ((eat-term-scrollback-size nil))
+        (cl-letf (((symbol-function 'codex--ensure-eat)
+                   #'ignore))
+          (codex--term-configure 'eat))
+        (should (= (buffer-local-value 'eat-term-scrollback-size
+                                       (current-buffer))
+                   4096))))))
+
+(ert-deftest codex-test-vterm-make-uses-codex-scrollback ()
+  "Codex vterm buffers use the Codex-specific scrollback limit."
+  (let ((codex-vterm-max-scrollback 100000)
+        buffer
+        captured-scrollback)
+    (unwind-protect
+        (cl-letf (((symbol-function 'codex--ensure-vterm)
+                   #'ignore)
+                  ((symbol-function 'vterm-mode)
+                   (lambda ()
+                     (setq captured-scrollback vterm-max-scrollback)))
+                  ((symbol-function 'pop-to-buffer)
+                   (lambda (&rest _) nil))
+                  ((symbol-function 'get-buffer-window)
+                   (lambda (&rest _) nil))
+                  ((symbol-function 'delete-window)
+                   (lambda (&rest _) nil)))
+          (setq buffer (codex--term-make
+                        'vterm "*codex-test-vterm*" "codex"
+                        '("--no-alt-screen")))
+          (should (= captured-scrollback 100000)))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
 (ert-deftest codex-test-color-luminance-white ()
   "White has luminance close to 1.0."
   (should (> (codex--color-luminance "#ffffff") 0.99)))

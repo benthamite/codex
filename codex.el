@@ -406,6 +406,14 @@ The value is a list of form (CURSOR-ON BLINKING-FREQUENCY CURSOR-OFF)."
            (const :tag "None" nil)))
   :group 'codex-eat)
 
+(defcustom codex-eat-scrollback-size nil
+  "Size of the scrollback area in Codex eat terminal buffers.
+The value is measured in characters.  Nil means unlimited scrollback,
+which is the default because Codex sessions can produce long tool
+output that should remain available in the Emacs terminal buffer."
+  :type '(choice natnum (const :tag "Unlimited" nil))
+  :group 'codex-eat)
+
 ;;;;; Vterm terminal customizations
 (defcustom codex-vterm-buffer-multiline-output t
   "Whether to buffer vterm output to prevent flickering on multi-line input."
@@ -415,6 +423,13 @@ The value is a list of form (CURSOR-ON BLINKING-FREQUENCY CURSOR-OFF)."
 (defcustom codex-vterm-multiline-delay 0.01
   "Delay in seconds before processing buffered vterm output."
   :type 'number
+  :group 'codex-vterm)
+
+(defcustom codex-vterm-max-scrollback 100000
+  "Maximum scrollback lines for Codex vterm terminal buffers.
+Vterm itself caps this value at 100000 unless its native module is
+recompiled with a larger SB_MAX value."
+  :type 'natnum
   :group 'codex-vterm)
 
 ;;;; Forward declarations for flycheck
@@ -672,6 +687,7 @@ Returns the buffer containing the terminal.")
 (defvar eat--synchronize-scroll-function)
 (defvar eat-invisible-cursor-type)
 (defvar eat-term-name)
+(defvar eat-term-scrollback-size)
 (defvar eat-terminal)
 (declare-function eat--adjust-process-window-size "eat" (&rest args))
 (declare-function eat--set-cursor "eat" (terminal &rest args))
@@ -782,6 +798,7 @@ Custom version that keeps the prompt at the bottom of the window."
 _BACKEND is the terminal backend type (should be \\='eat)."
   (codex--ensure-eat)
   (setq-local eat-term-name codex-term-name)
+  (setq-local eat-term-scrollback-size codex-eat-scrollback-size)
   (setq-local eat-enable-directory-tracking nil)
   (setq-local eat-enable-shell-command-history nil)
   (setq-local eat-enable-shell-prompt-annotation nil)
@@ -855,6 +872,7 @@ _BACKEND is the terminal backend type (should be \\='eat)."
 (defvar vterm-buffer-name)
 (defvar vterm-copy-mode)
 (defvar vterm-environment)
+(defvar vterm-max-scrollback)
 (defvar vterm-shell)
 (defvar vterm-term-environment-variable)
 (declare-function vterm "vterm" (&optional buffer-name))
@@ -874,6 +892,7 @@ _BACKEND is the terminal backend type (should be \\='eat)."
 _BACKEND is the terminal backend type (should be \\='vterm)."
   (codex--ensure-vterm)
   (let* ((vterm-shell (codex--shell-command-from-argv program switches))
+         (vterm-max-scrollback codex-vterm-max-scrollback)
          (buffer (get-buffer-create buffer-name)))
     (inheritenv
      (with-current-buffer buffer
