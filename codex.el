@@ -2251,10 +2251,26 @@ With prefix ARG, show all Codex instances across all directories."
 
 (defun codex--hook-wrapper-path ()
   "Return the path to the codex-hook-wrapper script."
-  (let ((dir (file-name-directory (or load-file-name
-                                      (locate-library "codex")
-                                      buffer-file-name))))
-    (expand-file-name "bin/codex-hook-wrapper" dir)))
+  (expand-file-name "bin/codex-hook-wrapper"
+                    (or (codex--source-directory)
+                        (codex--library-directory))))
+
+(defun codex--library-directory ()
+  "Return the directory containing the loaded codex library."
+  (file-name-directory (or load-file-name
+                           (locate-library "codex")
+                           buffer-file-name)))
+
+(defun codex--source-directory ()
+  "Return the source directory for the loaded codex library."
+  (when-let* ((elpaca-directory (codex--elpaca-directory)))
+    (cl-find-if #'file-directory-p
+                (list (expand-file-name "sources/codex" elpaca-directory)
+                      (expand-file-name "repos/codex" elpaca-directory)))))
+
+(defun codex--elpaca-directory ()
+  "Return the elpaca directory for the loaded codex library."
+  (locate-dominating-file (codex--library-directory) "builds"))
 
 (defun codex--ensure-hooks-config ()
   "Ensure hooks are enabled in config.toml and hooks.json is configured.
