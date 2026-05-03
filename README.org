@@ -60,7 +60,7 @@ The user option ~codex-program-switches~ is a list of extra CLI flags to pass to
 
 The user option ~codex-terminal-backend~ selects which terminal emulator to use for the Codex REPL.  The choices are ~eat~ (the default) and ~vterm~.  The =eat= backend is recommended as it integrates more cleanly with Emacs and does not require compiling a dynamic module.
 
-The user option ~codex-use-alt-screen~ controls whether Codex runs in its default alternate-screen TUI mode.  When non-nil (the default), Codex uses the alt screen.  When nil, Codex runs with ~--no-alt-screen~ for inline scrollback mode.
+The user option ~codex-use-alt-screen~ controls whether Codex runs in its default alternate-screen TUI mode.  The default is ~nil~, so codex.el starts Codex with ~--no-alt-screen~ for inline scrollback mode.  This avoids recurring stale-screen failures seen when Codex's alternate-screen TUI and Emacs terminal buffers lose synchronization after interrupts, prompt editing, or heavy redraws.  Set it to non-nil only if you explicitly want Codex's alt-screen TUI.
 
 The user option ~codex-term-name~ sets the terminal type reported to Codex.  The default value is ~"xterm-256color"~.  You would change this only if your terminal environment requires a different ~TERM~ value.
 
@@ -343,12 +343,15 @@ The command ~codex-cycle-permissions~ sends =/permissions= to the Codex TUI to c
 
 #+findex: codex-diagnose-faces-at-point
 #+findex: codex-diagnose-faces-in-region
+#+findex: codex-redraw
 
 When the Codex buffer displays rendering artifacts --- such as colored rectangles with invisible text --- these diagnostic commands help identify the root cause by inspecting the face properties that the terminal emulator has applied.
 
 The command ~codex-diagnose-faces-at-point~ reports the face plist at point, including the explicit and effective foreground and background colors, the WCAG contrast ratio between them, the ~:inherit~ chain, and whether the background remapping system would process this span.  Run this with point on a visually corrupted region to see whether the issue is a low-contrast color combination, a missing foreground, or a background that falls below the remapping threshold ([[#h:background-color-remapping][Background color remapping]]).
 
 The command ~codex-diagnose-faces-in-region~ audits all face property spans between BEG and END, reporting any non-whitespace text with a contrast ratio below 3:1.  With no active region, it audits the visible portion of the buffer.  The output lists the line number, contrast ratio, foreground, background, and a text excerpt for each problematic span.
+
+The command ~codex-redraw~ asks the Codex TUI to repaint and then forces the Emacs terminal backend to redisplay.  It is bound to ~C-l~ in Codex buffers and to ~l~ in ~codex-command-map~.  This is mainly a recovery command for existing or explicitly opted-in alt-screen sessions; new sessions avoid that failure class by default because ~codex-use-alt-screen~ is nil.
 
 * Functions
 :PROPERTIES:
@@ -427,6 +430,7 @@ The default bindings are:
 | =t=   | ~codex-toggle~                     |
 | =b=   | ~codex-switch-to-buffer~           |
 | =B=   | ~codex-select-buffer~              |
+| =l=   | ~codex-redraw~                     |
 | =z=   | ~codex-toggle-read-only-mode~      |
 | =M=   | ~codex-cycle-permissions~          |
 | =y=   | ~codex-send-return~                |

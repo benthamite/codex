@@ -1,6 +1,6 @@
 # `codex`: Emacs integration for OpenAI Codex CLI
 
-`codex.el` provides an Emacs interface to the [OpenAI Codex CLI](https://github.com/openai/codex), embedding the full Codex agent TUI inside an Emacs terminal emulator buffer. You can interact with Codex without leaving your editor — start sessions, send commands, review output, and manage multiple instances across projects.
+`codex.el` provides an Emacs interface to the [OpenAI Codex CLI](https://github.com/openai/codex), embedding the Codex agent TUI inside an Emacs terminal emulator buffer. You can interact with Codex without leaving your editor — start sessions, send commands, review output, and manage multiple instances across projects.
 
 The package supports two terminal backends — [eat](https://codeberg.org/akib/emacs-eat) (default, recommended) and [vterm](https://github.com/akermu/emacs-libvterm) — and is modeled after `claude-code.el`, sharing a similar architecture and workflow.
 
@@ -9,6 +9,7 @@ Key capabilities include:
 - **Session management** — start Codex in the current project, resume or fork previous sessions, run multiple named instances, kill instances individually or in bulk.
 - **Sending commands and context** — send freeform prompts, prompts annotated with file/line context, the active region or entire buffer, file paths, images, and error-at-point requests.
 - **TUI interaction** — send return, escape, digits, Tab (follow-up), and other key sequences to the Codex TUI from any buffer.
+- **Stable Emacs terminal behavior** — starts Codex with `--no-alt-screen` by default to avoid alternate-screen desynchronization in Emacs terminal buffers; `M-x codex-redraw` recovers explicitly opted-in alt-screen sessions.
 - **Window and buffer management** — toggle the Codex window, switch between instances, read-only mode for navigating output.
 - **Hooks and notifications** — auto-configures the Codex CLI hooks system so Emacs receives lifecycle events; desktop notifications when Codex awaits input.
 - **Transient menus** — a main command menu and a slash commands menu for quick keyboard access.

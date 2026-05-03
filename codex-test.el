@@ -56,6 +56,18 @@
 
 (ert-deftest codex-test-build-cli-args-defaults ()
   "Test CLI arg building with default settings."
+  (let ((codex-use-alt-screen nil)
+        (codex-full-auto nil)
+        (codex-sandbox-mode nil)
+        (codex-approval-policy nil)
+        (codex-model nil)
+        (codex-profile nil)
+        (codex-reasoning-effort nil)
+        (codex-default-images nil))
+    (should (equal (codex--build-cli-args) '("--no-alt-screen")))))
+
+(ert-deftest codex-test-build-cli-args-alt-screen-enabled ()
+  "Test CLI arg building when alt-screen mode is explicitly enabled."
   (let ((codex-use-alt-screen t)
         (codex-full-auto nil)
         (codex-sandbox-mode nil)
@@ -761,6 +773,23 @@
             (let ((codex-terminal-backend 'eat))
               (codex-edit-previous-message)))
           (should (= escape-count 2)))
+      (kill-buffer buf))))
+
+(ert-deftest codex-test-redraw-dispatches-to-terminal-backend ()
+  "Redrawing dispatches through the terminal backend abstraction."
+  (let ((buf (generate-new-buffer "*codex:/tmp/project/*"))
+        redrawn)
+    (unwind-protect
+        (cl-letf (((symbol-function 'codex--get-or-prompt-for-buffer)
+                   (lambda () buf))
+                  ((symbol-function 'codex--term-redraw)
+                   (lambda (backend) (setq redrawn backend)))
+                  ((symbol-function 'display-buffer)
+                   (lambda (&rest _) nil)))
+          (with-current-buffer buf
+            (let ((codex-terminal-backend 'eat))
+              (codex-redraw)))
+          (should (eq redrawn 'eat)))
       (kill-buffer buf))))
 
 (ert-deftest codex-test-color-luminance-white ()

@@ -61,10 +61,13 @@ Choose between \\='eat (default) and \\='vterm terminal emulators."
                 (const :tag "Vterm terminal emulator" vterm))
   :group 'codex)
 
-(defcustom codex-use-alt-screen t
+(defcustom codex-use-alt-screen nil
   "Whether to use Codex's alt-screen TUI.
-When non-nil (default), run Codex with its default alt-screen TUI.
-When nil, pass `--no-alt-screen' for inline/scrollback mode."
+When nil (default), pass `--no-alt-screen' for inline/scrollback mode.
+This is the safer default for Emacs terminal buffers because Codex's
+alternate-screen TUI can leave `eat' with stale screen state after
+interrupts, prompt editing, or heavy redraws.  When non-nil, run Codex
+with its default alt-screen TUI."
   :type 'boolean
   :group 'codex)
 
@@ -460,6 +463,7 @@ The value is a list of form (CURSOR-ON BLINKING-FREQUENCY CURSOR-OFF)."
     (define-key map (kbd "e") 'codex-fix-error-at-point)
     (define-key map (kbd "k") 'codex-kill)
     (define-key map (kbd "K") 'codex-kill-all)
+    (define-key map (kbd "l") 'codex-redraw)
     (define-key map (kbd "m") 'codex-transient)
     (define-key map (kbd "n") 'codex-send-escape)
     (define-key map (kbd "r") 'codex-send-region)
@@ -504,6 +508,7 @@ The value is a list of form (CURSOR-ON BLINKING-FREQUENCY CURSOR-OFF)."
     ("t" "Toggle window" codex-toggle)
     ("b" "Switch to buffer" codex-switch-to-buffer)
     ("B" "Select from all buffers" codex-select-buffer)
+    ("l" "Redraw terminal" codex-redraw)
     ("z" "Toggle read-only mode" codex-toggle-read-only-mode)
     ("M" "Cycle permissions" codex-cycle-permissions :transient t)]
    ["Quick Responses"
@@ -633,6 +638,9 @@ Returns the buffer containing the terminal.")
 (cl-defgeneric codex--term-send-escape (backend)
   "Send <escape> to the terminal using BACKEND.")
 
+(cl-defgeneric codex--term-redraw (backend)
+  "Redraw the terminal using BACKEND.")
+
 (cl-defgeneric codex--term-kill-process (backend buffer)
   "Kill the terminal process in BUFFER using BACKEND.")
 
@@ -708,6 +716,19 @@ _BACKEND is the terminal backend type (should be \\='eat)."
   "Send <escape> to eat terminal.
 _BACKEND is the terminal backend type (should be \\='eat)."
   (eat-term-send-string eat-terminal (kbd "ESC")))
+
+(cl-defmethod codex--term-redraw ((_backend (eql eat)))
+  "Redraw the eat terminal in the current Codex buffer.
+_BACKEND is the terminal backend type (should be \\='eat)."
+  ;; Ask the TUI to repaint its screen, then force eat/Emacs to rebuild
+  ;; their display state.  Local redisplay alone cannot fix stale prompt
+  ;; text that belongs to the subprocess UI state.
+  (eat-term-send-string eat-terminal "\C-l")
+  (sit-for 0.1)
+  (when (fboundp 'eat-term-redisplay)
+    (eat-term-redisplay eat-terminal))
+  (force-window-update (current-buffer))
+  (redisplay t))
 
 (cl-defmethod codex--term-kill-process ((_backend (eql eat)) buffer)
   "Kill the eat terminal process in BUFFER.
@@ -795,6 +816,7 @@ _BACKEND is the terminal backend type (should be \\='eat)."
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map (current-local-map))
     (define-key map (kbd "C-g") #'codex-send-escape)
+    (define-key map (kbd "C-l") #'codex-redraw)
     (pcase codex-newline-keybinding-style
       ('newline-on-shift-return
        (define-key map (kbd "<S-return>") #'codex--eat-insert-newline)
@@ -939,6 +961,13 @@ _BACKEND is the terminal backend type (should be \\='vterm)."
   (interactive)
   (vterm-send-key "\C-m"))
 
+(cl-defmethod codex--term-redraw ((_backend (eql vterm)))
+  "Redraw the vterm terminal in the current Codex buffer.
+_BACKEND is the terminal backend type (should be \\='vterm)."
+  (vterm-send-key "l" nil nil t)
+  (force-window-update (current-buffer))
+  (redisplay t))
+
 (defun codex--vterm-insert-newline ()
   "Insert a line break in the Codex prompt without submitting.
 Sends Ctrl+J, which Codex's TUI binds to its `insert_newline' editor
@@ -952,6 +981,7 @@ _BACKEND is the terminal backend type (should be \\='vterm)."
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map (current-local-map))
     (define-key map (kbd "C-g") #'codex--vterm-send-escape)
+    (define-key map (kbd "C-l") #'codex-redraw)
     (pcase codex-newline-keybinding-style
       ('newline-on-shift-return
        (define-key map (kbd "<S-return>") #'codex--vterm-insert-newline)
@@ -2050,6 +2080,22 @@ With prefix ARG, switch to the Codex buffer after sending."
   (interactive)
   (codex--with-buffer
    (codex--term-send-escape codex-terminal-backend)))
+
+;;;###autoload
+(defun codex-redraw ()
+  "Redraw the Codex terminal buffer.
+This asks the Codex TUI to repaint and then forces the Emacs terminal
+backend to redisplay.  It is mainly useful for existing alt-screen
+sessions that have stale screen state; new sessions avoid that class of
+failure by default because `codex-use-alt-screen' is nil."
+  (interactive)
+  (codex--with-buffer
+   (codex--term-redraw codex-terminal-backend)))
+
+;; `codex-command-map' is a `defvar', so package reloads do not rebuild an
+;; already-existing keymap.  Refresh this binding explicitly for live Emacs
+;; sessions that load a new codex.el without restarting.
+(define-key codex-command-map (kbd "l") #'codex-redraw)
 
 ;;;###autoload
 (defun codex-edit-previous-message ()

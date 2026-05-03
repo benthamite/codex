@@ -13,6 +13,7 @@
 
 @finalout
 @titlepage
+@title codex.el: Emacs integration for OpenAI Codex CLI
 @author Pablo Stafforini (@email{pablo@@stafforini.com})
 @end titlepage
 
@@ -22,7 +23,7 @@
 @node Top
 @top codex.el: Emacs integration for OpenAI Codex CLI
 
-This manual describes the features and customization options for the Emacs Lisp file @samp{codex.el}. @*
+This manual describes the features and customization options for the Emacs Lisp file @samp{codex.el}.
 
 @end ifnottex
 
@@ -83,32 +84,32 @@ Indices
 @node Overview
 @chapter Overview
 
-@samp{codex.el} provides an Emacs interface to the @uref{https://github.com/openai/codex, OpenAI Codex CLI}, allowing you to interact with the Codex agent directly from within Emacs.  The package is modeled after @samp{claude-code.el} and shares a similar architecture and design philosophy. @*
+@samp{codex.el} provides an Emacs interface to the @uref{https://github.com/openai/codex, OpenAI Codex CLI}, allowing you to interact with the Codex agent directly from within Emacs.  The package is modeled after @samp{claude-code.el} and shares a similar architecture and design philosophy.
 
-The package embeds the Codex CLI inside an Emacs terminal emulator buffer (either @samp{eat} or @samp{vterm}), giving you a full-featured TUI experience without leaving your editor.  You can start, stop, and manage multiple Codex instances across different projects, send commands and code from any buffer, toggle the Codex window on and off, and access all of the CLI's slash commands through a transient menu. @*
+The package embeds the Codex CLI inside an Emacs terminal emulator buffer (either @samp{eat} or @samp{vterm}), giving you a full-featured TUI experience without leaving your editor.  You can start, stop, and manage multiple Codex instances across different projects, send commands and code from any buffer, toggle the Codex window on and off, and access all of the CLI's slash commands through a transient menu.
 
-The main capabilities of @samp{codex.el} can be grouped thematically: @*
+The main capabilities of @samp{codex.el} can be grouped thematically:
 
 @itemize
 @item
-@strong{Session management} --- start Codex in the current project, resume or fork previous sessions, run multiple named instances side by side, and kill instances individually or all at once. @*
+@strong{Session management} --- start Codex in the current project, resume or fork previous sessions, run multiple named instances side by side, and kill instances individually or all at once.
 @item
-@strong{Sending commands and context} --- send freeform commands, send commands annotated with file and line context, send the active region or entire buffer, send file paths and images, and ask Codex to fix errors at point. @*
+@strong{Sending commands and context} --- send freeform commands, send commands annotated with file and line context, send the active region or entire buffer, send file paths and images, and ask Codex to fix errors at point.
 @item
-@strong{TUI interaction} --- send return, escape, and numeric responses to the Codex TUI; queue follow-up prompts; edit previous messages; inject mid-turn instructions; and open the header search overlay. @*
+@strong{TUI interaction} --- send return, escape, and numeric responses to the Codex TUI; queue follow-up prompts; edit previous messages; inject mid-turn instructions; and open the header search overlay.
 @item
-@strong{Window and buffer management} --- toggle the Codex window, switch between instances, select from all running instances, and toggle read-only mode. @*
+@strong{Window and buffer management} --- toggle the Codex window, switch between instances, select from all running instances, and toggle read-only mode.
 @item
-@strong{Hooks and notifications} --- auto-configure the Codex CLI hooks system so that Emacs receives lifecycle events (session start, tool use, stop); trigger desktop notifications when Codex finishes and awaits input. @*
+@strong{Hooks and notifications} --- auto-configure the Codex CLI hooks system so that Emacs receives lifecycle events (session start, tool use, stop); trigger desktop notifications when Codex finishes and awaits input.
 @item
-@strong{Transient menus} --- a main command menu and a slash commands menu, both accessible from the keyboard. @*
+@strong{Transient menus} --- a main command menu and a slash commands menu, both accessible from the keyboard.
 @item
-@strong{Model and configuration} --- change the model, reasoning effort, sandbox mode, approval policy, and profile on the fly through transient infixes. @*
+@strong{Model and configuration} --- change the model, reasoning effort, sandbox mode, approval policy, and profile on the fly through transient infixes.
 @end itemize
 
-The package requires Emacs 30.0 or later, @samp{transient} 0.9.3 or later, and @samp{inheritenv}.  You must also have one of the supported terminal emulator packages installed: @samp{eat} (the default) or @samp{vterm}. @*
+The package requires Emacs 30.0 or later, @samp{transient} 0.9.3 or later, and @samp{inheritenv}.  You must also have one of the supported terminal emulator packages installed: @samp{eat} (the default) or @samp{vterm}.
 
-The development repository is on @uref{https://github.com/benthamite/codex, GitHub}. @*
+The development repository is on @uref{https://github.com/benthamite/codex, GitHub}.
 
 @node User options
 @chapter User options
@@ -139,21 +140,21 @@ The development repository is on @uref{https://github.com/benthamite/codex, GitH
 @vindex codex-confirm-kill
 @vindex codex-newline-keybinding-style
 
-The user option @code{codex-program} specifies the path to the Codex binary.  The default value is @code{"codex"}, which relies on the binary being in your @code{PATH}.  Change this if you have installed Codex to a non-standard location. @*
+The user option @code{codex-program} specifies the path to the Codex binary.  The default value is @code{"codex"}, which relies on the binary being in your @code{PATH}.  Change this if you have installed Codex to a non-standard location.
 
-The user option @code{codex-program-switches} is a list of extra CLI flags to pass to Codex on every invocation.  The default value is @code{nil}.  Use this for flags that you always want applied but that are not covered by the dedicated user options below. @*
+The user option @code{codex-program-switches} is a list of extra CLI flags to pass to Codex on every invocation.  The default value is @code{nil}.  Use this for flags that you always want applied but that are not covered by the dedicated user options below.
 
-The user option @code{codex-terminal-backend} selects which terminal emulator to use for the Codex REPL@.  The choices are @code{eat} (the default) and @code{vterm}.  The @samp{eat} backend is recommended as it integrates more cleanly with Emacs and does not require compiling a dynamic module. @*
+The user option @code{codex-terminal-backend} selects which terminal emulator to use for the Codex REPL@.  The choices are @code{eat} (the default) and @code{vterm}.  The @samp{eat} backend is recommended as it integrates more cleanly with Emacs and does not require compiling a dynamic module.
 
-The user option @code{codex-use-alt-screen} controls whether Codex runs in its default alternate-screen TUI mode.  When non-nil (the default), Codex uses the alt screen.  When nil, Codex runs with @code{--no-alt-screen} for inline scrollback mode. @*
+The user option @code{codex-use-alt-screen} controls whether Codex runs in its default alternate-screen TUI mode.  The default is @code{nil}, so codex.el starts Codex with @code{--no-alt-screen} for inline scrollback mode.  This avoids recurring stale-screen failures seen when Codex's alternate-screen TUI and Emacs terminal buffers lose synchronization after interrupts, prompt editing, or heavy redraws.  Set it to non-nil only if you explicitly want Codex's alt-screen TUI@.
 
-The user option @code{codex-term-name} sets the terminal type reported to Codex.  The default value is @code{"xterm-256color"}.  You would change this only if your terminal environment requires a different @code{TERM} value. @*
+The user option @code{codex-term-name} sets the terminal type reported to Codex.  The default value is @code{"xterm-256color"}.  You would change this only if your terminal environment requires a different @code{TERM} value.
 
-The user option @code{codex-startup-delay} is a number of seconds to wait after starting the Codex process before displaying the buffer.  The default is @code{0.1}.  Increasing this value can help fix terminal layout issues that occur when the buffer is displayed before Codex has fully initialized. @*
+The user option @code{codex-startup-delay} is a number of seconds to wait after starting the Codex process before displaying the buffer.  The default is @code{0.1}.  Increasing this value can help fix terminal layout issues that occur when the buffer is displayed before Codex has fully initialized.
 
-The user option @code{codex-confirm-kill} controls whether @code{codex-kill} and @code{codex-kill-all} ask for confirmation before killing instances.  The default is @code{t}.  Set it to @code{nil} if you prefer to kill instances without a prompt. @*
+The user option @code{codex-confirm-kill} controls whether @code{codex-kill} and @code{codex-kill-all} ask for confirmation before killing instances.  The default is @code{t}.  Set it to @code{nil} if you prefer to kill instances without a prompt.
 
-The user option @code{codex-newline-keybinding-style} controls how the return key behaves in Codex buffers.  The default, @code{newline-on-shift-return}, makes @code{S-RET} insert a line break and plain @code{RET} submit the prompt, mirroring the behavior of @samp{claude-code.el}.  The other choices are @code{newline-on-alt-return} (@code{M-RET} for newline, @code{RET} to submit), @code{shift-return-to-send} (@code{RET} for newline, @code{S-RET} to submit), and @code{super-return-to-send} (@code{RET} for newline, @code{s-RET} — the COMMAND key on macOS — to submit).  The line-break action is delivered to Codex as @code{Ctrl+J} (byte @code{0x0A}), which the Codex CLI binds to its @code{insert_newline} editor action by default; submission is delivered as a plain @code{Return}. @*
+The user option @code{codex-newline-keybinding-style} controls how the return key behaves in Codex buffers.  The default, @code{newline-on-shift-return}, makes @code{S-RET} insert a line break and plain @code{RET} submit the prompt, mirroring the behavior of @samp{claude-code.el}.  The other choices are @code{newline-on-alt-return} (@code{M-RET} for newline, @code{RET} to submit), @code{shift-return-to-send} (@code{RET} for newline, @code{S-RET} to submit), and @code{super-return-to-send} (@code{RET} for newline, @code{s-RET} — the COMMAND key on macOS — to submit).  The line-break action is delivered to Codex as @code{Ctrl+J} (byte @code{0x0A}), which the Codex CLI binds to its @code{insert_newline} editor action by default; submission is delivered as a plain @code{Return}.
 
 @node Sandbox and approval
 @section Sandbox and approval
@@ -162,11 +163,11 @@ The user option @code{codex-newline-keybinding-style} controls how the return ke
 @vindex codex-approval-policy
 @vindex codex-full-auto
 
-The user option @code{codex-sandbox-mode} controls the sandboxing level for Codex.  When @code{nil} (the default), the CLI's own default is used.  The other choices are @code{read-only}, @code{workspace-write}, and @code{danger-full-access}, which correspond to the CLI's @code{--sandbox} flag values.  This option is ignored when @code{codex-full-auto} is non-nil. @*
+The user option @code{codex-sandbox-mode} controls the sandboxing level for Codex.  When @code{nil} (the default), the CLI's own default is used.  The other choices are @code{read-only}, @code{workspace-write}, and @code{danger-full-access}, which correspond to the CLI's @code{--sandbox} flag values.  This option is ignored when @code{codex-full-auto} is non-nil.
 
-The user option @code{codex-approval-policy} sets the approval policy for tool use.  When @code{nil} (the default), the CLI default applies.  The choices are @code{untrusted}, @code{on-request}, and @code{never}, corresponding to the @code{--ask-for-approval} flag.  This option is also ignored when @code{codex-full-auto} is non-nil. @*
+The user option @code{codex-approval-policy} sets the approval policy for tool use.  When @code{nil} (the default), the CLI default applies.  The choices are @code{untrusted}, @code{on-request}, and @code{never}, corresponding to the @code{--ask-for-approval} flag.  This option is also ignored when @code{codex-full-auto} is non-nil.
 
-The user option @code{codex-full-auto} enables fully autonomous mode by passing @code{--full-auto} to Codex.  The default is @code{nil}.  When non-nil, this overrides both @code{codex-sandbox-mode} and @code{codex-approval-policy}.  Use with caution. @*
+The user option @code{codex-full-auto} enables fully autonomous mode by passing @code{--full-auto} to Codex.  The default is @code{nil}.  When non-nil, this overrides both @code{codex-sandbox-mode} and @code{codex-approval-policy}.  Use with caution.
 
 @node Model and profile
 @section Model and profile
@@ -175,11 +176,11 @@ The user option @code{codex-full-auto} enables fully autonomous mode by passing 
 @vindex codex-profile
 @vindex codex-reasoning-effort
 
-The user option @code{codex-model} specifies a model override (e.g., @code{"gpt-5.4"}).  The default is @code{nil}, which uses the CLI's default model. @*
+The user option @code{codex-model} specifies a model override (e.g., @code{"gpt-5.4"}).  The default is @code{nil}, which uses the CLI's default model.
 
-The user option @code{codex-profile} names a configuration profile.  The default is @code{nil}, meaning the CLI default profile is used.  Profiles allow you to maintain separate sets of configuration for different workflows. @*
+The user option @code{codex-profile} names a configuration profile.  The default is @code{nil}, meaning the CLI default profile is used.  Profiles allow you to maintain separate sets of configuration for different workflows.
 
-The user option @code{codex-reasoning-effort} overrides the reasoning effort level.  The default is @code{nil}.  When set to a string value, it is passed via the @code{--reasoning-effort} flag. @*
+The user option @code{codex-reasoning-effort} overrides the reasoning effort level.  The default is @code{nil}.  When set to a string value, it is passed via the @code{--reasoning-effort} flag.
 
 @node Hooks integration
 @section Hooks integration
@@ -188,11 +189,11 @@ The user option @code{codex-reasoning-effort} overrides the reasoning effort lev
 @vindex codex-hooks-config-path
 @vindex codex-hooks-json-path
 
-The user option @code{codex-enable-hooks} controls whether @samp{codex.el} automatically configures the Codex CLI hooks system.  The default is @code{t}.  When enabled, activating @code{codex-mode} ensures that @code{config.toml} has @code{codex_hooks = true} under @code{[features]} and that @code{hooks.json} contains entries for all supported hook types. @*
+The user option @code{codex-enable-hooks} controls whether @samp{codex.el} automatically configures the Codex CLI hooks system.  The default is @code{t}.  When enabled, activating @code{codex-mode} ensures that @code{config.toml} has @code{codex_hooks = true} under @code{[features]} and that @code{hooks.json} contains entries for all supported hook types.
 
-The user option @code{codex-hooks-config-path} is the path to the Codex @code{config.toml} file.  The default is @code{"~/.codex/config.toml"}. @*
+The user option @code{codex-hooks-config-path} is the path to the Codex @code{config.toml} file.  The default is @code{"~/.codex/config.toml"}.
 
-The user option @code{codex-hooks-json-path} is the path to the Codex @code{hooks.json} file.  The default is @code{"~/.codex/hooks.json"}. @*
+The user option @code{codex-hooks-json-path} is the path to the Codex @code{hooks.json} file.  The default is @code{"~/.codex/hooks.json"}.
 
 @node Background and contrast remapping
 @section Background and contrast remapping
@@ -202,17 +203,17 @@ The user option @code{codex-hooks-json-path} is the path to the Codex @code{hook
 @vindex codex-background-contrast-threshold
 @vindex codex-minimum-contrast-ratio
 
-The Codex CLI has its own theme system, and the colors it emits do not always match the Emacs theme.  Mismatches make terminal text unreadable in two directions: the CLI may paint light backgrounds on a dark Emacs theme (bright rectangles containing dark text), or dark backgrounds on a light Emacs theme (dark rectangles containing light text).  A third kind of mismatch is low-contrast foreground colors that wash out against the effective background (e.g. bright cyan on a light default background, or dark red on a dark diff background).  The remapping system runs after each batch of terminal output and addresses all three. @*
+The Codex CLI has its own theme system, and the colors it emits do not always match the Emacs theme.  Mismatches make terminal text unreadable in two directions: the CLI may paint light backgrounds on a dark Emacs theme (bright rectangles containing dark text), or dark backgrounds on a light Emacs theme (dark rectangles containing light text).  A third kind of mismatch is low-contrast foreground colors that wash out against the effective background (e.g. bright cyan on a light default background, or dark red on a dark diff background).  The remapping system runs after each batch of terminal output and addresses all three.
 
-The user option @code{codex-remap-light-backgrounds} is the master switch.  The default is @code{t}.  When non-nil, background colors whose WCAG contrast against the Emacs default background exceeds @code{codex-background-contrast-threshold} are stripped (or replaced), and --- when @code{codex-minimum-contrast-ratio} is also non-nil --- low-contrast foregrounds are stripped as well. @*
+The user option @code{codex-remap-light-backgrounds} is the master switch.  The default is @code{t}.  When non-nil, background colors whose WCAG contrast against the Emacs default background exceeds @code{codex-background-contrast-threshold} are stripped (or replaced), and --- when @code{codex-minimum-contrast-ratio} is also non-nil --- low-contrast foregrounds are stripped as well.
 
-The user option @code{codex-card-background} specifies the replacement color for clashing backgrounds.  When @code{nil} (the default), clashing backgrounds are stripped entirely so the Emacs buffer background shows through.  Set this to a color string (e.g. @code{"#1a1b2e"}) to use a fixed replacement color instead. @*
+The user option @code{codex-card-background} specifies the replacement color for clashing backgrounds.  When @code{nil} (the default), clashing backgrounds are stripped entirely so the Emacs buffer background shows through.  Set this to a color string (e.g. @code{"#1a1b2e"}) to use a fixed replacement color instead.
 
-The user option @code{codex-background-contrast-threshold} is a WCAG contrast ratio above which a CLI background is considered to clash with the Emacs theme.  The default is @code{1.0}, which strips any explicit background that is not identical to the Emacs default background --- the cleanest result for users who want the Emacs theme to fully own the rendering.  Codex's diff foregrounds (colored @code{+} / @code{-} glyphs) still distinguish added and removed lines after the bg strip.  Raise this to @code{3.0} (the WCAG AA threshold for large text) to preserve subtle low-contrast tints (e.g. light-green diff backgrounds on a light theme at contrast @code{1.04:1}) and only strip clashing rectangles.  Because the comparison is against the Emacs default background, the same threshold handles mismatches in either direction. @*
+The user option @code{codex-background-contrast-threshold} is a WCAG contrast ratio above which a CLI background is considered to clash with the Emacs theme.  The default is @code{1.0}, which strips any explicit background that is not identical to the Emacs default background --- the cleanest result for users who want the Emacs theme to fully own the rendering.  Codex's diff foregrounds (colored @code{+} / @code{-} glyphs) still distinguish added and removed lines after the bg strip.  Raise this to @code{3.0} (the WCAG AA threshold for large text) to preserve subtle low-contrast tints (e.g. light-green diff backgrounds on a light theme at contrast @code{1.04:1}) and only strip clashing rectangles.  Because the comparison is against the Emacs default background, the same threshold handles mismatches in either direction.
 
-The user option @code{codex-minimum-contrast-ratio} is a WCAG contrast ratio below which the explicit foreground is stripped so the Emacs theme's default foreground takes over.  The default is @code{3.0}.  Set this to @code{nil} to disable contrast-based foreground remapping while keeping background remapping.  Stripping the foreground rather than the background preserves the semantic tint of diff-added and diff-removed backgrounds while ensuring the text itself remains readable. @*
+The user option @code{codex-minimum-contrast-ratio} is a WCAG contrast ratio below which the explicit foreground is stripped so the Emacs theme's default foreground takes over.  The default is @code{3.0}.  Set this to @code{nil} to disable contrast-based foreground remapping while keeping background remapping.  Stripping the foreground rather than the background preserves the semantic tint of diff-added and diff-removed backgrounds while ensuring the text itself remains readable.
 
-Because the remapping pass runs after every batch of terminal output and inspects every face segment in the eat buffer, perceived luminance results are memoized in @code{codex--color-luminance-cache} — a process-wide hash table keyed by color string.  The cache is small (one entry per distinct color) and is preserved across reloads of the package, so repeated contrast comparisons reduce to O(1) hash lookups instead of repeated @code{color-name-to-rgb} calls. @*
+Because the remapping pass runs after every batch of terminal output and inspects every face segment in the eat buffer, perceived luminance results are memoized in @code{codex--color-luminance-cache} — a process-wide hash table keyed by color string.  The cache is small (one entry per distinct color) and is preserved across reloads of the package, so repeated contrast comparisons reduce to O(1) hash lookups instead of repeated @code{color-name-to-rgb} calls.
 
 @menu
 * Why is this a post-hoc remap instead of a clean fix?::
@@ -221,11 +222,11 @@ Because the remapping pass runs after every batch of terminal output and inspect
 @node Why is this a post-hoc remap instead of a clean fix?
 @subsection Why is this a post-hoc remap instead of a clean fix?
 
-This feature exists because the Codex CLI emits 24-bit RGB escape codes for card backgrounds and some foregrounds.  Those land as literal @code{:foreground} / @code{:background} text properties in the eat buffer, bypassing the Emacs face system entirely — there is no indirection point where the Emacs theme gets to participate. @*
+This feature exists because the Codex CLI emits 24-bit RGB escape codes for card backgrounds and some foregrounds.  Those land as literal @code{:foreground} / @code{:background} text properties in the eat buffer, bypassing the Emacs face system entirely — there is no indirection point where the Emacs theme gets to participate.
 
-The clean alternative would be to downgrade Codex to 256-color (which eat routes through @code{eat-term-color-*} faces that the Emacs theme already controls).  That was attempted by setting @code{COLORTERM=} (empty) in the Codex subprocess environment.  It did not work: Codex's Rust UI code calls @code{Color::Rgb(...)} directly in several places (chat composer, diff blocks), bypassing its own @code{stdout_color_level()} detection.  No env var or config key currently turns those call sites off, and @code{NO_COLOR=1} is too aggressive (it disables all color). @*
+The clean alternative would be to downgrade Codex to 256-color (which eat routes through @code{eat-term-color-*} faces that the Emacs theme already controls).  That was attempted by setting @code{COLORTERM=} (empty) in the Codex subprocess environment.  It did not work: Codex's Rust UI code calls @code{Color::Rgb(...)} directly in several places (chat composer, diff blocks), bypassing its own @code{stdout_color_level()} detection.  No env var or config key currently turns those call sites off, and @code{NO_COLOR=1} is too aggressive (it disables all color).
 
-This machinery should be revisited and deleted if Codex stops hardcoding @code{Color::Rgb} in its UI code, grows a config option to use the terminal palette, or starts honoring @code{COLORTERM} consistently.  To verify: start a fresh Codex session and check whether the buffer contains literal @code{#RRGGBB} hex colors in its face text properties — if all colors route through @code{eat-term-color-*} faces, this whole section can go. @*
+This machinery should be revisited and deleted if Codex stops hardcoding @code{Color::Rgb} in its UI code, grows a config option to use the terminal palette, or starts honoring @code{COLORTERM} consistently.  To verify: start a fresh Codex session and check whether the buffer contains literal @code{#RRGGBB} hex colors in its face text properties — if all colors route through @code{eat-term-color-*} faces, this whole section can go.
 
 @node Notifications
 @section Notifications
@@ -233,9 +234,9 @@ This machinery should be revisited and deleted if Codex stops hardcoding @code{C
 @vindex codex-enable-notifications
 @vindex codex-notification-function
 
-The user option @code{codex-enable-notifications} controls whether notifications are shown when Codex finishes a task and is waiting for input.  The default is @code{t}.  Notifications are triggered by bell characters from the terminal or by @code{Stop} hook events. @*
+The user option @code{codex-enable-notifications} controls whether notifications are shown when Codex finishes a task and is waiting for input.  The default is @code{t}.  Notifications are triggered by bell characters from the terminal or by @code{Stop} hook events.
 
-The user option @code{codex-notification-function} specifies the function called for notifications.  The function receives two arguments: a title string and a message string.  The default is @code{codex-default-notification}, which displays a message in the echo area and pulses the mode line (@ref{Notification functions}). @*
+The user option @code{codex-notification-function} specifies the function called for notifications.  The function receives two arguments: a title string and a message string.  The default is @code{codex-default-notification}, which displays a message in the echo area and pulses the mode line (@ref{Notification functions}).
 
 @node Window management
 @section Window management
@@ -245,20 +246,20 @@ The user option @code{codex-notification-function} specifies the function called
 @vindex codex-optimize-window-resize
 @vindex codex-display-window-fn
 
-The user option @code{codex-no-delete-other-windows} prevents Codex windows from being deleted by @code{delete-other-windows}.  The default is @code{nil}.  Set this to @code{t} if you want the Codex window to persist when you use @samp{C-x 1} or similar commands. @*
+The user option @code{codex-no-delete-other-windows} prevents Codex windows from being deleted by @code{delete-other-windows}.  The default is @code{nil}.  Set this to @code{t} if you want the Codex window to persist when you use @samp{C-x 1} or similar commands.
 
-The user option @code{codex-toggle-auto-select} controls whether @code{codex-toggle} automatically selects the Codex window after opening it.  The default is @code{nil}, meaning the window is displayed but focus stays in the current window. @*
+The user option @code{codex-toggle-auto-select} controls whether @code{codex-toggle} automatically selects the Codex window after opening it.  The default is @code{nil}, meaning the window is displayed but focus stays in the current window.
 
-The user option @code{codex-optimize-window-resize} controls whether terminal reflows are suppressed when only the window height changes.  The default is @code{t}.  This prevents unnecessary redraws when you resize frames vertically. @*
+The user option @code{codex-optimize-window-resize} controls whether terminal reflows are suppressed when only the window height changes.  The default is @code{t}.  This prevents unnecessary redraws when you resize frames vertically.
 
-The user option @code{codex-display-window-fn} specifies the function used to display the Codex window.  It must accept a buffer argument.  The default is @code{codex-display-buffer-same-window}, which displays the Codex buffer in the current window.  An alternative @code{codex-display-buffer-below} is also provided, which displays it below the currently selected window. @*
+The user option @code{codex-display-window-fn} specifies the function used to display the Codex window.  It must accept a buffer argument.  The default is @code{codex-display-buffer-same-window}, which displays the Codex buffer in the current window.  An alternative @code{codex-display-buffer-below} is also provided, which displays it below the currently selected window.
 
 @node Images
 @section Images
 
 @vindex codex-default-images
 
-The user option @code{codex-default-images} is a list of image file paths to attach at startup via the @code{--image} flag.  The default is @code{nil}.  Use this to always include certain screenshots or diagrams as context. @*
+The user option @code{codex-default-images} is a list of image file paths to attach at startup via the @code{--image} flag.  The default is @code{nil}.  Use this to always include certain screenshots or diagrams as context.
 
 @node Emacs hooks
 @section Emacs hooks
@@ -267,20 +268,20 @@ The user option @code{codex-default-images} is a list of image file paths to att
 @vindex codex-process-environment-functions
 @vindex codex-event-hook
 
-The hook @code{codex-start-hook} runs after a Codex instance starts.  Use it to perform additional setup in the Codex buffer, such as enabling minor modes or customizing keybindings. @*
+The hook @code{codex-start-hook} runs after a Codex instance starts.  Use it to perform additional setup in the Codex buffer, such as enabling minor modes or customizing keybindings.
 
-The abnormal hook @code{codex-process-environment-functions} lets you inject environment variables into the Codex process.  Each function receives two arguments: the Codex buffer name and the project directory.  Each function should return a list of strings in @code{"VAR=VALUE"} format. @*
+The abnormal hook @code{codex-process-environment-functions} lets you inject environment variables into the Codex process.  Each function receives two arguments: the Codex buffer name and the project directory.  Each function should return a list of strings in @code{"VAR=VALUE"} format.
 
-The hook @code{codex-event-hook} runs when the Codex CLI triggers lifecycle events through the hooks system.  Functions on this hook are called with a single plist argument containing @code{:type}, @code{:buffer-name}, @code{:json-data}, and @code{:args}. @*
+The hook @code{codex-event-hook} runs when the Codex CLI triggers lifecycle events through the hooks system.  Functions on this hook are called with a single plist argument containing @code{:type}, @code{:buffer-name}, @code{:json-data}, and @code{:args}.
 
 @node Eat terminal settings
 @section Eat terminal settings
 
 @vindex codex-eat-read-only-mode-cursor-type
 
-The user option @code{codex-eat-read-only-mode-cursor-type} specifies the cursor appearance when the eat terminal is in read-only mode.  The value is a list of the form @code{(CURSOR-ON BLINKING-FREQUENCY CURSOR-OFF)}.  The default is @code{(box nil nil)}, which shows a non-blinking filled box cursor. @*
+The user option @code{codex-eat-read-only-mode-cursor-type} specifies the cursor appearance when the eat terminal is in read-only mode.  The value is a list of the form @code{(CURSOR-ON BLINKING-FREQUENCY CURSOR-OFF)}.  The default is @code{(box nil nil)}, which shows a non-blinking filled box cursor.
 
-The package also defines faces for the eat terminal that inherit from the corresponding @samp{eat} faces: @code{codex-eat-prompt-annotation-running-face}, @code{codex-eat-prompt-annotation-success-face}, @code{codex-eat-prompt-annotation-failure-face}, @code{codex-eat-term-bold-face}, @code{codex-eat-term-faint-face}, @code{codex-eat-term-italic-face}, @code{codex-eat-term-slow-blink-face}, @code{codex-eat-term-fast-blink-face}, and font faces @code{codex-eat-term-font-0-face} through @code{codex-eat-term-font-9-face}.  Customize these faces if you want the Codex terminal to look different from other eat buffers. @*
+The package also defines faces for the eat terminal that inherit from the corresponding @samp{eat} faces: @code{codex-eat-prompt-annotation-running-face}, @code{codex-eat-prompt-annotation-success-face}, @code{codex-eat-prompt-annotation-failure-face}, @code{codex-eat-term-bold-face}, @code{codex-eat-term-faint-face}, @code{codex-eat-term-italic-face}, @code{codex-eat-term-slow-blink-face}, @code{codex-eat-term-fast-blink-face}, and font faces @code{codex-eat-term-font-0-face} through @code{codex-eat-term-font-9-face}.  Customize these faces if you want the Codex terminal to look different from other eat buffers.
 
 @node Vterm terminal settings
 @section Vterm terminal settings
@@ -288,9 +289,9 @@ The package also defines faces for the eat terminal that inherit from the corres
 @vindex codex-vterm-buffer-multiline-output
 @vindex codex-vterm-multiline-delay
 
-The user option @code{codex-vterm-buffer-multiline-output} controls whether multi-line terminal output is buffered to prevent flickering.  The default is @code{t}.  When enabled, rapid successive output chunks containing cursor movement sequences are accumulated and flushed as a single update. @*
+The user option @code{codex-vterm-buffer-multiline-output} controls whether multi-line terminal output is buffered to prevent flickering.  The default is @code{t}.  When enabled, rapid successive output chunks containing cursor movement sequences are accumulated and flushed as a single update.
 
-The user option @code{codex-vterm-multiline-delay} sets the delay (in seconds) before processing buffered vterm output.  The default is @code{0.01}.  Increase this if you still see flickering with the buffering enabled. @*
+The user option @code{codex-vterm-multiline-delay} sets the delay (in seconds) before processing buffered vterm output.  The default is @code{0.01}.  Increase this if you still see flickering with the buffering enabled.
 
 @node Commands
 @chapter Commands
@@ -315,19 +316,19 @@ The user option @code{codex-vterm-multiline-delay} sets the delay (in seconds) b
 @findex codex-kill
 @findex codex-kill-all
 
-The command @code{codex} starts a Codex instance in the current project root or, if not in a project, in the directory of the current file.  If a Codex instance is already running for that directory, you are prompted for an instance name so that multiple instances can coexist.  With a single prefix argument (@samp{C-u}), the cursor switches to the Codex buffer after starting.  With a double prefix argument (@samp{C-u C-u}), you are prompted for the project directory. @*
+The command @code{codex} starts a Codex instance in the current project root or, if not in a project, in the directory of the current file.  If a Codex instance is already running for that directory, you are prompted for an instance name so that multiple instances can coexist.  With a single prefix argument (@samp{C-u}), the cursor switches to the Codex buffer after starting.  With a double prefix argument (@samp{C-u C-u}), you are prompted for the project directory.
 
-The command @code{codex-start-in-directory} always prompts for a directory before starting Codex, regardless of the current project.  With a prefix argument, it also switches to the Codex buffer. @*
+The command @code{codex-start-in-directory} always prompts for a directory before starting Codex, regardless of the current project.  With a prefix argument, it also switches to the Codex buffer.
 
-The command @code{codex-resume} resumes a previous Codex session by running @code{codex resume}.  If other instances already exist for the directory, you are prompted for an instance name; otherwise the name defaults to @samp{"default"}.  With a prefix argument, it passes @code{--last} to resume the most recent session. @*
+The command @code{codex-resume} resumes a previous Codex session by running @code{codex resume}.  If other instances already exist for the directory, you are prompted for an instance name; otherwise the name defaults to @samp{"default"}.  With a prefix argument, it passes @code{--last} to resume the most recent session.
 
-The command @code{codex-fork} forks a previous session by running @code{codex fork}.  Like @code{codex-resume}, it only prompts for an instance name when other instances exist, and accepts a prefix argument for @code{--last}. @*
+The command @code{codex-fork} forks a previous session by running @code{codex fork}.  Like @code{codex-resume}, it only prompts for an instance name when other instances exist, and accepts a prefix argument for @code{--last}.
 
-The command @code{codex-new-instance} creates a new Codex instance and always prompts for an instance name, even if no other instances are running.  This is useful when you want to name your instance from the start.  It accepts the same prefix argument conventions as @code{codex}. @*
+The command @code{codex-new-instance} creates a new Codex instance and always prompts for an instance name, even if no other instances are running.  This is useful when you want to name your instance from the start.  It accepts the same prefix argument conventions as @code{codex}.
 
-The command @code{codex-kill} kills the Codex instance associated with the current directory.  If multiple instances are running for the directory, you are prompted to select one.  If @code{codex-confirm-kill} is non-nil (the default), confirmation is required. @*
+The command @code{codex-kill} kills the Codex instance associated with the current directory.  If multiple instances are running for the directory, you are prompted to select one.  If @code{codex-confirm-kill} is non-nil (the default), confirmation is required.
 
-The command @code{codex-kill-all} kills all Codex instances across all directories.  It reports the number of instances killed and, like @code{codex-kill}, respects the @code{codex-confirm-kill} setting. @*
+The command @code{codex-kill-all} kills all Codex instances across all directories.  It reports the number of instances killed and, like @code{codex-kill}, respects the @code{codex-confirm-kill} setting.
 
 @node Sending commands and context
 @section Sending commands and context
@@ -339,17 +340,17 @@ The command @code{codex-kill-all} kills all Codex instances across all directori
 @findex codex-send-image
 @findex codex-fix-error-at-point
 
-The command @code{codex-send-command} reads a command from the minibuffer and sends it to the Codex instance for the current project.  Input history is maintained in @code{codex-command-history}.  With a prefix argument, the cursor switches to the Codex buffer after sending. @*
+The command @code{codex-send-command} reads a command from the minibuffer and sends it to the Codex instance for the current project.  Input history is maintained in @code{codex-command-history}.  With a prefix argument, the cursor switches to the Codex buffer after sending.
 
-The command @code{codex-send-command-with-context} works like @code{codex-send-command} but appends a file reference (in @code{@@file:line} format) to the command.  If a region is active, it includes the line range of the region.  This is particularly useful when you want to direct Codex's attention to a specific location in your code. @*
+The command @code{codex-send-command-with-context} works like @code{codex-send-command} but appends a file reference (in @code{@@file:line} format) to the command.  If a region is active, it includes the line range of the region.  This is particularly useful when you want to direct Codex's attention to a specific location in your code.
 
-The command @code{codex-send-region} sends the active region to Codex, or the entire buffer if no region is active.  With a single prefix argument, it prompts for instructions to prepend to the text.  With a double prefix argument, it also switches to the Codex buffer. @*
+The command @code{codex-send-region} sends the active region to Codex, or the entire buffer if no region is active.  With a single prefix argument, it prompts for instructions to prepend to the text.  With a double prefix argument, it also switches to the Codex buffer.
 
-The command @code{codex-send-buffer-file} sends the file path of the current buffer to Codex, prefixed with @code{@@}.  This tells Codex to read the file.  With a prefix argument, it prompts for instructions to include alongside the file reference.  With a double prefix argument, it also switches to the Codex buffer. @*
+The command @code{codex-send-buffer-file} sends the file path of the current buffer to Codex, prefixed with @code{@@}.  This tells Codex to read the file.  With a prefix argument, it prompts for instructions to include alongside the file reference.  With a double prefix argument, it also switches to the Codex buffer.
 
-The command @code{codex-send-image} prompts for an image file and sends its path to Codex prefixed with @code{@@}.  Use this to attach screenshots or diagrams as context for your request. @*
+The command @code{codex-send-image} prompts for an image file and sends its path to Codex prefixed with @code{@@}.  Use this to attach screenshots or diagrams as context for your request.
 
-The command @code{codex-fix-error-at-point} examines the error at point (using Flycheck or @code{help-at-pt}), formats it with the file and line reference, and sends it to Codex with instructions to fix the error.  With a prefix argument, it switches to the Codex buffer. @*
+The command @code{codex-fix-error-at-point} examines the error at point (using Flycheck or @code{help-at-pt}), formats it with the file and line reference, and sends it to Codex with instructions to fix the error.  With a prefix argument, it switches to the Codex buffer.
 
 @node TUI key sequences
 @section TUI key sequences
@@ -364,21 +365,21 @@ The command @code{codex-fix-error-at-point} examines the error at point (using F
 @findex codex-send-2
 @findex codex-send-3
 
-These commands send specific key sequences to the Codex TUI, allowing you to interact with Codex without switching to the terminal buffer. @*
+These commands send specific key sequences to the Codex TUI, allowing you to interact with Codex without switching to the terminal buffer.
 
-The command @code{codex-send-return} sends a return key press.  This is equivalent to pressing @samp{Enter} in the Codex TUI and is often used to confirm actions. @*
+The command @code{codex-send-return} sends a return key press.  This is equivalent to pressing @samp{Enter} in the Codex TUI and is often used to confirm actions.
 
-The command @code{codex-send-escape} sends an escape key press, typically used to cancel or dismiss prompts.  In eat buffers, @samp{C-g} is also bound to this command. @*
+The command @code{codex-send-escape} sends an escape key press, typically used to cancel or dismiss prompts.  In eat buffers, @samp{C-g} is also bound to this command.
 
-The command @code{codex-edit-previous-message} sends @samp{Esc Esc} to walk back and edit the previous message.  After sending the sequence, it switches to the Codex buffer so you can edit inline. @*
+The command @code{codex-edit-previous-message} sends @samp{Esc Esc} to walk back and edit the previous message.  After sending the sequence, it switches to the Codex buffer so you can edit inline.
 
-The command @code{codex-queue-followup} sends a @samp{Tab} key press to queue a follow-up prompt while Codex is still working. @*
+The command @code{codex-queue-followup} sends a @samp{Tab} key press to queue a follow-up prompt while Codex is still working.
 
-The command @code{codex-inject-mid-turn} sends a @samp{Return} key press to inject instructions while Codex is in the middle of processing. @*
+The command @code{codex-inject-mid-turn} sends a @samp{Return} key press to inject instructions while Codex is in the middle of processing.
 
-The command @code{codex-header-search} sends @samp{Ctrl+K} to open the header search overlay in the Codex TUI@. @*
+The command @code{codex-header-search} sends @samp{Ctrl+K} to open the header search overlay in the Codex TUI@.
 
-The commands @code{codex-send-1}, @code{codex-send-2}, and @code{codex-send-3} send the corresponding digit to the Codex TUI@.  These are useful for selecting numbered options in menus. @*
+The commands @code{codex-send-1}, @code{codex-send-2}, and @code{codex-send-3} send the corresponding digit to the Codex TUI@.  These are useful for selecting numbered options in menus.
 
 @node Buffer and window management
 @section Buffer and window management
@@ -388,32 +389,35 @@ The commands @code{codex-send-1}, @code{codex-send-2}, and @code{codex-send-3} s
 @findex codex-select-buffer
 @findex codex-toggle-read-only-mode
 
-The command @code{codex-toggle} shows or hides the Codex window.  If the Codex buffer is currently visible, it deletes the window.  If it is hidden, it displays it using @code{codex-display-window-fn}.  The @code{codex-no-delete-other-windows} parameter is applied to the window.  If @code{codex-toggle-auto-select} is non-nil, focus moves to the Codex window when it is shown (@ref{Window management}). @*
+The command @code{codex-toggle} shows or hides the Codex window.  If the Codex buffer is currently visible, it deletes the window.  If it is hidden, it displays it using @code{codex-display-window-fn}.  The @code{codex-no-delete-other-windows} parameter is applied to the window.  If @code{codex-toggle-auto-select} is non-nil, focus moves to the Codex window when it is shown (@ref{Window management}).
 
-The command @code{codex-switch-to-buffer} switches to the Codex buffer for the current project.  If multiple instances are running, you are prompted to select one.  With a prefix argument, it shows all Codex instances across all directories. @*
+The command @code{codex-switch-to-buffer} switches to the Codex buffer for the current project.  If multiple instances are running, you are prompted to select one.  With a prefix argument, it shows all Codex instances across all directories.
 
-The command @code{codex-select-buffer} prompts you to select from all running Codex instances across all directories and switches to the selected one. @*
+The command @code{codex-select-buffer} prompts you to select from all running Codex instances across all directories and switches to the selected one.
 
-The command @code{codex-toggle-read-only-mode} toggles the terminal between read-only mode and interactive mode.  In read-only mode (eat's Emacs mode or vterm's copy mode), you can navigate and copy text using normal Emacs keybindings.  In interactive mode, keystrokes are sent to the terminal. @*
+The command @code{codex-toggle-read-only-mode} toggles the terminal between read-only mode and interactive mode.  In read-only mode (eat's Emacs mode or vterm's copy mode), you can navigate and copy text using normal Emacs keybindings.  In interactive mode, keystrokes are sent to the terminal.
 
 @node Model and permissions
 @section Model and permissions
 
 @findex codex-cycle-permissions
 
-The command @code{codex-cycle-permissions} sends @samp{/permissions} to the Codex TUI to cycle through approval modes. @*
+The command @code{codex-cycle-permissions} sends @samp{/permissions} to the Codex TUI to cycle through approval modes.
 
 @node Diagnostics
 @section Diagnostics
 
 @findex codex-diagnose-faces-at-point
 @findex codex-diagnose-faces-in-region
+@findex codex-redraw
 
-When the Codex buffer displays rendering artifacts --- such as colored rectangles with invisible text --- these diagnostic commands help identify the root cause by inspecting the face properties that the terminal emulator has applied. @*
+When the Codex buffer displays rendering artifacts --- such as colored rectangles with invisible text --- these diagnostic commands help identify the root cause by inspecting the face properties that the terminal emulator has applied.
 
-The command @code{codex-diagnose-faces-at-point} reports the face plist at point, including the explicit and effective foreground and background colors, the WCAG contrast ratio between them, the @code{:inherit} chain, and whether the background remapping system would process this span.  Run this with point on a visually corrupted region to see whether the issue is a low-contrast color combination, a missing foreground, or a background that falls below the remapping threshold (@ref{Background and contrast remapping, , Background color remapping}). @*
+The command @code{codex-diagnose-faces-at-point} reports the face plist at point, including the explicit and effective foreground and background colors, the WCAG contrast ratio between them, the @code{:inherit} chain, and whether the background remapping system would process this span.  Run this with point on a visually corrupted region to see whether the issue is a low-contrast color combination, a missing foreground, or a background that falls below the remapping threshold (@ref{Background and contrast remapping, , Background color remapping}).
 
-The command @code{codex-diagnose-faces-in-region} audits all face property spans between BEG and END, reporting any non-whitespace text with a contrast ratio below 3:1.  With no active region, it audits the visible portion of the buffer.  The output lists the line number, contrast ratio, foreground, background, and a text excerpt for each problematic span. @*
+The command @code{codex-diagnose-faces-in-region} audits all face property spans between BEG and END, reporting any non-whitespace text with a contrast ratio below 3:1.  With no active region, it audits the visible portion of the buffer.  The output lists the line number, contrast ratio, foreground, background, and a text excerpt for each problematic span.
+
+The command @code{codex-redraw} asks the Codex TUI to repaint and then forces the Emacs terminal backend to redisplay.  It is bound to @code{C-l} in Codex buffers and to @code{l} in @code{codex-command-map}.  This is mainly a recovery command for existing or explicitly opted-in alt-screen sessions; new sessions avoid that failure class by default because @code{codex-use-alt-screen} is nil.
 
 @node Functions
 @chapter Functions
@@ -430,18 +434,18 @@ The command @code{codex-diagnose-faces-in-region} audits all face property spans
 @findex codex-display-buffer-same-window
 @findex codex-display-buffer-below
 
-The function @code{codex-default-notification} is the default notification handler.  It takes a title and message, displays them in the echo area, and pulses the mode line three times.  You can replace this by setting @code{codex-notification-function} to a custom function, for example one that uses @samp{alert.el} or the system notification center (@ref{Notifications}). @*
+The function @code{codex-default-notification} is the default notification handler.  It takes a title and message, displays them in the echo area, and pulses the mode line three times.  You can replace this by setting @code{codex-notification-function} to a custom function, for example one that uses @samp{alert.el} or the system notification center (@ref{Notifications}).
 
-The function @code{codex-display-buffer-same-window} displays the Codex buffer in the current window using @code{display-buffer-same-window}.  It is the default value of @code{codex-display-window-fn} (@ref{Window management}). @*
+The function @code{codex-display-buffer-same-window} displays the Codex buffer in the current window using @code{display-buffer-same-window}.  It is the default value of @code{codex-display-window-fn} (@ref{Window management}).
 
-The function @code{codex-display-buffer-below} displays the Codex buffer below the currently selected window using @code{display-buffer-below-selected}. @*
+The function @code{codex-display-buffer-below} displays the Codex buffer below the currently selected window using @code{display-buffer-below-selected}.
 
 @node Hook handling
 @section Hook handling
 
 @findex codex-handle-hook
 
-The function @code{codex-handle-hook} is the entry point for all Codex CLI hook events.  It is called by the @samp{codex-hook-wrapper} shell script via @samp{emacsclient}.  The function receives a hook type (e.g., @code{"Stop"}, @code{"PreToolUse"}), a buffer name, and optional additional arguments.  It constructs a plist and runs @code{codex-event-hook} with it.  For @code{"Stop"} events, it also triggers a notification (@ref{Notifications}). @*
+The function @code{codex-handle-hook} is the entry point for all Codex CLI hook events.  It is called by the @samp{codex-hook-wrapper} shell script via @samp{emacsclient}.  The function receives a hook type (e.g., @code{"Stop"}, @code{"PreToolUse"}), a buffer name, and optional additional arguments.  It constructs a plist and runs @code{codex-event-hook} with it.  For @code{"Stop"} events, it also triggers a notification (@ref{Notifications}).
 
 @node Transient menus
 @chapter Transient menus
@@ -449,24 +453,24 @@ The function @code{codex-handle-hook} is the entry point for all Codex CLI hook 
 @findex codex-transient
 @findex codex-slash-commands
 
-@samp{codex.el} provides two transient menus for convenient access to its commands. @*
+@samp{codex.el} provides two transient menus for convenient access to its commands.
 
-The transient @code{codex-transient} is the main command menu (titled ``Codex Menu''), organized into five columns: Start/Stop Codex, Send Commands, Manage Codex, Quick Responses, and Model & Config.  The Model & Config column contains transient infixes that let you change @code{codex-model}, @code{codex-reasoning-effort}, @code{codex-sandbox-mode}, @code{codex-approval-policy}, and @code{codex-profile} on the fly without modifying your configuration.  These infixes use two-key sequences prefixed with @samp{g} (e.g. @samp{g m} for model, @samp{g e} for reasoning effort, @samp{g s} for sandbox mode, @samp{g a} for approval policy, @samp{g p} for profile). @*
+The transient @code{codex-transient} is the main command menu (titled ``Codex Menu''), organized into five columns: Start/Stop Codex, Send Commands, Manage Codex, Quick Responses, and Model & Config.  The Model & Config column contains transient infixes that let you change @code{codex-model}, @code{codex-reasoning-effort}, @code{codex-sandbox-mode}, @code{codex-approval-policy}, and @code{codex-profile} on the fly without modifying your configuration.  These infixes use two-key sequences prefixed with @samp{g} (e.g. @samp{g m} for model, @samp{g e} for reasoning effort, @samp{g s} for sandbox mode, @samp{g a} for approval policy, @samp{g p} for profile).
 
-The transient @code{codex-slash-commands} provides quick access to all Codex CLI slash commands, organized into four columns: Core (help, clear, compact, status, new, quit), Navigation & Review (diff, review, fork, resume, copy), Configuration (permissions, model, fast, plan, init, statusline, theme, debug config), and Features & Tools (experimental, MCP, agent, apps, mention, ps). @*
+The transient @code{codex-slash-commands} provides quick access to all Codex CLI slash commands, organized into four columns: Core (help, clear, compact, status, new, quit), Navigation & Review (diff, review, fork, resume, copy), Configuration (permissions, model, fast, plan, init, statusline, theme, debug config), and Features & Tools (experimental, MCP, agent, apps, mention, ps).
 
-Both transients are available from the @code{codex-command-map} keymap, bound to @samp{m} and @samp{/} respectively. @*
+Both transients are available from the @code{codex-command-map} keymap, bound to @samp{m} and @samp{/} respectively.
 
 @node Keymap
 @chapter Keymap
 
-The @code{codex-command-map} keymap provides quick access to all commands.  You should bind this map to a prefix key of your choice, for example: @*
+The @code{codex-command-map} keymap provides quick access to all commands.  You should bind this map to a prefix key of your choice, for example:
 
 @lisp
 (global-set-key (kbd "C-c x") codex-command-map)
 @end lisp
 
-The default bindings are: @*
+The default bindings are:
 
 @multitable {aaaaa} {aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}
 @headitem Key
@@ -505,6 +509,8 @@ The default bindings are: @*
 @tab @code{codex-switch-to-buffer}
 @item @samp{B}
 @tab @code{codex-select-buffer}
+@item @samp{l}
+@tab @code{codex-redraw}
 @item @samp{z}
 @tab @code{codex-toggle-read-only-mode}
 @item @samp{M}
@@ -532,33 +538,33 @@ The default bindings are: @*
 
 @findex codex-mode
 
-The global minor mode @code{codex-mode} enables the Codex integration.  When activated, it auto-configures the Codex CLI hooks system by ensuring that @code{config.toml} and @code{hooks.json} are set up correctly (@ref{Hooks integration}).  The mode adds a @samp{Codex} lighter to the mode line. @*
+The global minor mode @code{codex-mode} enables the Codex integration.  When activated, it auto-configures the Codex CLI hooks system by ensuring that @code{config.toml} and @code{hooks.json} are set up correctly (@ref{Hooks integration}).  The mode adds a @samp{Codex} lighter to the mode line.
 
-Activate it with: @*
+Activate it with:
 
 @lisp
 (codex-mode 1)
 @end lisp
 
-Or add it to your init file to enable it on startup. @*
+Or add it to your init file to enable it on startup.
 
 @node Hooks system
 @chapter Hooks system
 
-The Codex CLI supports a hooks mechanism that notifies external programs of lifecycle events.  @samp{codex.el} takes advantage of this by shipping a @samp{bin/codex-hook-wrapper} shell script that calls @samp{emacsclient} to relay events back to Emacs. @*
+The Codex CLI supports a hooks mechanism that notifies external programs of lifecycle events.  @samp{codex.el} takes advantage of this by shipping a @samp{bin/codex-hook-wrapper} shell script that calls @samp{emacsclient} to relay events back to Emacs.
 
-When @code{codex-enable-hooks} is non-nil and @code{codex-mode} is activated, @samp{codex.el} automatically: @*
+When @code{codex-enable-hooks} is non-nil and @code{codex-mode} is activated, @samp{codex.el} automatically:
 
 @enumerate
 @item
-Ensures that @code{config.toml} has @code{codex_hooks = true} under the @code{[features]} section. @*
+Ensures that @code{config.toml} has @code{codex_hooks = true} under the @code{[features]} section.
 @item
-Ensures that @code{hooks.json} has entries for all five supported hook types: @code{Stop}, @code{SessionStart}, @code{PreToolUse}, @code{PostToolUse}, and @code{UserPromptSubmit}. @*
+Ensures that @code{hooks.json} has entries for all five supported hook types: @code{Stop}, @code{SessionStart}, @code{PreToolUse}, @code{PostToolUse}, and @code{UserPromptSubmit}.
 @end enumerate
 
-Each hook entry points to the @samp{codex-hook-wrapper} script, which reads JSON from stdin and passes it to @code{codex-handle-hook} via @samp{emacsclient}.  Existing user-defined hooks in @code{hooks.json} are preserved; @samp{codex.el} only appends its own entries if they are not already present. @*
+Each hook entry points to the @samp{codex-hook-wrapper} script, which reads JSON from stdin and passes it to @code{codex-handle-hook} via @samp{emacsclient}.  Existing user-defined hooks in @code{hooks.json} are preserved; @samp{codex.el} only appends its own entries if they are not already present.
 
-You can respond to these events by adding functions to @code{codex-event-hook} (@ref{Emacs hooks}). @*
+You can respond to these events by adding functions to @code{codex-event-hook} (@ref{Emacs hooks}).
 
 @node Indices
 @chapter Indices
