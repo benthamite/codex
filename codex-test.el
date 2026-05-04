@@ -792,6 +792,76 @@
           (should (eq redrawn 'eat)))
       (kill-buffer buf))))
 
+(ert-deftest codex-test-agent-navigation-dispatches-to-terminal-backend ()
+  "Agent navigation dispatches through the terminal backend abstraction."
+  (let ((buf (generate-new-buffer "*codex:/tmp/project/*"))
+        sent)
+    (unwind-protect
+        (cl-letf (((symbol-function 'codex--get-or-prompt-for-buffer)
+                   (lambda () buf))
+                  ((symbol-function 'codex--term-send-previous-agent)
+                   (lambda (backend) (push (list :previous backend) sent)))
+                  ((symbol-function 'codex--term-send-next-agent)
+                   (lambda (backend) (push (list :next backend) sent)))
+                  ((symbol-function 'display-buffer)
+                   (lambda (&rest _) nil)))
+          (with-current-buffer buf
+            (let ((codex-terminal-backend 'eat))
+              (codex-previous-agent)
+              (codex-next-agent)))
+          (should (equal (nreverse sent)
+                         '((:previous eat) (:next eat)))))
+      (kill-buffer buf))))
+
+(ert-deftest codex-test-eat-keymap-forwards-agent-navigation ()
+  "Eat Codex buffers forward Alt-arrow agent navigation keys."
+  (with-temp-buffer
+    (codex--term-setup-keymap 'eat)
+    (should (eq (local-key-binding (kbd "M-<left>"))
+                #'codex-previous-agent))
+    (should (eq (local-key-binding (kbd "M-<right>"))
+                #'codex-next-agent))))
+
+(ert-deftest codex-test-vterm-keymap-forwards-agent-navigation ()
+  "Vterm Codex buffers forward Alt-arrow agent navigation keys."
+  (with-temp-buffer
+    (codex--term-setup-keymap 'vterm)
+    (should (eq (local-key-binding (kbd "M-<left>"))
+                #'codex-previous-agent))
+    (should (eq (local-key-binding (kbd "M-<right>"))
+                #'codex-next-agent))))
+
+(ert-deftest codex-test-eat-agent-navigation-sends-alt-arrow-sequences ()
+  "Eat agent navigation sends xterm Alt-arrow escape sequences."
+  (let ((was-bound (boundp 'eat-terminal))
+        (old-value (and (boundp 'eat-terminal) eat-terminal))
+        sent)
+    (unwind-protect
+        (progn
+          (set 'eat-terminal 'terminal)
+          (cl-letf (((symbol-function 'eat-term-send-string)
+                     (lambda (terminal string)
+                       (push (list terminal string) sent))))
+            (codex--term-send-previous-agent 'eat)
+            (codex--term-send-next-agent 'eat)
+            (should (equal (nreverse sent)
+                           '((terminal "\e[1;3D")
+                             (terminal "\e[1;3C"))))))
+      (if was-bound
+          (set 'eat-terminal old-value)
+        (makunbound 'eat-terminal)))))
+
+(ert-deftest codex-test-vterm-agent-navigation-sends-meta-arrows ()
+  "Vterm agent navigation sends Meta-arrow keys."
+  (let (sent)
+    (cl-letf (((symbol-function 'vterm-send-key)
+               (lambda (&rest args) (push args sent))))
+      (codex--term-send-previous-agent 'vterm)
+      (codex--term-send-next-agent 'vterm)
+      (should (equal (nreverse sent)
+                     '(("<left>" nil t)
+                       ("<right>" nil t)))))))
+
 ;;;; Terminal backend configuration tests
 
 (ert-deftest codex-test-eat-configure-disables-scrollback-truncation ()

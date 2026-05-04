@@ -8,7 +8,7 @@ Key capabilities include:
 
 - **Session management** — start Codex in the current project, resume or fork previous sessions, run multiple named instances, kill instances individually or in bulk.
 - **Sending commands and context** — send freeform prompts, prompts annotated with file/line context, the active region or entire buffer, file paths, images, and error-at-point requests.
-- **TUI interaction** — send return, escape, digits, Tab (follow-up), and other key sequences to the Codex TUI from any buffer.
+- **TUI interaction** — send return, escape, digits, Tab (follow-up), agent navigation, and other key sequences to the Codex TUI from any buffer.
 - **Stable Emacs terminal behavior** — starts Codex with `--no-alt-screen` by default to avoid alternate-screen desynchronization in Emacs terminal buffers, preserves long scrollback in Codex terminal buffers, and provides `M-x codex-redraw` for explicitly opted-in alt-screen sessions.
 - **Window and buffer management** — toggle the Codex window, switch between instances, read-only mode for navigating output.
 - **Hooks and notifications** — auto-configures the Codex CLI hooks system so Emacs receives lifecycle events; desktop notifications when Codex awaits input.

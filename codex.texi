@@ -363,6 +363,8 @@ The command @code{codex-fix-error-at-point} examines the error at point (using F
 
 @findex codex-send-return
 @findex codex-send-escape
+@findex codex-previous-agent
+@findex codex-next-agent
 @findex codex-edit-previous-message
 @findex codex-queue-followup
 @findex codex-inject-mid-turn
@@ -376,6 +378,8 @@ These commands send specific key sequences to the Codex TUI, allowing you to int
 The command @code{codex-send-return} sends a return key press.  This is equivalent to pressing @samp{Enter} in the Codex TUI and is often used to confirm actions.
 
 The command @code{codex-send-escape} sends an escape key press, typically used to cancel or dismiss prompts.  In eat buffers, @samp{C-g} is also bound to this command.
+
+The commands @code{codex-previous-agent} and @code{codex-next-agent} send Codex's agent-navigation key sequences.  In terminal buffers, @samp{M-<left>} and @samp{M-<right>} are bound to these commands so multi-agent sessions can switch between the main thread and subagent threads when Codex accepts agent navigation.
 
 The command @code{codex-edit-previous-message} sends @samp{Esc Esc} to walk back and edit the previous message.  After sending the sequence, it switches to the Codex buffer so you can edit inline.
 

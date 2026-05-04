@@ -653,6 +653,12 @@ Returns the buffer containing the terminal.")
 (cl-defgeneric codex--term-send-escape (backend)
   "Send <escape> to the terminal using BACKEND.")
 
+(cl-defgeneric codex--term-send-previous-agent (backend)
+  "Send Codex's previous-agent key sequence using BACKEND.")
+
+(cl-defgeneric codex--term-send-next-agent (backend)
+  "Send Codex's next-agent key sequence using BACKEND.")
+
 (cl-defgeneric codex--term-redraw (backend)
   "Redraw the terminal using BACKEND.")
 
@@ -732,6 +738,16 @@ _BACKEND is the terminal backend type (should be \\='eat)."
   "Send <escape> to eat terminal.
 _BACKEND is the terminal backend type (should be \\='eat)."
   (eat-term-send-string eat-terminal (kbd "ESC")))
+
+(cl-defmethod codex--term-send-previous-agent ((_backend (eql eat)))
+  "Send Alt-left to eat terminal for Codex agent navigation.
+_BACKEND is the terminal backend type (should be \\='eat)."
+  (eat-term-send-string eat-terminal "\e[1;3D"))
+
+(cl-defmethod codex--term-send-next-agent ((_backend (eql eat)))
+  "Send Alt-right to eat terminal for Codex agent navigation.
+_BACKEND is the terminal backend type (should be \\='eat)."
+  (eat-term-send-string eat-terminal "\e[1;3C"))
 
 (cl-defmethod codex--term-redraw ((_backend (eql eat)))
   "Redraw the eat terminal in the current Codex buffer.
@@ -834,6 +850,8 @@ _BACKEND is the terminal backend type (should be \\='eat)."
     (set-keymap-parent map (current-local-map))
     (define-key map (kbd "C-g") #'codex-send-escape)
     (define-key map (kbd "C-l") #'codex-redraw)
+    (define-key map (kbd "M-<left>") #'codex-previous-agent)
+    (define-key map (kbd "M-<right>") #'codex-next-agent)
     (pcase codex-newline-keybinding-style
       ('newline-on-shift-return
        (define-key map (kbd "<S-return>") #'codex--eat-insert-newline)
@@ -915,6 +933,16 @@ _BACKEND is the terminal backend type (should be \\='vterm)."
   "Send <escape> to vterm terminal.
 _BACKEND is the terminal backend type (should be \\='vterm)."
   (vterm-send-key "\C-["))
+
+(cl-defmethod codex--term-send-previous-agent ((_backend (eql vterm)))
+  "Send Alt-left to vterm terminal for Codex agent navigation.
+_BACKEND is the terminal backend type (should be \\='vterm)."
+  (vterm-send-key "<left>" nil t))
+
+(cl-defmethod codex--term-send-next-agent ((_backend (eql vterm)))
+  "Send Alt-right to vterm terminal for Codex agent navigation.
+_BACKEND is the terminal backend type (should be \\='vterm)."
+  (vterm-send-key "<right>" nil t))
 
 (cl-defmethod codex--term-kill-process ((_backend (eql vterm)) buffer)
   "Kill the vterm terminal process in BUFFER.
@@ -1001,6 +1029,8 @@ _BACKEND is the terminal backend type (should be \\='vterm)."
     (set-keymap-parent map (current-local-map))
     (define-key map (kbd "C-g") #'codex--vterm-send-escape)
     (define-key map (kbd "C-l") #'codex-redraw)
+    (define-key map (kbd "M-<left>") #'codex-previous-agent)
+    (define-key map (kbd "M-<right>") #'codex-next-agent)
     (pcase codex-newline-keybinding-style
       ('newline-on-shift-return
        (define-key map (kbd "<S-return>") #'codex--vterm-insert-newline)
@@ -2099,6 +2129,20 @@ With prefix ARG, switch to the Codex buffer after sending."
   (interactive)
   (codex--with-buffer
    (codex--term-send-escape codex-terminal-backend)))
+
+;;;###autoload
+(defun codex-previous-agent ()
+  "Send Codex's previous-agent shortcut."
+  (interactive)
+  (codex--with-buffer
+   (codex--term-send-previous-agent codex-terminal-backend)))
+
+;;;###autoload
+(defun codex-next-agent ()
+  "Send Codex's next-agent shortcut."
+  (interactive)
+  (codex--with-buffer
+   (codex--term-send-next-agent codex-terminal-backend)))
 
 ;;;###autoload
 (defun codex-redraw ()
