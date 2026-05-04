@@ -1004,6 +1004,34 @@ When only :inherit remains, the face is removed entirely."
       (codex--remap-light-backgrounds-in-region 1 6 nil 3.0)
       (should-not (get-text-property 1 'face)))))
 
+(ert-deftest codex-test-remap-after-output-skips-old-scrollback ()
+  "Post-output remapping covers new output without scanning old scrollback."
+  (let ((buf (generate-new-buffer "*codex:/tmp/remap-test/*"))
+        (codex-remap-light-backgrounds t)
+        (codex-card-background nil)
+        (codex-background-contrast-threshold 3.0)
+        (codex-minimum-contrast-ratio nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'face-background)
+                   (lambda (&rest _) "#0d0e1c"))
+                  ((symbol-function 'eat-term-display-beginning)
+                   (lambda (&rest _) 9))
+                  ((symbol-function 'eat-term-end)
+                   (lambda (&rest _) 13)))
+          (with-current-buffer buf
+            (insert "AAAABBBBCCCC")
+            (put-text-property
+             1 13 'face '(:background "#EEEEEE" :inherit (eat-term-font-0)))
+            (setq-local eat-terminal 'fake)
+            (setq-local codex--remapped-output-end (copy-marker 5 nil)))
+          (codex--remap-light-backgrounds-after-output buf)
+          (with-current-buffer buf
+            (should (plist-get (get-text-property 1 'face) :background))
+            (should-not (get-text-property 5 'face))
+            (should-not (get-text-property 9 'face))
+            (should (= (marker-position codex--remapped-output-end) 13))))
+      (kill-buffer buf))))
+
 (ert-deftest codex-test-background-clashes-p ()
   "Contrast predicate flags cross-theme backgrounds in both directions."
   (should (codex--background-clashes-p "#EEEEEE" "#0d0e1c" 3.0))

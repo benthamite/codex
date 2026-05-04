@@ -213,7 +213,7 @@ The user option @code{codex-background-contrast-threshold} is a WCAG contrast ra
 
 The user option @code{codex-minimum-contrast-ratio} is a WCAG contrast ratio below which the explicit foreground is stripped so the Emacs theme's default foreground takes over.  The default is @code{3.0}.  Set this to @code{nil} to disable contrast-based foreground remapping while keeping background remapping.  Stripping the foreground rather than the background preserves the semantic tint of diff-added and diff-removed backgrounds while ensuring the text itself remains readable.
 
-Because the remapping pass runs after every batch of terminal output and inspects every face segment in the eat buffer, perceived luminance results are memoized in @code{codex--color-luminance-cache} — a process-wide hash table keyed by color string.  The cache is small (one entry per distinct color) and is preserved across reloads of the package, so repeated contrast comparisons reduce to O(1) hash lookups instead of repeated @code{color-name-to-rgb} calls.
+Because the remapping pass runs after every batch of terminal output, it only inspects the current eat display plus newly appended output since the previous pass, not the full retained scrollback.  Perceived luminance results are also memoized in @code{codex--color-luminance-cache} — a process-wide hash table keyed by color string.  The cache is small (one entry per distinct color) and is preserved across reloads of the package, so repeated contrast comparisons reduce to O(1) hash lookups instead of repeated @code{color-name-to-rgb} calls.
 
 @menu
 * Why is this a post-hoc remap instead of a clean fix?::

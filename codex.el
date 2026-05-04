@@ -460,6 +460,9 @@ recompiled with a larger SB_MAX value."
 (defvar-local codex--buffer-instance-name nil
   "Instance name associated with the current Codex buffer.")
 
+(defvar-local codex--remapped-output-end nil
+  "Marker at the previous end of remapped terminal output.")
+
 (defvar codex-command-history nil
   "History of commands sent to Codex.")
 
@@ -1690,18 +1693,41 @@ BUFFER is the eat buffer whose output was just processed."
     (with-current-buffer buffer
       (when (and (codex--buffer-p buffer)
                  (bound-and-true-p eat-terminal))
-        (let ((beg (eat-term-beginning eat-terminal))
-              (end (eat-term-end eat-terminal))
-              (inhibit-read-only t)
-              (inhibit-modification-hooks t))
-          (when (and beg end)
+        (let* ((end (eat-term-end eat-terminal))
+               (beg (codex--remap-output-beginning end))
+               (inhibit-read-only t)
+               (inhibit-modification-hooks t))
+          (when (and beg end (< beg end))
             (codex--remap-light-backgrounds-in-region
              beg end
              codex-card-background
              codex-background-contrast-threshold)
             (when codex-minimum-contrast-ratio
               (codex--remap-low-contrast-fg-in-region
-               beg end codex-minimum-contrast-ratio))))))))
+               beg end codex-minimum-contrast-ratio)))
+          (when end
+            (codex--record-remapped-output-end end)))))))
+
+(defun codex--remap-output-beginning (end)
+  "Return the beginning of the region to remap before terminal END."
+  (when end
+    (when-let* ((display-beg (eat-term-display-beginning eat-terminal)))
+      (if-let* ((previous-end (codex--remapped-output-end-position end)))
+          (min previous-end display-beg)
+        display-beg))))
+
+(defun codex--remapped-output-end-position (end)
+  "Return the previous remapped terminal end before END."
+  (when (markerp codex--remapped-output-end)
+    (let ((pos (marker-position codex--remapped-output-end)))
+      (when (and pos (< pos end))
+        pos))))
+
+(defun codex--record-remapped-output-end (end)
+  "Record END as the terminal output end processed by remapping."
+  (unless (markerp codex--remapped-output-end)
+    (setq codex--remapped-output-end (make-marker)))
+  (set-marker codex--remapped-output-end end (current-buffer)))
 
 (defun codex--remap-low-contrast-fg-in-region (beg end threshold)
   "Strip low-contrast foregrounds in the region from BEG to END.
