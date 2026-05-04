@@ -148,7 +148,7 @@ The user option @code{codex-terminal-backend} selects which terminal emulator to
 
 The user option @code{codex-use-alt-screen} controls whether Codex runs in its default alternate-screen TUI mode.  The default is @code{nil}, so codex.el starts Codex with @code{--no-alt-screen} for inline scrollback mode.  This avoids recurring stale-screen failures seen when Codex's alternate-screen TUI and Emacs terminal buffers lose synchronization after interrupts, prompt editing, or heavy redraws.  Set it to non-nil only if you explicitly want Codex's alt-screen TUI@.
 
-The user option @code{codex-term-name} sets the terminal type reported to Codex.  The default value is @code{"xterm-256color"}.  You would change this only if your terminal environment requires a different @code{TERM} value.
+The user option @code{codex-term-name} overrides the terminal type reported to Codex.  The default is @code{nil}, meaning codex.el chooses a backend-appropriate @code{TERM} value.  For @samp{eat}, Codex buffers use Eat's bundled @samp{eat-*} terminfo even if the global @samp{eat-term-name} has been customized; for @samp{vterm}, Codex buffers keep vterm's own default.  Set this to a string such as @code{"xterm-256color"} only when your terminal environment requires a specific @code{TERM} value.  The value is applied when the terminal subprocess starts, so changes affect new Codex buffers rather than already-running sessions.
 
 The user option @code{codex-startup-delay} is a number of seconds to wait after starting the Codex process before displaying the buffer.  The default is @code{0.1}.  Increasing this value can help fix terminal layout issues that occur when the buffer is displayed before Codex has fully initialized.
 

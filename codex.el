@@ -71,10 +71,30 @@ with its default alt-screen TUI."
   :type 'boolean
   :group 'codex)
 
-(defcustom codex-term-name "xterm-256color"
-  "Terminal type to use for Codex REPL."
-  :type 'string
+(defcustom codex-term-name nil
+  "Terminal type override to use for Codex REPL.
+When nil, Codex uses a backend-appropriate TERM value.  This lets eat
+advertise its bundled eat-* terminfo instead of an xterm terminfo that
+does not describe eat precisely."
+  :type '(choice (const :tag "Use Codex backend default" nil)
+                 string)
   :group 'codex)
+
+(defun codex--legacy-implicit-term-name-p ()
+  "Return non-nil when `codex-term-name' still has the old implicit default."
+  (and (equal codex-term-name "xterm-256color")
+       (not (get 'codex-term-name 'customized-value))
+       (not (get 'codex-term-name 'saved-value))))
+
+(defun codex--migrate-legacy-term-name ()
+  "Reset the old implicit `codex-term-name' default to the new backend default."
+  ;; Reloading a newer codex.el over an older one preserves the old defcustom
+  ;; value in memory.  Do not let that stale default keep forcing xterm into
+  ;; eat; keep explicit Custom values intact.
+  (when (codex--legacy-implicit-term-name-p)
+    (setq codex-term-name nil)))
+
+(codex--migrate-legacy-term-name)
 
 (defcustom codex-startup-delay 0.1
   "Delay in seconds after starting Codex before displaying buffer.
@@ -694,6 +714,9 @@ Returns the buffer containing the terminal.")
 ;; Declare external variables and functions from eat package
 (defvar eat--semi-char-mode)
 (defvar eat--synchronize-scroll-function)
+(defvar eat-enable-directory-tracking)
+(defvar eat-enable-shell-command-history)
+(defvar eat-enable-shell-prompt-annotation)
 (defvar eat-invisible-cursor-type)
 (defvar eat-term-name)
 (defvar eat-term-scrollback-size)
@@ -704,6 +727,7 @@ Returns the buffer containing the terminal.")
 (declare-function eat-kill-process "eat" (&optional buffer))
 (declare-function eat-make "eat" (name program &optional startfile &rest switches))
 (declare-function eat-semi-char-mode "eat")
+(declare-function eat-term-get-suitable-term-name "eat" (&optional display))
 (declare-function eat-term-display-beginning "eat" (terminal))
 (declare-function eat-term-display-cursor "eat" (terminal))
 (declare-function eat-term-beginning "eat" (terminal))
@@ -724,8 +748,17 @@ Returns the buffer containing the terminal.")
   "Create an eat terminal in BUFFER-NAME running PROGRAM with SWITCHES.
 _BACKEND is the terminal backend type (should be \\='eat)."
   (codex--ensure-eat)
-  (let ((trimmed-buffer-name (string-trim-right (string-trim buffer-name "\\*") "\\*")))
+  (let ((trimmed-buffer-name (string-trim-right (string-trim buffer-name "\\*") "\\*"))
+        (eat-term-name (codex--eat-term-name))
+        (eat-term-scrollback-size codex-eat-scrollback-size)
+        (eat-enable-directory-tracking nil)
+        (eat-enable-shell-command-history nil)
+        (eat-enable-shell-prompt-annotation nil))
     (apply #'eat-make trimmed-buffer-name program nil switches)))
+
+(defun codex--eat-term-name ()
+  "Return the Eat TERM setting for Codex buffers."
+  (or codex-term-name #'eat-term-get-suitable-term-name))
 
 (cl-defmethod codex--term-send-string ((_backend (eql eat)) string)
   "Send STRING to eat terminal.
@@ -816,7 +849,7 @@ Custom version that keeps the prompt at the bottom of the window."
   "Configure eat terminal in current buffer.
 _BACKEND is the terminal backend type (should be \\='eat)."
   (codex--ensure-eat)
-  (setq-local eat-term-name codex-term-name)
+  (setq-local eat-term-name (codex--eat-term-name))
   (setq-local eat-term-scrollback-size codex-eat-scrollback-size)
   (setq-local eat-enable-directory-tracking nil)
   (setq-local eat-enable-shell-command-history nil)
@@ -918,7 +951,10 @@ _BACKEND is the terminal backend type (should be \\='vterm)."
     (inheritenv
      (with-current-buffer buffer
        (pop-to-buffer buffer)
-       (vterm-mode)
+       (if codex-term-name
+           (let ((vterm-term-environment-variable codex-term-name))
+             (vterm-mode))
+         (vterm-mode))
        (delete-window (get-buffer-window buffer))
        buffer))))
 
@@ -978,7 +1014,6 @@ _BACKEND is the terminal backend type (should be \\='vterm)."
   "Configure vterm terminal in current buffer.
 _BACKEND is the terminal backend type (should be \\='vterm)."
   (codex--ensure-vterm)
-  (setq vterm-term-environment-variable codex-term-name)
   (setq-local vterm-buffer-name-string nil)
   (setq-local vterm-scroll-to-bottom-on-output nil)
   (setq-local vterm--redraw-immididately nil)

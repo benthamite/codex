@@ -864,6 +864,52 @@
 
 ;;;; Terminal backend configuration tests
 
+(ert-deftest codex-test-eat-make-binds-process-term-before-spawn ()
+  "Eat Codex buffers bind TERM before eat starts the process."
+  (let ((codex-term-name nil)
+        (codex-eat-scrollback-size nil)
+        (eat-term-name "xterm-256color")
+        captured-scrollback
+        captured-term
+        buffer)
+    (unwind-protect
+        (cl-letf (((symbol-function 'codex--ensure-eat)
+                  #'ignore)
+                  ((symbol-function 'eat-make)
+                   (lambda (&rest _)
+                     (setq captured-term (symbol-value 'eat-term-name))
+                     (setq captured-scrollback
+                           (symbol-value 'eat-term-scrollback-size))
+                     (get-buffer-create "*codex-test-eat*"))))
+          (setq buffer (codex--term-make
+                        'eat "*codex-test-eat*" "codex"
+                        '("--no-alt-screen")))
+          (should (eq captured-term #'eat-term-get-suitable-term-name))
+          (should-not captured-scrollback))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest codex-test-eat-make-honors-term-override-before-spawn ()
+  "Eat Codex buffers bind an explicit TERM override before spawn."
+  (let ((codex-term-name "xterm-256color")
+        (codex-eat-scrollback-size nil)
+        (eat-term-name 'eat-default)
+        captured-term
+        buffer)
+    (unwind-protect
+        (cl-letf (((symbol-function 'codex--ensure-eat)
+                  #'ignore)
+                  ((symbol-function 'eat-make)
+                   (lambda (&rest _)
+                     (setq captured-term (symbol-value 'eat-term-name))
+                     (get-buffer-create "*codex-test-eat*"))))
+          (setq buffer (codex--term-make
+                        'eat "*codex-test-eat*" "codex"
+                        '("--no-alt-screen")))
+          (should (equal captured-term "xterm-256color")))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
 (ert-deftest codex-test-eat-configure-disables-scrollback-truncation ()
   "Eat Codex buffers keep unlimited scrollback by default."
   (let ((codex-eat-scrollback-size nil)
@@ -891,29 +937,145 @@
                                        (current-buffer))
                    4096))))))
 
+(ert-deftest codex-test-eat-configure-uses-eat-terminfo-by-default ()
+  "Eat Codex buffers use eat's bundled TERM choice by default."
+  (let ((codex-term-name nil)
+        (codex-remap-light-backgrounds nil)
+        (codex-startup-delay 0))
+    (with-temp-buffer
+      (cl-letf (((symbol-function 'codex--ensure-eat)
+                 #'ignore))
+        (codex--term-configure 'eat))
+      (should (eq (buffer-local-value 'eat-term-name
+                                      (current-buffer))
+                  #'eat-term-get-suitable-term-name)))))
+
+(ert-deftest codex-test-eat-configure-honors-term-override ()
+  "Eat Codex buffers honor an explicit TERM override."
+  (let ((codex-term-name "xterm-256color")
+        (codex-remap-light-backgrounds nil)
+        (codex-startup-delay 0))
+    (with-temp-buffer
+      (let ((eat-term-name 'eat-default))
+        (cl-letf (((symbol-function 'codex--ensure-eat)
+                   #'ignore))
+          (codex--term-configure 'eat))
+        (should (equal (buffer-local-value 'eat-term-name
+                                           (current-buffer))
+                       "xterm-256color"))))))
+
+(ert-deftest codex-test-migrate-legacy-term-name-resets-uncustomized-xterm ()
+  "Reload migration clears the old uncustomized TERM default."
+  (let ((old-term-name codex-term-name)
+        (old-plist (copy-sequence (symbol-plist 'codex-term-name))))
+    (unwind-protect
+        (progn
+          (setq codex-term-name "xterm-256color")
+          (put 'codex-term-name 'customized-value nil)
+          (put 'codex-term-name 'saved-value nil)
+          (codex--migrate-legacy-term-name)
+          (should-not codex-term-name))
+      (setq codex-term-name old-term-name)
+      (setplist 'codex-term-name old-plist))))
+
+(ert-deftest codex-test-migrate-legacy-term-name-preserves-customized-xterm ()
+  "Reload migration preserves an explicit Custom TERM override."
+  (let ((old-term-name codex-term-name)
+        (old-plist (copy-sequence (symbol-plist 'codex-term-name))))
+    (unwind-protect
+        (progn
+          (setq codex-term-name "xterm-256color")
+          (put 'codex-term-name 'customized-value '((t)))
+          (put 'codex-term-name 'saved-value nil)
+          (codex--migrate-legacy-term-name)
+          (should (equal codex-term-name "xterm-256color")))
+      (setq codex-term-name old-term-name)
+      (setplist 'codex-term-name old-plist))))
+
 (ert-deftest codex-test-vterm-make-uses-codex-scrollback ()
   "Codex vterm buffers use the Codex-specific scrollback limit."
-  (let ((codex-vterm-max-scrollback 100000)
+  (let ((old-vterm-bound (boundp 'vterm-term-environment-variable))
+        (old-vterm-term (and (boundp 'vterm-term-environment-variable)
+                             vterm-term-environment-variable))
+        (codex-vterm-max-scrollback 100000)
+        (codex-term-name nil)
         buffer
-        captured-scrollback)
+        captured-scrollback
+        captured-term)
     (unwind-protect
-        (cl-letf (((symbol-function 'codex--ensure-vterm)
-                   #'ignore)
-                  ((symbol-function 'vterm-mode)
-                   (lambda ()
-                     (setq captured-scrollback vterm-max-scrollback)))
-                  ((symbol-function 'pop-to-buffer)
-                   (lambda (&rest _) nil))
-                  ((symbol-function 'get-buffer-window)
-                   (lambda (&rest _) nil))
-                  ((symbol-function 'delete-window)
-                   (lambda (&rest _) nil)))
-          (setq buffer (codex--term-make
-                        'vterm "*codex-test-vterm*" "codex"
-                        '("--no-alt-screen")))
-          (should (= captured-scrollback 100000)))
+        (progn
+          (setq vterm-term-environment-variable "vterm-default")
+          (cl-letf (((symbol-function 'codex--ensure-vterm)
+                     #'ignore)
+                    ((symbol-function 'vterm-mode)
+                     (lambda ()
+                       (setq captured-scrollback vterm-max-scrollback)
+                       (setq captured-term
+                             (symbol-value 'vterm-term-environment-variable))))
+                    ((symbol-function 'pop-to-buffer)
+                     (lambda (&rest _) nil))
+                    ((symbol-function 'get-buffer-window)
+                     (lambda (&rest _) nil))
+                    ((symbol-function 'delete-window)
+                     (lambda (&rest _) nil)))
+            (setq buffer (codex--term-make
+                          'vterm "*codex-test-vterm*" "codex"
+                          '("--no-alt-screen")))
+            (should (= captured-scrollback 100000))
+            (should (equal captured-term "vterm-default"))))
       (when (buffer-live-p buffer)
-        (kill-buffer buffer)))))
+        (kill-buffer buffer))
+      (if old-vterm-bound
+          (setq vterm-term-environment-variable old-vterm-term)
+        (makunbound 'vterm-term-environment-variable)))))
+
+(ert-deftest codex-test-vterm-make-honors-term-override-before-spawn ()
+  "Vterm Codex buffers bind an explicit TERM override before spawn."
+  (let ((old-vterm-bound (boundp 'vterm-term-environment-variable))
+        (old-vterm-term (and (boundp 'vterm-term-environment-variable)
+                             vterm-term-environment-variable))
+        (codex-term-name "xterm-256color")
+        (codex-vterm-max-scrollback 100000)
+        buffer
+        captured-term)
+    (unwind-protect
+        (progn
+          (setq vterm-term-environment-variable "vterm-default")
+          (cl-letf (((symbol-function 'codex--ensure-vterm)
+                     #'ignore)
+                    ((symbol-function 'vterm-mode)
+                     (lambda ()
+                       (setq captured-term
+                             (symbol-value 'vterm-term-environment-variable))))
+                    ((symbol-function 'pop-to-buffer)
+                     (lambda (&rest _) nil))
+                    ((symbol-function 'get-buffer-window)
+                     (lambda (&rest _) nil))
+                    ((symbol-function 'delete-window)
+                     (lambda (&rest _) nil)))
+            (setq buffer (codex--term-make
+                          'vterm "*codex-test-vterm*" "codex"
+                          '("--no-alt-screen")))
+            (should (equal captured-term "xterm-256color"))
+            (should (equal vterm-term-environment-variable "vterm-default"))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer))
+      (if old-vterm-bound
+          (setq vterm-term-environment-variable old-vterm-term)
+        (makunbound 'vterm-term-environment-variable)))))
+
+(ert-deftest codex-test-vterm-configure-preserves-backend-term-default ()
+  "Vterm Codex buffers keep vterm's TERM default unless overridden."
+  (let ((codex-term-name nil)
+        (codex-startup-delay 0)
+        (vterm-term-environment-variable "vterm-default"))
+    (with-temp-buffer
+      (cl-letf (((symbol-function 'codex--ensure-vterm)
+                 #'ignore)
+                ((symbol-function 'codex--acquire-managed-advice)
+                 #'ignore))
+        (codex--term-configure 'vterm))
+      (should (equal vterm-term-environment-variable "vterm-default")))))
 
 (ert-deftest codex-test-color-luminance-white ()
   "White has luminance close to 1.0."
