@@ -1065,6 +1065,33 @@
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
+(ert-deftest codex-test-eat-make-disables-shell-integration-before-spawn ()
+  "Eat Codex buffers do not expose eat shell integration to Codex."
+  (let ((codex-term-name nil)
+        (codex-eat-scrollback-size nil)
+        (eat-term-inside-emacs "30.2,eat")
+        (eat-term-shell-integration-directory "/tmp/eat-integration")
+        captured-inside-emacs
+        captured-shell-integration
+        buffer)
+    (unwind-protect
+        (cl-letf (((symbol-function 'codex--ensure-eat)
+                  #'ignore)
+                  ((symbol-function 'eat-make)
+                   (lambda (&rest _)
+                     (setq captured-inside-emacs
+                           (symbol-value 'eat-term-inside-emacs))
+                     (setq captured-shell-integration
+                           (symbol-value 'eat-term-shell-integration-directory))
+                     (get-buffer-create "*codex-test-eat*"))))
+          (setq buffer (codex--term-make
+                        'eat "*codex-test-eat*" "codex"
+                        '("--no-alt-screen")))
+          (should (equal captured-inside-emacs ""))
+          (should (equal captured-shell-integration "")))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
 (ert-deftest codex-test-eat-configure-disables-scrollback-truncation ()
   "Eat Codex buffers keep unlimited scrollback by default."
   (let ((codex-eat-scrollback-size nil)
