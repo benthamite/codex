@@ -25,7 +25,7 @@ The main capabilities of =codex.el= can be grouped thematically:
 
 - *Session management* --- start Codex in the current project, resume or fork previous sessions, run multiple named instances side by side, and kill instances individually or all at once.
 - *Sending commands and context* --- send freeform commands, send commands annotated with file and line context, send the active region or entire buffer, send file paths and images, and ask Codex to fix errors at point.
-- *TUI interaction* --- send return, escape, and numeric responses to the Codex TUI; queue follow-up prompts; edit previous messages; inject mid-turn instructions; and open the header search overlay.
+- *TUI interaction* --- send return, escape, and numeric responses to the Codex TUI; queue follow-up prompts; edit previous messages; inject mid-turn instructions; open the header search overlay; and display prompt autosuggestions with a distinct face.
 - *Window and buffer management* --- toggle the Codex window, switch between instances, select from all running instances, and toggle read-only mode.
 - *Hooks and notifications* --- auto-configure the Codex CLI hooks system so that Emacs receives lifecycle events (session start, tool use, stop); trigger desktop notifications when Codex finishes and awaits input.
 - *Transient menus* --- a main command menu and a slash commands menu, both accessible from the keyboard.
@@ -53,6 +53,10 @@ The development repository is on [[https://github.com/benthamite/codex][GitHub]]
 #+vindex: codex-startup-delay
 #+vindex: codex-confirm-kill
 #+vindex: codex-newline-keybinding-style
+#+vindex: codex-enable-prompt-autosuggestions
+#+vindex: codex-prompt-autosuggestion-placeholders
+#+vindex: codex-prompt-autosuggestion-history-path
+#+vindex: codex-prompt-autosuggestion-history-limit
 
 The user option ~codex-program~ specifies the path to the Codex binary.  The default value is ~"codex"~, which relies on the binary being in your ~PATH~.  Change this if you have installed Codex to a non-standard location.
 
@@ -69,6 +73,8 @@ The user option ~codex-startup-delay~ is a number of seconds to wait after start
 The user option ~codex-confirm-kill~ controls whether ~codex-kill~ and ~codex-kill-all~ ask for confirmation before killing instances.  The default is ~t~.  Set it to ~nil~ if you prefer to kill instances without a prompt.
 
 The user option ~codex-newline-keybinding-style~ controls how the return key behaves in Codex buffers.  The default, ~newline-on-shift-return~, makes ~S-RET~ insert a line break and plain ~RET~ submit the prompt, mirroring the behavior of =claude-code.el=.  The other choices are ~newline-on-alt-return~ (~M-RET~ for newline, ~RET~ to submit), ~shift-return-to-send~ (~RET~ for newline, ~S-RET~ to submit), and ~super-return-to-send~ (~RET~ for newline, ~s-RET~ — the COMMAND key on macOS — to submit).  The line-break action is delivered to Codex as ~Ctrl+J~ (byte ~0x0A~), which the Codex CLI binds to its ~insert_newline~ editor action by default; submission is delivered as a plain ~Return~.
+
+The user option ~codex-enable-prompt-autosuggestions~ controls whether =codex.el= styles prompt autosuggestions in =eat= buffers.  The default is ~t~.  Codex renders placeholder and suggestion text after the terminal cursor; when that text arrives in Emacs without the CLI's dim styling, =codex.el= recognizes known suggestions and applies ~codex-prompt-autosuggestion-face~.  The options ~codex-prompt-autosuggestion-placeholders~, ~codex-prompt-autosuggestion-history-path~, and ~codex-prompt-autosuggestion-history-limit~ control which built-in placeholder strings and recent history entries are recognized as autosuggestions.
 
 ** Sandbox and approval
 :PROPERTIES:

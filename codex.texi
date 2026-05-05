@@ -96,7 +96,7 @@ The main capabilities of @samp{codex.el} can be grouped thematically:
 @item
 @strong{Sending commands and context} --- send freeform commands, send commands annotated with file and line context, send the active region or entire buffer, send file paths and images, and ask Codex to fix errors at point.
 @item
-@strong{TUI interaction} --- send return, escape, and numeric responses to the Codex TUI; queue follow-up prompts; edit previous messages; inject mid-turn instructions; and open the header search overlay.
+@strong{TUI interaction} --- send return, escape, and numeric responses to the Codex TUI; queue follow-up prompts; edit previous messages; inject mid-turn instructions; open the header search overlay; and display prompt autosuggestions with a distinct face.
 @item
 @strong{Window and buffer management} --- toggle the Codex window, switch between instances, select from all running instances, and toggle read-only mode.
 @item
@@ -139,6 +139,10 @@ The development repository is on @uref{https://github.com/benthamite/codex, GitH
 @vindex codex-startup-delay
 @vindex codex-confirm-kill
 @vindex codex-newline-keybinding-style
+@vindex codex-enable-prompt-autosuggestions
+@vindex codex-prompt-autosuggestion-placeholders
+@vindex codex-prompt-autosuggestion-history-path
+@vindex codex-prompt-autosuggestion-history-limit
 
 The user option @code{codex-program} specifies the path to the Codex binary.  The default value is @code{"codex"}, which relies on the binary being in your @code{PATH}.  Change this if you have installed Codex to a non-standard location.
 
@@ -155,6 +159,8 @@ The user option @code{codex-startup-delay} is a number of seconds to wait after 
 The user option @code{codex-confirm-kill} controls whether @code{codex-kill} and @code{codex-kill-all} ask for confirmation before killing instances.  The default is @code{t}.  Set it to @code{nil} if you prefer to kill instances without a prompt.
 
 The user option @code{codex-newline-keybinding-style} controls how the return key behaves in Codex buffers.  The default, @code{newline-on-shift-return}, makes @code{S-RET} insert a line break and plain @code{RET} submit the prompt, mirroring the behavior of @samp{claude-code.el}.  The other choices are @code{newline-on-alt-return} (@code{M-RET} for newline, @code{RET} to submit), @code{shift-return-to-send} (@code{RET} for newline, @code{S-RET} to submit), and @code{super-return-to-send} (@code{RET} for newline, @code{s-RET} — the COMMAND key on macOS — to submit).  The line-break action is delivered to Codex as @code{Ctrl+J} (byte @code{0x0A}), which the Codex CLI binds to its @code{insert_newline} editor action by default; submission is delivered as a plain @code{Return}.
+
+The user option @code{codex-enable-prompt-autosuggestions} controls whether @samp{codex.el} styles prompt autosuggestions in @samp{eat} buffers.  The default is @code{t}.  Codex renders placeholder and suggestion text after the terminal cursor; when that text arrives in Emacs without the CLI's dim styling, @samp{codex.el} recognizes known suggestions and applies @code{codex-prompt-autosuggestion-face}.  The options @code{codex-prompt-autosuggestion-placeholders}, @code{codex-prompt-autosuggestion-history-path}, and @code{codex-prompt-autosuggestion-history-limit} control which built-in placeholder strings and recent history entries are recognized as autosuggestions.
 
 @node Sandbox and approval
 @section Sandbox and approval

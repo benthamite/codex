@@ -19,6 +19,8 @@
 (require 'cl-lib)
 (require 'inheritenv)
 (require 'json)
+(require 'seq)
+(require 'subr-x)
 
 ;;;; Customization groups
 (defgroup codex nil
@@ -41,6 +43,11 @@
 (defface codex-repl-face
   nil
   "Face for Codex REPL."
+  :group 'codex)
+
+(defface codex-prompt-autosuggestion-face
+  '((t :inherit shadow :slant italic))
+  "Face for Codex prompt autosuggestions."
   :group 'codex)
 
 ;;;; Core customization options
@@ -139,6 +146,38 @@ CLI binds to its `insert_newline' editor action by default."
                  shift-return-to-send)
           (const :tag "Super-return to send (RET for newline, s-return to send)"
                  super-return-to-send))
+  :group 'codex)
+
+(defcustom codex-enable-prompt-autosuggestions t
+  "Whether to style Codex prompt autosuggestions.
+Codex renders placeholder and suggestion text after the terminal
+cursor.  In eat buffers that text can arrive without the CLI's dim
+style, so codex.el recognizes known suggestions and applies
+`codex-prompt-autosuggestion-face' locally."
+  :type 'boolean
+  :group 'codex)
+
+(defcustom codex-prompt-autosuggestion-placeholders
+  '("Explain this codebase"
+    "Summarize recent commits"
+    "Implement {feature}"
+    "Find and fix a bug in @filename"
+    "Write tests for @filename"
+    "Improve documentation in @filename"
+    "Run /review on my current changes"
+    "Use /skills to list available skills")
+  "Placeholder suggestions shown by the Codex TUI prompt."
+  :type '(repeat string)
+  :group 'codex)
+
+(defcustom codex-prompt-autosuggestion-history-path "~/.codex/history.jsonl"
+  "Path to the Codex prompt history file used to recognize suggestions."
+  :type 'file
+  :group 'codex)
+
+(defcustom codex-prompt-autosuggestion-history-limit 1000
+  "Maximum number of recent history entries to recognize as suggestions."
+  :type 'natnum
   :group 'codex)
 
 ;;;; Sandbox and approval customization
@@ -482,6 +521,18 @@ recompiled with a larger SB_MAX value."
 
 (defvar-local codex--remapped-output-end nil
   "Marker at the previous end of remapped terminal output.")
+
+(defvar-local codex--prompt-autosuggestion-overlay nil
+  "Overlay used to style the active prompt autosuggestion.")
+
+(defvar codex--prompt-autosuggestion-history-cache nil
+  "Cached Codex prompt history entries, newest first.")
+
+(defvar codex--prompt-autosuggestion-history-cache-file nil
+  "File backing `codex--prompt-autosuggestion-history-cache'.")
+
+(defvar codex--prompt-autosuggestion-history-cache-mtime nil
+  "Modification time for `codex--prompt-autosuggestion-history-cache-file'.")
 
 (defvar codex-command-history nil
   "History of commands sent to Codex.")
@@ -861,6 +912,10 @@ _BACKEND is the terminal backend type (should be \\='eat)."
     (codex--acquire-managed-advice 'eat--process-output-queue
                                    :after
                                    #'codex--remap-light-backgrounds-after-output))
+  (when codex-enable-prompt-autosuggestions
+    (codex--acquire-managed-advice 'eat--process-output-queue
+                                   :after
+                                   #'codex--update-prompt-autosuggestion-after-output))
   (sleep-for codex-startup-delay))
 
 (cl-defmethod codex--term-customize-faces ((_backend (eql eat)))
@@ -1480,6 +1535,7 @@ If FORCE-SWITCH-TO-BUFFER is non-nil, always switch to the Codex buffer."
         (setq-local fringe-mode 0)
         (add-hook 'kill-buffer-hook #'codex--cleanup-buffer-state nil t)
         (run-hooks 'codex-start-hook)
+        (codex--setup-prompt-autosuggestions)
         ;; After all face configuration (including user hooks), propagate
         ;; the buffer's font family to eat terminal faces.  Without this,
         ;; text with eat face properties may resolve to a different font
@@ -1556,6 +1612,7 @@ Codex subcommands run as separate processes."
         (setq-local fringe-mode 0)
         (add-hook 'kill-buffer-hook #'codex--cleanup-buffer-state nil t)
         (run-hooks 'codex-start-hook)
+        (codex--setup-prompt-autosuggestions)
         ;; After all face configuration (including user hooks), propagate
         ;; the buffer's font family to eat terminal faces.  Without this,
         ;; text with eat face properties may resolve to a different font
@@ -1609,6 +1666,130 @@ the default font."
       (dolist (face '(eat-term-bold eat-term-faint eat-term-italic
                       eat-term-slow-blink eat-term-fast-blink))
         (face-remap-add-relative face :family family)))))
+
+;;;; Prompt autosuggestions
+
+(defun codex--setup-prompt-autosuggestions ()
+  "Set up prompt autosuggestion styling in the current Codex buffer."
+  (when (and codex-enable-prompt-autosuggestions
+             (eq codex-terminal-backend 'eat))
+    (add-hook 'post-command-hook #'codex--update-prompt-autosuggestion nil t)
+    (codex--update-prompt-autosuggestion)))
+
+(defun codex--update-prompt-autosuggestion-after-output (buffer)
+  "Update prompt autosuggestion styling in BUFFER after terminal output."
+  (when (and (buffer-live-p buffer)
+             (codex--buffer-p buffer))
+    (with-current-buffer buffer
+      (codex--update-prompt-autosuggestion))))
+
+(defun codex--update-prompt-autosuggestion ()
+  "Style the active Codex prompt autosuggestion, if one is visible."
+  (if-let* ((context (and codex-enable-prompt-autosuggestions
+                          (codex--buffer-p (current-buffer))
+                          (codex--prompt-autosuggestion-context))))
+      (codex--show-prompt-autosuggestion (plist-get context :beg)
+                                         (plist-get context :end))
+    (codex--clear-prompt-autosuggestion)))
+
+(defun codex--show-prompt-autosuggestion (beg end)
+  "Apply autosuggestion styling between BEG and END."
+  (let ((overlay (or codex--prompt-autosuggestion-overlay
+                     (setq codex--prompt-autosuggestion-overlay
+                           (make-overlay beg end nil nil t)))))
+    (move-overlay overlay beg end)
+    (overlay-put overlay 'face 'codex-prompt-autosuggestion-face)
+    (overlay-put overlay 'priority 1)))
+
+(defun codex--clear-prompt-autosuggestion ()
+  "Remove prompt autosuggestion styling from the current buffer."
+  (when (overlayp codex--prompt-autosuggestion-overlay)
+    (delete-overlay codex--prompt-autosuggestion-overlay)))
+
+(defun codex--prompt-autosuggestion-context ()
+  "Return context for a visible prompt autosuggestion at the cursor."
+  (when-let* ((cursor (codex--terminal-cursor-position)))
+    (save-excursion
+      (goto-char cursor)
+      (let* ((line-beg (line-beginning-position))
+             (line-end (line-end-position))
+             (input-start (codex--prompt-input-start line-beg cursor))
+             (suffix-end (codex--prompt-suffix-end cursor line-end)))
+        (when (and input-start suffix-end (< cursor suffix-end))
+          (let* ((prefix (buffer-substring-no-properties input-start cursor))
+                 (suffix (buffer-substring-no-properties cursor suffix-end))
+                 (candidate (concat prefix suffix)))
+            (when (codex--known-prompt-autosuggestion-p candidate)
+              (list :beg cursor :end suffix-end :prefix prefix :suffix suffix
+                    :candidate candidate))))))))
+
+(defun codex--terminal-cursor-position ()
+  "Return the current terminal cursor buffer position."
+  (when (and (eq codex-terminal-backend 'eat)
+             (bound-and-true-p eat-terminal))
+    (eat-term-display-cursor eat-terminal)))
+
+(defun codex--prompt-input-start (line-beg cursor)
+  "Return the input start between LINE-BEG and CURSOR."
+  (save-excursion
+    (goto-char line-beg)
+    (skip-chars-forward " \t " cursor)
+    (when (looking-at-p "[›❯>]")
+      (forward-char)
+      (skip-chars-forward " \t " cursor)
+      (point))))
+
+(defun codex--prompt-suffix-end (cursor line-end)
+  "Return the end of non-blank prompt suffix.
+The suffix starts after CURSOR and ends before LINE-END."
+  (save-excursion
+    (goto-char line-end)
+    (skip-chars-backward " \t " cursor)
+    (point)))
+
+(defun codex--known-prompt-autosuggestion-p (candidate)
+  "Return non-nil if CANDIDATE is a known Codex autosuggestion."
+  (and (not (string-empty-p candidate))
+       (not (string-match-p "\n" candidate))
+       (or (member candidate codex-prompt-autosuggestion-placeholders)
+           (member candidate (codex--prompt-autosuggestion-history)))))
+
+(defun codex--prompt-autosuggestion-history ()
+  "Return cached Codex prompt history entries, newest first."
+  (let* ((file (expand-file-name codex-prompt-autosuggestion-history-path))
+         (mtime (codex--file-mtime file)))
+    (unless (and (equal file codex--prompt-autosuggestion-history-cache-file)
+                 (equal mtime codex--prompt-autosuggestion-history-cache-mtime))
+      (setq codex--prompt-autosuggestion-history-cache-file file)
+      (setq codex--prompt-autosuggestion-history-cache-mtime mtime)
+      (setq codex--prompt-autosuggestion-history-cache
+            (codex--read-prompt-autosuggestion-history file)))
+    codex--prompt-autosuggestion-history-cache))
+
+(defun codex--file-mtime (file)
+  "Return FILE's modification time, or nil if FILE is unavailable."
+  (when (file-readable-p file)
+    (file-attribute-modification-time (file-attributes file))))
+
+(defun codex--read-prompt-autosuggestion-history (file)
+  "Read Codex prompt history entries from FILE, newest first."
+  (when (file-readable-p file)
+    (with-temp-buffer
+      (insert-file-contents file)
+      (let (entries)
+        (dolist (line (split-string (buffer-string) "\n" t))
+          (when-let* ((text (codex--history-line-text line)))
+            (unless (or (string-empty-p text)
+                        (string-match-p "\n" text))
+              (push text entries))))
+        (seq-take entries codex-prompt-autosuggestion-history-limit)))))
+
+(defun codex--history-line-text (line)
+  "Return prompt text from one JSONL history LINE."
+  (condition-case nil
+      (let ((entry (json-parse-string line :object-type 'alist)))
+        (alist-get 'text entry))
+    (error nil)))
 
 ;;;; Background color remapping
 

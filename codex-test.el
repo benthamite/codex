@@ -710,6 +710,71 @@
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
+(ert-deftest codex-test-prompt-autosuggestion-context-placeholder ()
+  "Prompt autosuggestion context recognizes Codex placeholders."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/*" t)
+    (insert "› Summarize recent commits   ")
+    (let ((codex-terminal-backend 'eat)
+          (codex-prompt-autosuggestion-placeholders
+           '("Summarize recent commits"))
+          (codex-prompt-autosuggestion-history-path
+           "/tmp/codex-test-missing-history.jsonl")
+          (cursor (+ (point-min) 2)))
+      (cl-letf (((symbol-function 'codex--terminal-cursor-position)
+                 (lambda () cursor)))
+        (let ((context (codex--prompt-autosuggestion-context)))
+          (should (equal (plist-get context :beg) cursor))
+          (should (equal (plist-get context :end) 27))
+          (should (equal (plist-get context :suffix)
+                         "Summarize recent commits")))))))
+
+(ert-deftest codex-test-prompt-autosuggestion-context-history ()
+  "Prompt autosuggestion context recognizes history-backed completions."
+  (let ((history-file (make-temp-file "codex-history" nil ".jsonl")))
+    (unwind-protect
+        (progn
+          (with-temp-file history-file
+            (insert "{\"text\":\"done, it worked\"}\n"))
+          (setq codex--prompt-autosuggestion-history-cache nil)
+          (setq codex--prompt-autosuggestion-history-cache-file nil)
+          (setq codex--prompt-autosuggestion-history-cache-mtime nil)
+          (with-temp-buffer
+            (rename-buffer "*codex:/tmp/*" t)
+            (insert "› do" "ne, it worked   ")
+            (let ((codex-terminal-backend 'eat)
+                  (codex-prompt-autosuggestion-placeholders nil)
+                  (codex-prompt-autosuggestion-history-path history-file)
+                  (cursor (+ (point-min) 4)))
+              (cl-letf (((symbol-function 'codex--terminal-cursor-position)
+                         (lambda () cursor)))
+                (let ((context (codex--prompt-autosuggestion-context)))
+                  (should (equal (plist-get context :prefix) "do"))
+                  (should (equal (plist-get context :suffix)
+                                 "ne, it worked")))))))
+      (delete-file history-file))))
+
+(ert-deftest codex-test-update-prompt-autosuggestion-uses-overlay ()
+  "Prompt autosuggestion styling uses a buffer-local overlay."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/*" t)
+    (insert "› Summarize recent commits   ")
+    (let ((codex-terminal-backend 'eat)
+          (codex-enable-prompt-autosuggestions t)
+          (codex-prompt-autosuggestion-placeholders
+           '("Summarize recent commits"))
+          (codex-prompt-autosuggestion-history-path
+           "/tmp/codex-test-missing-history.jsonl")
+          (cursor (+ (point-min) 2)))
+      (cl-letf (((symbol-function 'codex--terminal-cursor-position)
+                 (lambda () cursor)))
+        (codex--update-prompt-autosuggestion)
+        (should (overlayp codex--prompt-autosuggestion-overlay))
+        (should (equal (overlay-start codex--prompt-autosuggestion-overlay)
+                       cursor))
+        (should (equal (overlay-get codex--prompt-autosuggestion-overlay 'face)
+                       'codex-prompt-autosuggestion-face))))))
+
 (ert-deftest codex-test-start-subcommand-includes-cli-options ()
   "Subcommands inherit configured CLI options and extra program switches."
   (let ((codex-terminal-backend 'eat)
