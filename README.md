@@ -2,7 +2,7 @@
 
 `codex.el` provides an Emacs interface to the [OpenAI Codex CLI](https://github.com/openai/codex), embedding the Codex agent TUI inside an Emacs terminal emulator buffer. You can interact with Codex without leaving your editor — start sessions, send commands, review output, and manage multiple instances across projects.
 
-The package supports two terminal backends — [eat](https://codeberg.org/akib/emacs-eat) (default, recommended) and [vterm](https://github.com/akermu/emacs-libvterm) — and is modeled after `claude-code.el`, sharing a similar architecture and workflow.
+The package uses [eat](https://codeberg.org/akib/emacs-eat) by default and can use [vterm](https://github.com/akermu/emacs-libvterm) if you install it separately. It is modeled after `claude-code.el`, sharing a similar architecture and workflow.
 
 Key capabilities include:
 
@@ -44,7 +44,8 @@ Requires Emacs 30.0 or later.
 
 - [transient](https://github.com/magit/transient) (>= 0.9.3)
 - [inheritenv](https://github.com/purcell/inheritenv) (>= 0.2)
-- One of: [eat](https://codeberg.org/akib/emacs-eat) (default backend) or [vterm](https://github.com/akermu/emacs-libvterm)
+- [eat](https://codeberg.org/akib/emacs-eat) (>= 0.9.4)
+- Optional: [vterm](https://github.com/akermu/emacs-libvterm), when `codex-terminal-backend` is set to `vterm`
 - The [Codex CLI](https://github.com/openai/codex) must be installed and available in your `PATH`.
 
 ## Quick start

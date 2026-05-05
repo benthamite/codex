@@ -27,11 +27,11 @@ The main capabilities of =codex.el= can be grouped thematically:
 - *Sending commands and context* --- send freeform commands, send commands annotated with file and line context, send the active region or entire buffer, send file paths and images, and ask Codex to fix errors at point.
 - *TUI interaction* --- send return, escape, and numeric responses to the Codex TUI; queue follow-up prompts; edit previous messages; inject mid-turn instructions; open the header search overlay; and display prompt autosuggestions with a distinct face.
 - *Window and buffer management* --- toggle the Codex window, switch between instances, select from all running instances, and toggle read-only mode.
-- *Hooks and notifications* --- auto-configure the Codex CLI hooks system so that Emacs receives lifecycle events (session start, tool use, stop); trigger desktop notifications when Codex finishes and awaits input.
+- *Hooks and notifications* --- auto-configure the Codex CLI hooks system so that Emacs receives lifecycle events (session start, tool use, permission requests, stop); trigger desktop notifications when Codex finishes and awaits input.
 - *Transient menus* --- a main command menu and a slash commands menu, both accessible from the keyboard.
 - *Model and configuration* --- change the model, reasoning effort, sandbox mode, approval policy, and profile on the fly through transient infixes.
 
-The package requires Emacs 30.0 or later, =transient= 0.9.3 or later, and =inheritenv=.  You must also have one of the supported terminal emulator packages installed: =eat= (the default) or =vterm=.
+The package requires Emacs 30.0 or later, =transient= 0.9.3 or later, =inheritenv=, and =eat=.  The default terminal backend is =eat=.  You can alternatively use =vterm= by installing it separately and setting ~codex-terminal-backend~ to ~vterm~.
 
 The development repository is on [[https://github.com/benthamite/codex][GitHub]].
 
@@ -91,7 +91,7 @@ The user option ~codex-sandbox-mode~ controls the sandboxing level for Codex.  W
 
 The user option ~codex-approval-policy~ sets the approval policy for tool use.  When ~nil~ (the default), the CLI default applies.  The choices are ~untrusted~, ~on-request~, and ~never~, corresponding to the ~--ask-for-approval~ flag.  This option is also ignored when ~codex-full-auto~ is non-nil.
 
-The user option ~codex-full-auto~ enables fully autonomous mode by passing ~--full-auto~ to Codex.  The default is ~nil~.  When non-nil, this overrides both ~codex-sandbox-mode~ and ~codex-approval-policy~.  Use with caution.
+The user option ~codex-full-auto~ enables fully autonomous mode by passing ~--dangerously-bypass-approvals-and-sandbox~ to Codex.  The default is ~nil~.  When non-nil, this overrides both ~codex-sandbox-mode~ and ~codex-approval-policy~.  Use with caution.
 
 ** Model and profile
 :PROPERTIES:
@@ -106,7 +106,7 @@ The user option ~codex-model~ specifies a model override (e.g., ~"gpt-5.4"~).  T
 
 The user option ~codex-profile~ names a configuration profile.  The default is ~nil~, meaning the CLI default profile is used.  Profiles allow you to maintain separate sets of configuration for different workflows.
 
-The user option ~codex-reasoning-effort~ overrides the reasoning effort level.  The default is ~nil~.  When set to a string value, it is passed via the ~--reasoning-effort~ flag.
+The user option ~codex-reasoning-effort~ overrides the reasoning effort level.  The default is ~nil~.  When set to a string value, it is passed via ~-c~ as the ~model_reasoning_effort~ configuration value.
 
 ** Hooks integration
 :PROPERTIES:
@@ -340,7 +340,7 @@ The commands ~codex-send-1~, ~codex-send-2~, and ~codex-send-3~ send the corresp
 #+findex: codex-select-buffer
 #+findex: codex-toggle-read-only-mode
 
-The command ~codex-toggle~ shows or hides the Codex window.  If the Codex buffer is currently visible, it deletes the window.  If it is hidden, it displays it using ~codex-display-window-fn~.  The ~codex-no-delete-other-windows~ parameter is applied to the window.  If ~codex-toggle-auto-select~ is non-nil, focus moves to the Codex window when it is shown ([[#h:window-management-options][Window management]]).
+The command ~codex-toggle~ shows or hides the Codex window.  If the Codex buffer is currently visible and another window exists, it deletes the Codex window; if the Codex window is the only window, it buries the buffer instead.  If the buffer is hidden, it displays it using ~codex-display-window-fn~.  The ~codex-no-delete-other-windows~ parameter is applied to the window.  If ~codex-toggle-auto-select~ is non-nil, focus moves to the Codex window when it is shown ([[#h:window-management-options][Window management]]).
 
 The command ~codex-switch-to-buffer~ switches to the Codex buffer for the current project.  If multiple instances are running, you are prompted to select one.  With a prefix argument, it shows all Codex instances across all directories.
 
@@ -401,7 +401,7 @@ The function ~codex-display-buffer-below~ displays the Codex buffer below the cu
 
 #+findex: codex-handle-hook
 
-The function ~codex-handle-hook~ is the entry point for all Codex CLI hook events.  It is called by the =codex-hook-wrapper= shell script via =emacsclient=.  The function receives a hook type (e.g., ~"Stop"~, ~"PreToolUse"~), a buffer name, and optional additional arguments.  It constructs a plist and runs ~codex-event-hook~ with it.  For ~"Stop"~ events, it also triggers a notification ([[#h:notifications][Notifications]]).
+The function ~codex-handle-hook~ is the entry point for all Codex CLI hook events.  It is called by the =codex-hook-wrapper= shell script via =emacsclient=.  The function receives a hook type (e.g., ~"Stop"~, ~"PreToolUse"~), a buffer name, hook JSON data, and optional additional arguments.  It constructs a plist and runs ~codex-event-hook~ with it.  For ~"Stop"~ events, it also triggers a notification ([[#h:notifications][Notifications]]).
 
 * Transient menus
 :PROPERTIES:
@@ -490,9 +490,9 @@ The Codex CLI supports a hooks mechanism that notifies external programs of life
 When ~codex-enable-hooks~ is non-nil and ~codex-mode~ is activated, =codex.el= automatically:
 
 1. Ensures that ~config.toml~ has ~codex_hooks = true~ under the ~[features]~ section.
-2. Ensures that ~hooks.json~ has entries for all five supported hook types: ~Stop~, ~SessionStart~, ~PreToolUse~, ~PostToolUse~, and ~UserPromptSubmit~.
+2. Ensures that ~hooks.json~ has entries for all six supported hook types: ~Stop~, ~SessionStart~, ~PreToolUse~, ~PermissionRequest~, ~PostToolUse~, and ~UserPromptSubmit~.
 
-Each hook entry points to the =codex-hook-wrapper= script, which reads JSON from stdin and passes it to ~codex-handle-hook~ via =emacsclient=.  Existing user-defined hooks in ~hooks.json~ are preserved; =codex.el= only appends its own entries if they are not already present.
+Each hook entry points to the =codex-hook-wrapper= script, which reads JSON from stdin into a private temporary file and asks =emacsclient= to pass that file to ~codex-handle-hook~.  Existing user-defined hooks in ~hooks.json~ are preserved; =codex.el= only appends its own entries if they are not already present.
 
 You can respond to these events by adding functions to ~codex-event-hook~ ([[#h:emacs-hooks][Emacs hooks]]).
 

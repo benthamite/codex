@@ -1,10 +1,10 @@
 ;;; codex.el --- Emacs integration for OpenAI Codex CLI -*- lexical-binding: t; -*-
 
 ;; Author: Pablo Stafforini
-;; Version: 0.1.0
-;; Package-Requires: ((emacs "30.0") (transient "0.9.3") (inheritenv "0.2"))
+;; Version: 0.2.0
+;; Package-Requires: ((emacs "30.0") (transient "0.9.3") (inheritenv "0.2") (eat "0.9.4"))
 ;; Keywords: tools, ai
-;; URL: https://github.com/pablostafforini/codex.el
+;; URL: https://github.com/benthamite/codex
 
 ;;; Commentary:
 ;; An Emacs interface to the OpenAI Codex CLI.  This package provides
@@ -206,7 +206,7 @@ When nil, the CLI default is used.  Otherwise, pass `--ask-for-approval POLICY'.
   :group 'codex)
 
 (defcustom codex-full-auto nil
-  "Whether to pass `--full-auto' to Codex.
+  "Whether to bypass approvals and sandboxing for Codex.
 When non-nil, overrides sandbox and approval settings."
   :type 'boolean
   :group 'codex)
@@ -504,7 +504,8 @@ recompiled with a larger SB_MAX value."
 (declare-function flycheck-error-message "flycheck")
 
 ;;;; Forward declarations for server
-(defvar server-eval-args-left)
+(defvar server-eval-args-left nil
+  "Arguments passed to the current `emacsclient --eval' request.")
 
 ;;;; Internal state variables
 (defvar codex--directory-buffer-map (make-hash-table :test 'equal)
@@ -544,7 +545,7 @@ recompiled with a larger SB_MAX value."
   "History of commands sent to Codex.")
 
 ;;;; Key bindings
-;;;###autoload (autoload 'codex-command-map "codex")
+;;;###autoload
 (defvar codex-command-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "/") 'codex-slash-commands)
@@ -628,7 +629,8 @@ recompiled with a larger SB_MAX value."
   :key "g m"
   :description "Model"
   :reader (lambda (_prompt _initial-input _history)
-            (read-string "Model (empty for default): " codex-model)))
+            (codex--read-optional-string "Model (empty for default): "
+                                         codex-model)))
 
 (transient-define-infix codex--infix-reasoning-effort ()
   :class 'transient-lisp-variable
@@ -636,8 +638,9 @@ recompiled with a larger SB_MAX value."
   :key "g e"
   :description "Reasoning effort"
   :reader (lambda (_prompt _initial-input _history)
-            (let ((val (read-string "Reasoning effort (empty for default): " codex-reasoning-effort)))
-              (if (string-empty-p val) nil val))))
+            (codex--read-optional-string
+             "Reasoning effort (empty for default): "
+             codex-reasoning-effort)))
 
 (transient-define-infix codex--infix-sandbox-mode ()
   :class 'transient-lisp-variable
@@ -675,8 +678,8 @@ recompiled with a larger SB_MAX value."
   :key "g p"
   :description "Profile"
   :reader (lambda (_prompt _initial-input _history)
-            (let ((val (read-string "Profile (empty for default): " codex-profile)))
-              (if (string-empty-p val) nil val))))
+            (codex--read-optional-string "Profile (empty for default): "
+                                         codex-profile)))
 
 ;;;###autoload (autoload 'codex-slash-commands "codex" nil t)
 (transient-define-prefix codex-slash-commands ()
@@ -805,7 +808,8 @@ Returns the buffer containing the terminal.")
       (error "The eat package is required for eat terminal backend.  Please install it"))))
 
 (cl-defmethod codex--term-make ((_backend (eql eat)) buffer-name program &optional switches)
-  "Create an eat terminal in BUFFER-NAME running PROGRAM with SWITCHES.
+  "Create an eat terminal in BUFFER-NAME running PROGRAM.
+SWITCHES are command-line arguments passed to PROGRAM.
 _BACKEND is the terminal backend type (should be \\='eat)."
   (codex--ensure-eat)
   (let ((trimmed-buffer-name (string-trim-right (string-trim buffer-name "\\*") "\\*"))
@@ -1017,7 +1021,8 @@ _BACKEND is the terminal backend type (should be \\='eat)."
     (error "The vterm package is required for vterm terminal backend.  Please install it")))
 
 (cl-defmethod codex--term-make ((_backend (eql vterm)) buffer-name program &optional switches)
-  "Create a vterm terminal in BUFFER-NAME running PROGRAM with SWITCHES.
+  "Create a vterm terminal in BUFFER-NAME running PROGRAM.
+SWITCHES are command-line arguments passed to PROGRAM.
 _BACKEND is the terminal backend type (should be \\='vterm)."
   (codex--ensure-vterm)
   (let* ((vterm-shell (codex--shell-command-from-argv program switches))
@@ -1167,13 +1172,20 @@ _BACKEND is the terminal backend type (should be \\='vterm)."
 ;;;; Private utility functions
 
 (defun codex--shell-command-from-argv (program &optional switches)
-  "Return a shell-safe command string for PROGRAM and SWITCHES."
+  "Return a shell-safe command string for PROGRAM.
+SWITCHES is an optional list of command-line arguments."
   (mapconcat #'shell-quote-argument
              (cons program switches)
              " "))
 
+(defun codex--read-optional-string (prompt initial-input)
+  "Read PROMPT with INITIAL-INPUT and return nil for empty input."
+  (let ((value (read-string prompt initial-input)))
+    (unless (string-empty-p value)
+      value)))
+
 (defun codex--acquire-managed-advice (target where function)
-  "Register FUNCTION as advice on TARGET for the current buffer."
+  "Register FUNCTION as WHERE advice on TARGET for the current buffer."
   (let ((spec (list target where function)))
     (unless (member spec codex--managed-advice-specs)
       (push spec codex--managed-advice-specs)
@@ -1203,9 +1215,9 @@ _BACKEND is the terminal backend type (should be \\='vterm)."
 
 (defun codex--buffer-p (buffer)
   "Return non-nil if BUFFER is a Codex buffer."
-  (let ((name (if (stringp buffer)
-                  buffer
-                (buffer-name buffer))))
+  (let ((name (cond
+               ((stringp buffer) buffer)
+               ((buffer-live-p buffer) (buffer-name buffer)))))
     (and name (string-match-p "^\\*codex:" name))))
 
 (defun codex--directory ()
@@ -1327,24 +1339,26 @@ If SIMPLE-FORMAT is non-nil, use simplified display names."
 
 (defun codex--get-or-prompt-for-buffer ()
   "Get Codex buffer for current directory or prompt for selection."
-  (let* ((current-dir (codex--directory))
-         (dir-buffers (codex--find-codex-buffers-for-directory current-dir)))
-    (cond
-     ((> (length dir-buffers) 1)
-      (codex--select-buffer-from-choices
-       (format "Select Codex instance for %s: "
-               (abbreviate-file-name current-dir))
-       dir-buffers
-       t))
-     ((= (length dir-buffers) 1)
-      (car dir-buffers))
-     (t
-      (let ((remembered-buffer (gethash current-dir codex--directory-buffer-map)))
-        (if (and remembered-buffer (buffer-live-p remembered-buffer))
-            remembered-buffer
-          (let ((other-buffers (codex--find-all-codex-buffers)))
-            (when other-buffers
-              (codex--prompt-for-codex-buffer)))))))))
+  (or (when (codex--buffer-p (current-buffer))
+        (current-buffer))
+      (let* ((current-dir (codex--directory))
+             (dir-buffers (codex--find-codex-buffers-for-directory current-dir)))
+        (cond
+         ((> (length dir-buffers) 1)
+          (codex--select-buffer-from-choices
+           (format "Select Codex instance for %s: "
+                   (abbreviate-file-name current-dir))
+           dir-buffers
+           t))
+         ((= (length dir-buffers) 1)
+          (car dir-buffers))
+         (t
+          (let ((remembered-buffer (gethash current-dir codex--directory-buffer-map)))
+            (if (and remembered-buffer (buffer-live-p remembered-buffer))
+                remembered-buffer
+              (let ((other-buffers (codex--find-all-codex-buffers)))
+                (when other-buffers
+                  (codex--prompt-for-codex-buffer))))))))))
 
 (defun codex--switch-to-selected-buffer (selected-buffer)
   "Switch to SELECTED-BUFFER if it's not the current buffer."
@@ -1414,6 +1428,7 @@ If FORCE-PROMPT is non-nil, always prompt even if no instances exist."
 
 (defun codex--cleanup-buffer-state ()
   "Clean up Codex buffer-local state before the current buffer is killed."
+  (codex--clear-vterm-multiline-buffer)
   (codex--release-managed-advices)
   (codex--cleanup-directory-mapping))
 
@@ -1455,7 +1470,7 @@ Returns a list of strings to pass as command-line arguments."
     (unless codex-use-alt-screen
       (push "--no-alt-screen" args))
     (when codex-full-auto
-      (push "--full-auto" args))
+      (push "--dangerously-bypass-approvals-and-sandbox" args))
     (when (and codex-sandbox-mode (not codex-full-auto))
       (push (format "--sandbox=%s"
                     (pcase codex-sandbox-mode
@@ -1477,8 +1492,10 @@ Returns a list of strings to pass as command-line arguments."
       (push "--profile" args)
       (push codex-profile args))
     (when codex-reasoning-effort
-      (push "--reasoning-effort" args)
-      (push codex-reasoning-effort args))
+      (push "-c" args)
+      (push (format "model_reasoning_effort=%s"
+                    (json-encode-string codex-reasoning-effort))
+            args))
     (dolist (img codex-default-images)
       (push "--image" args)
       (push img args))
@@ -2182,19 +2199,28 @@ PROCESS is the vterm process.  INPUT is the terminal output string."
                 (cancel-timer codex--vterm-multiline-buffer-timer))
               (setq codex--vterm-multiline-buffer-timer
                     (run-at-time codex-vterm-multiline-delay nil
-                                 (lambda (buf)
+                                 (lambda (buf proc)
                                    (when (buffer-live-p buf)
                                      (with-current-buffer buf
-                                       (when codex--vterm-multiline-buffer
-                                         (let ((inhibit-redisplay t)
-                                               (data codex--vterm-multiline-buffer))
-                                           (setq codex--vterm-multiline-buffer nil
-                                                 codex--vterm-multiline-buffer-timer nil)
-                                           (funcall orig-fun
-                                                    (get-buffer-process buf)
-                                                    data))))))
-                                 (current-buffer))))
+                                       (setq codex--vterm-multiline-buffer-timer nil)
+                                       (if (and codex--vterm-multiline-buffer
+                                                (process-live-p proc)
+                                                (eq (process-buffer proc) buf))
+                                           (let ((inhibit-redisplay t)
+                                                 (data codex--vterm-multiline-buffer))
+                                             (setq codex--vterm-multiline-buffer nil)
+                                             (funcall orig-fun proc data))
+                                         (setq codex--vterm-multiline-buffer nil)))))
+                                 (current-buffer)
+                                 process)))
           (funcall orig-fun process input))))))
+
+(defun codex--clear-vterm-multiline-buffer ()
+  "Clear pending vterm multiline output state for the current buffer."
+  (when (timerp codex--vterm-multiline-buffer-timer)
+    (cancel-timer codex--vterm-multiline-buffer-timer))
+  (setq codex--vterm-multiline-buffer nil
+        codex--vterm-multiline-buffer-timer nil))
 
 ;;;; Window resize optimization
 
@@ -2202,21 +2228,24 @@ PROCESS is the vterm process.  INPUT is the terminal output string."
   "Advice to only signal terminal resize on width change.
 ORIG-FUN is the original window size adjustment function.
 ARGS are passed to ORIG-FUN unchanged."
-  (let ((result (apply orig-fun args)))
-    (let ((width-changed nil))
-      (dolist (window (window-list))
-        (let ((buffer (window-buffer window)))
-          (when (and buffer (codex--buffer-p buffer))
-            (let ((current-width (window-width window))
-                  (stored-width (gethash window codex--window-widths)))
-              (when (or (not stored-width) (/= current-width stored-width))
-                (setq width-changed t)
-                (puthash window current-width codex--window-widths))))))
-      (if (not (codex--buffer-p (current-buffer)))
-          result
-        (if (and width-changed (not (codex--term-in-read-only-p codex-terminal-backend)))
-            result
-          nil)))))
+  (if (not (codex--buffer-p (current-buffer)))
+      (apply orig-fun args)
+    (when (and (codex--codex-window-width-changed-p)
+               (not (codex--term-in-read-only-p codex-terminal-backend)))
+      (apply orig-fun args))))
+
+(defun codex--codex-window-width-changed-p ()
+  "Return non-nil if any visible Codex window changed width."
+  (let ((width-changed nil))
+    (dolist (window (window-list))
+      (let ((buffer (window-buffer window)))
+        (when (codex--buffer-p buffer)
+          (let ((current-width (window-width window))
+                (stored-width (gethash window codex--window-widths)))
+            (when (or (not stored-width) (/= current-width stored-width))
+              (setq width-changed t)
+              (puthash window current-width codex--window-widths))))))
+    width-changed))
 
 ;;;; Error formatting
 
@@ -2509,8 +2538,11 @@ failure by default because `codex-use-alt-screen' is nil."
   (interactive)
   (let ((codex-buffer (codex--get-or-prompt-for-buffer)))
     (if codex-buffer
-        (if (get-buffer-window codex-buffer)
-            (delete-window (get-buffer-window codex-buffer))
+        (if-let ((window (get-buffer-window codex-buffer)))
+            (if (one-window-p t)
+                (with-selected-window window
+                  (bury-buffer codex-buffer))
+              (delete-window window))
           (let ((window (funcall codex-display-window-fn codex-buffer)))
             (when window
               (set-window-parameter window 'no-delete-other-windows codex-no-delete-other-windows)
@@ -2577,29 +2609,48 @@ With prefix ARG, show all Codex instances across all directories."
 
 (defun codex-handle-hook (hook-type buffer-name &optional json-data &rest args)
   "Handle hook of HOOK-TYPE for BUFFER-NAME with JSON-DATA and ARGS."
-  (let ((extra-args (prog1 server-eval-args-left (setq server-eval-args-left nil))))
-    ;; Support both the new emacsclient wrapper, which passes JSON-DATA as a
-    ;; regular argument, and older wrappers that left it in `server-eval-args-left'.
-    (when (and (null json-data) extra-args)
-      (setq json-data (pop extra-args)))
-    (let* ((message (list :type hook-type
-                          :buffer-name buffer-name
-                          :json-data json-data
-                          :args (append args extra-args)))
-           (hook-response (run-hook-with-args-until-success 'codex-event-hook message)))
-      ;; For Stop events, trigger notifications
-      (when (string= hook-type "Stop")
-        (codex--notify nil))
-      hook-response)))
+  (let* ((message (list :type hook-type
+                        :buffer-name buffer-name
+                        :json-data json-data
+                        :args args))
+         (hook-response (run-hook-with-args-until-success 'codex-event-hook message)))
+    (when (string= hook-type "Stop")
+      (codex--notify nil))
+    hook-response))
 
 (defun codex-handle-hook-from-emacsclient ()
   "Handle a Codex hook using `server-eval-args-left'."
   (let* ((hook-args (prog1 server-eval-args-left
                       (setq server-eval-args-left nil)))
          (hook-type (pop hook-args))
-         (buffer-name (pop hook-args))
-         (json-data (pop hook-args)))
-    (apply #'codex-handle-hook hook-type buffer-name json-data hook-args)))
+         (buffer-name (pop hook-args)))
+    (pcase hook-args
+      (`("json-file" ,json-file "response-file" ,response-file . ,args)
+       (codex--write-hook-response
+        (apply #'codex-handle-hook
+               hook-type buffer-name
+               (codex--read-hook-json-file json-file)
+               args)
+        response-file))
+      (`(,json-data . ,args)
+       (apply #'codex-handle-hook hook-type buffer-name json-data args)))))
+
+(defun codex--read-hook-json-file (file)
+  "Return the hook JSON stored in FILE."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (buffer-string)))
+
+(defun codex--write-hook-response (response file)
+  "Write hook RESPONSE to FILE and return nil.
+String responses are written as raw output.  Non-string responses are encoded
+as JSON."
+  (when (and response file)
+    (with-temp-file file
+      (insert (if (stringp response)
+                  response
+                (json-encode response)))))
+  nil)
 
 ;;;; Hooks auto-configuration
 
@@ -2633,87 +2684,142 @@ Only runs when `codex-enable-hooks' is non-nil."
     (codex--ensure-config-toml-hooks)
     (codex--ensure-hooks-json)))
 
+(defmacro codex--with-file-lock (file &rest body)
+  "Evaluate BODY while holding FILE's Emacs file lock."
+  (declare (indent 1))
+  `(unwind-protect
+       (progn
+         (lock-file ,file)
+         ,@body)
+     (ignore-errors
+       (unlock-file ,file))))
+
 (defun codex--ensure-config-toml-hooks ()
   "Ensure `features.codex_hooks = true' exists in config.toml."
-  (let ((config-path (expand-file-name codex-hooks-config-path)))
-    (let ((dir (file-name-directory config-path)))
-      (unless (file-directory-p dir)
-        (make-directory dir t)))
-    (let ((content (if (file-exists-p config-path)
-                       (with-temp-buffer
-                         (insert-file-contents config-path)
-                         (buffer-string))
-                     "")))
-      (unless (string-match-p "codex_hooks[ \t]*=[ \t]*true" content)
-        (with-temp-file config-path
-          (insert content)
-          (unless (string-empty-p content)
-            (goto-char (point-max))
-            (unless (bolp) (insert "\n")))
-          ;; Check if [features] section exists
-          (goto-char (point-min))
-          (if (re-search-forward "^\\[features\\]" nil t)
-              (progn
-                (forward-line 1)
-                (insert "codex_hooks = true\n"))
-            (goto-char (point-max))
-            (insert "\n[features]\ncodex_hooks = true\n")))))))
+  (let* ((config-path (expand-file-name codex-hooks-config-path))
+         (dir (file-name-directory config-path)))
+    (unless (file-directory-p dir)
+      (make-directory dir t))
+    (codex--with-file-lock config-path
+      (let* ((content (codex--read-file-string config-path))
+             (updated (codex--config-toml-with-hooks-enabled content)))
+        (unless (equal updated content)
+          (codex--write-file-atomically config-path updated))))))
+
+(defun codex--read-file-string (file)
+  "Return FILE contents as a string, or the empty string if FILE is absent."
+  (if (file-exists-p file)
+      (with-temp-buffer
+        (insert-file-contents file)
+        (buffer-string))
+    ""))
+
+(defun codex--config-toml-with-hooks-enabled (content)
+  "Return CONTENT with `[features].codex_hooks' set to true."
+  (with-temp-buffer
+    (insert content)
+    (if (codex--goto-features-table)
+        (codex--ensure-hooks-in-features-table)
+      (codex--append-features-table))
+    (buffer-string)))
+
+(defun codex--goto-features-table ()
+  "Move point to the `[features]' table header when present."
+  (goto-char (point-min))
+  (re-search-forward "^[ \t]*\\[features\\][ \t]*\\(?:#.*\\)?$" nil t))
+
+(defun codex--ensure-hooks-in-features-table ()
+  "Ensure the current `[features]' table enables Codex hooks."
+  (let ((table-end (save-excursion
+                     (forward-line 1)
+                     (if (re-search-forward "^[ \t]*\\[[^]\n]+\\][ \t]*\\(?:#.*\\)?$" nil t)
+                         (line-beginning-position)
+                       (point-max)))))
+    (forward-line 1)
+    (if (re-search-forward "^[ \t]*codex_hooks[ \t]*=[^\n]*" table-end t)
+        (replace-match "codex_hooks = true" t t)
+      (insert "codex_hooks = true\n"))))
+
+(defun codex--append-features-table ()
+  "Append a `[features]' table with Codex hooks enabled."
+  (goto-char (point-max))
+  (unless (bobp)
+    (unless (bolp)
+      (insert "\n"))
+    (insert "\n"))
+  (insert "[features]\ncodex_hooks = true\n"))
+
+(defun codex--write-file-atomically (file content)
+  "Write CONTENT to FILE by renaming a temporary file in the same directory."
+  (let* ((dir (file-name-directory file))
+         (temp-file (make-temp-file (expand-file-name ".codex-write-" dir))))
+    (unwind-protect
+        (progn
+          (with-temp-file temp-file
+            (insert content))
+          (when (file-exists-p file)
+            (set-file-modes temp-file (file-modes file)))
+          (rename-file temp-file file t))
+      (when (file-exists-p temp-file)
+        (delete-file temp-file)))))
 
 (defun codex--ensure-hooks-json ()
-  "Ensure hooks.json contains entries pointing to the hook wrapper."
+  "Ensure hooks.json has entries pointing to the hook wrapper."
   (let* ((hooks-path (expand-file-name codex-hooks-json-path))
          (wrapper-path (codex--hook-wrapper-path))
          (dir (file-name-directory hooks-path)))
     (unless (file-directory-p dir)
       (make-directory dir t))
-    (let* ((existing (if (file-exists-p hooks-path)
+    (codex--with-file-lock hooks-path
+      (let* ((existing (when (file-exists-p hooks-path)
                          (with-temp-buffer
                            (insert-file-contents hooks-path)
-                           (json-parse-buffer :object-type 'alist))
-                       nil))
-           (existing-hooks (alist-get 'hooks existing))
-           (hook-types '("Stop" "SessionStart" "PreToolUse" "PostToolUse" "UserPromptSubmit"))
-           (modified nil))
+                           (json-parse-buffer :object-type 'alist))))
+             (existing-hooks (alist-get 'hooks existing))
+             (hook-types '("Stop" "SessionStart" "PreToolUse"
+                           "PermissionRequest" "PostToolUse"
+                           "UserPromptSubmit"))
+             (modified nil))
+        (dolist (hook-type hook-types)
+          (let* ((hook-key (intern hook-type))
+                 (existing-entries (alist-get hook-key existing-hooks))
+                 (our-command (codex--shell-command-from-argv wrapper-path (list hook-type)))
+                 (found nil))
+            (when existing-entries
+              (dotimes (i (length existing-entries))
+                (let* ((entry (aref existing-entries i))
+                       (entry-hooks (alist-get 'hooks entry)))
+                  (when entry-hooks
+                    (dotimes (j (length entry-hooks))
+                      (let ((h (aref entry-hooks j)))
+                        (when (string= (alist-get 'command h) our-command)
+                          (setq found t))))))))
+            (unless found
+              (setq modified t)
+              (let ((new-entry `((matcher . ,(codex--hook-matcher hook-type))
+                                 (hooks . [((type . "command")
+                                             (command . ,our-command)
+                                             (timeout . 30))]))))
+                (if existing-entries
+                    (setf (alist-get hook-key existing-hooks)
+                          (vconcat existing-entries (vector new-entry)))
+                  (push (cons hook-key (vector new-entry)) existing-hooks))))))
+        (when modified
+          (let ((output (if existing
+                            (progn
+                              (setf (alist-get 'hooks existing) existing-hooks)
+                              existing)
+                          `((hooks . ,existing-hooks)))))
+            (codex--write-file-atomically
+             hooks-path
+             (with-temp-buffer
+               (insert (json-encode output))
+               (json-pretty-print-buffer)
+               (buffer-string)))))))))
 
-      ;; For each hook type, ensure our wrapper entry exists
-      (dolist (hook-type hook-types)
-        (let* ((hook-key (intern hook-type))
-               (existing-entries (alist-get hook-key existing-hooks))
-               (our-command (codex--shell-command-from-argv wrapper-path (list hook-type)))
-               (found nil))
-          ;; Check if our wrapper is already present
-          (when existing-entries
-            (dotimes (i (length existing-entries))
-              (let* ((entry (aref existing-entries i))
-                     (entry-hooks (alist-get 'hooks entry)))
-                (when entry-hooks
-                  (dotimes (j (length entry-hooks))
-                    (let ((h (aref entry-hooks j)))
-                      (when (string= (alist-get 'command h) our-command)
-                        (setq found t))))))))
-          (unless found
-            (setq modified t)
-            (let ((new-entry `((matcher . ,(if (string= hook-type "UserPromptSubmit") "" "*"))
-                               (hooks . [((type . "command")
-                                           (command . ,our-command)
-                                           (timeout . 30))]))))
-              (if existing-entries
-                  ;; Append to existing array
-                  (setf (alist-get hook-key existing-hooks)
-                        (vconcat existing-entries (vector new-entry)))
-                ;; Create new array
-                (push (cons hook-key (vector new-entry)) existing-hooks))))))
-
-      (when modified
-        (let ((output (if existing
-                         (progn
-                           (setf (alist-get 'hooks existing) existing-hooks)
-                           existing)
-                       `((hooks . ,existing-hooks)))))
-          (with-temp-file hooks-path
-            (insert (json-encode output))
-            ;; Pretty-print for readability
-            (json-pretty-print-buffer)))))))
+(defun codex--hook-matcher (hook-type)
+  "Return the default matcher for HOOK-TYPE."
+  (if (string= hook-type "UserPromptSubmit") "" "*"))
 
 ;;;; Mode definition
 

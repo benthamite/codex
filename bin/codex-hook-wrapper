@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 
 # Generic wrapper script for Codex CLI hooks using emacsclient
-# This script handles the JSON output cleaning that emacsclient requires
 #
 # Usage: codex-hook-wrapper <hook-type>
 # The hook type is passed as the first argument (e.g., 'Stop', 'PreToolUse')
@@ -9,24 +8,59 @@
 hook_type="$1"
 shift  # Remove hook type from arguments to forward the rest
 
-# Read the JSON input from stdin
-json_input=$(cat)
+json_file=""
+response_file=""
+stderr_file=""
+cleanup() {
+    [[ -n "$json_file" ]] && rm -f "$json_file"
+    [[ -n "$response_file" ]] && rm -f "$response_file"
+    [[ -n "$stderr_file" ]] && rm -f "$stderr_file"
+}
+trap cleanup EXIT
 
-# Call emacsclient and get the response
-# Pass all hook data as plain string arguments to avoid shell and Elisp interpolation bugs.
-response=$(emacsclient --eval '(codex-handle-hook-from-emacsclient)' \
-  "$hook_type" "$CODEX_BUFFER_NAME" "$json_input" "$@" 2>/dev/null)
+json_file=$(mktemp "${TMPDIR:-/tmp}/codex-hook-json.XXXXXX") || exit 1
+response_file=$(mktemp "${TMPDIR:-/tmp}/codex-hook-response.XXXXXX") || exit 1
+stderr_file=$(mktemp "${TMPDIR:-/tmp}/codex-hook-stderr.XXXXXX") || exit 1
+chmod 600 "$json_file" "$response_file" "$stderr_file" || exit 1
 
-# Check if the response looks like a JSON string (starts and ends with quotes)
-if [[ "$response" =~ ^\".*\"$ ]]; then
-    # Remove the surrounding quotes that emacsclient adds
-    # emacsclient returns strings with quotes like "\"json content\""
-    cleaned_response=$(printf '%s' "$response" | sed 's/^"//;s/"$//' | sed 's/\\"/"/g')
-    printf '%s\n' "$cleaned_response"
-elif [[ "$response" == "nil" || -z "$response" ]]; then
-    # If response is nil or empty, don't output anything
-    :
-else
-    # For non-JSON responses, output as-is
-    printf '%s\n' "$response"
+# An empty positional argument terminates emacsclient's eval-arg batch and
+# causes the server to treat subsequent args as separate commands ("Unknown
+# command: ..." errors).  Substitute a sentinel that elisp consumers (which
+# pass the value to `get-buffer') treat as "no buffer".
+buffer_name="${CODEX_BUFFER_NAME:-:none:}"
+if [[ -z "$buffer_name" ]]; then
+    buffer_name=":none:"
+fi
+
+cat > "$json_file" || exit 1
+
+fail_for_dispatch_error() {
+    local message
+    message=$(cat "$stderr_file")
+    if [[ -z "$message" ]]; then
+        message="emacsclient hook dispatch failed"
+    fi
+    printf 'codex hook dispatch failed for %s: %s\n' "$hook_type" "$message" >&2
+    case "$hook_type" in
+        PreToolUse|PermissionRequest)
+            exit 2
+            ;;
+        *)
+            exit 1
+            ;;
+    esac
+}
+
+# Hook JSON travels through a private temp file instead of argv, because hook
+# input may contain secrets and can be larger than ARG_MAX.
+if ! emacsclient --eval '(codex-handle-hook-from-emacsclient)' \
+  "$hook_type" "$buffer_name" \
+  json-file "$json_file" \
+  response-file "$response_file" \
+  "$@" >/dev/null 2>"$stderr_file"; then
+    fail_for_dispatch_error
+fi
+
+if [[ -s "$response_file" ]]; then
+    cat "$response_file"
 fi

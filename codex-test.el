@@ -52,6 +52,12 @@
   (should-not (codex--buffer-p "*scratch*"))
   (should-not (codex--buffer-p nil)))
 
+(ert-deftest codex-test-read-optional-string-empty ()
+  "Test that empty optional string input returns nil."
+  (cl-letf (((symbol-function 'read-string)
+             (lambda (_prompt _initial-input) "")))
+    (should-not (codex--read-optional-string "Prompt: " "initial"))))
+
 ;;;; CLI argument building tests
 
 (ert-deftest codex-test-build-cli-args-defaults ()
@@ -101,7 +107,8 @@
         (codex-reasoning-effort nil)
         (codex-default-images nil))
     ;; full-auto should override sandbox and approval
-    (should (equal (codex--build-cli-args) '("--full-auto")))))
+    (should (equal (codex--build-cli-args)
+                   '("--dangerously-bypass-approvals-and-sandbox")))))
 
 (ert-deftest codex-test-build-cli-args-sandbox-and-approval ()
   "Test CLI arg building with sandbox and approval settings."
@@ -127,7 +134,9 @@
         (codex-reasoning-effort "high")
         (codex-default-images nil))
     (should (equal (codex--build-cli-args)
-                   '("--model" "gpt-5.4" "--profile" "work" "--reasoning-effort" "high")))))
+                   '("--model" "gpt-5.4"
+                     "--profile" "work"
+                     "-c" "model_reasoning_effort=\"high\"")))))
 
 (ert-deftest codex-test-build-cli-args-images ()
   "Test CLI arg building with default images."
@@ -158,7 +167,7 @@
                      "--ask-for-approval=untrusted"
                      "--model" "o3"
                      "--profile" "testing"
-                     "--reasoning-effort" "low"
+                     "-c" "model_reasoning_effort=\"low\""
                      "--image" "/img.png")))))
 
 ;;;; TOML config manipulation tests
@@ -216,6 +225,24 @@
               (should (= 1 count)))))
       (delete-file temp-file))))
 
+(ert-deftest codex-test-config-toml-hooks-replaces-false ()
+  "Test that an existing false hooks setting is replaced in [features]."
+  (should (equal (codex--config-toml-with-hooks-enabled
+                  "[features]\ncodex_hooks = false\n")
+                 "[features]\ncodex_hooks = true\n")))
+
+(ert-deftest codex-test-config-toml-hooks-ignores-comments ()
+  "Test that commented hook settings do not count as enabled."
+  (should (equal (codex--config-toml-with-hooks-enabled
+                  "[features]\n# codex_hooks = true\n")
+                 "[features]\ncodex_hooks = true\n# codex_hooks = true\n")))
+
+(ert-deftest codex-test-config-toml-hooks-scopes-to-features ()
+  "Test that hook settings in other tables do not satisfy [features]."
+  (should (equal (codex--config-toml-with-hooks-enabled
+                  "[other]\ncodex_hooks = true\n")
+                 "[other]\ncodex_hooks = true\n\n[features]\ncodex_hooks = true\n")))
+
 ;;;; hooks.json merging tests
 
 (ert-deftest codex-test-hooks-json-creates-new-file ()
@@ -235,11 +262,12 @@
                              (insert-file-contents temp-file)
                              (json-parse-buffer :object-type 'alist))))
               (should (alist-get 'hooks content))
-              ;; Check all 5 hook types are present
+              ;; Check all hook types are present
               (let ((hooks (alist-get 'hooks content)))
                 (should (alist-get 'Stop hooks))
                 (should (alist-get 'SessionStart hooks))
                 (should (alist-get 'PreToolUse hooks))
+                (should (alist-get 'PermissionRequest hooks))
                 (should (alist-get 'PostToolUse hooks))
                 (should (alist-get 'UserPromptSubmit hooks))))))
       (delete-directory temp-dir t))))
@@ -461,6 +489,7 @@
             (should (= 1 (length stop-hooks)))
             (should (= 1 (length (alist-get 'SessionStart hooks))))
             (should (= 1 (length (alist-get 'PreToolUse hooks))))
+            (should (= 1 (length (alist-get 'PermissionRequest hooks))))
             (should (= 1 (length (alist-get 'PostToolUse hooks))))
             (should (= 1 (length (alist-get 'UserPromptSubmit hooks))))))
       (delete-directory temp-dir t))))
@@ -515,7 +544,7 @@
         (codex-reasoning-effort nil)
         (codex-default-images nil))
     (let ((args (codex--build-cli-args)))
-      (should (member "--full-auto" args))
+      (should (member "--dangerously-bypass-approvals-and-sandbox" args))
       (should-not (cl-find-if (lambda (a) (string-prefix-p "--sandbox" a)) args))
       (should-not (cl-find-if (lambda (a) (string-prefix-p "--ask-for-approval" a)) args)))))
 
@@ -540,6 +569,12 @@
     (unwind-protect
         (should (codex--buffer-p buf))
       (kill-buffer buf))))
+
+(ert-deftest codex-test-buffer-p-rejects-dead-buffer ()
+  "Test buffer predicate rejects a killed buffer object."
+  (let ((buf (generate-new-buffer "*codex:/some/path/*")))
+    (kill-buffer buf)
+    (should-not (codex--buffer-p buf))))
 
 (ert-deftest codex-test-buffer-p-rejects-similar-names ()
   "Test that buffer predicate rejects similar but non-codex names."
@@ -623,6 +658,35 @@
         (should (equal (plist-get received-message :args) '("arg1" "arg2")))
         (should notified)))))
 
+(ert-deftest codex-test-handle-hook-from-emacsclient-file-transport ()
+  "Test hook dispatch reads JSON from file and writes raw responses."
+  (let ((json-file (make-temp-file "codex-hook-json"))
+        (response-file (make-temp-file "codex-hook-response"))
+        (raw-response "{\"decision\":\"approve\",\"path\":\"C:\\\\tmp\"}")
+        received-message)
+    (unwind-protect
+        (progn
+          (with-temp-file json-file
+            (insert "{\"event\":1}"))
+          (cl-letf (((symbol-function 'run-hook-with-args-until-success)
+                     (lambda (_hook message)
+                       (setq received-message message)
+                       raw-response)))
+            (cl-progv '(server-eval-args-left)
+                `(("PreToolUse" ":none:" "json-file" ,json-file
+                   "response-file" ,response-file "arg1"))
+              (should-not (codex-handle-hook-from-emacsclient))))
+          (should (equal (plist-get received-message :type) "PreToolUse"))
+          (should (equal (plist-get received-message :buffer-name) ":none:"))
+          (should (equal (plist-get received-message :json-data) "{\"event\":1}"))
+          (should (equal (plist-get received-message :args) '("arg1")))
+          (should (equal (with-temp-buffer
+                           (insert-file-contents response-file)
+                           (buffer-string))
+                         raw-response)))
+      (delete-file json-file)
+      (delete-file response-file))))
+
 ;;;; hooks.json matcher values
 
 (ert-deftest codex-test-hooks-json-user-prompt-submit-matcher ()
@@ -640,10 +704,12 @@
                             (json-parse-buffer :object-type 'alist)))
                  (hooks (alist-get 'hooks content))
                  (ups-entry (aref (alist-get 'UserPromptSubmit hooks) 0))
+                 (permission-entry (aref (alist-get 'PermissionRequest hooks) 0))
                  (stop-entry (aref (alist-get 'Stop hooks) 0)))
             ;; UserPromptSubmit uses "" matcher
             (should (equal (alist-get 'matcher ups-entry) ""))
             ;; Other hooks use "*" matcher
+            (should (equal (alist-get 'matcher permission-entry) "*"))
             (should (equal (alist-get 'matcher stop-entry) "*"))))
       (delete-directory temp-dir t))))
 
@@ -662,6 +728,68 @@
       (kill-buffer buf1)
       (kill-buffer buf2)
       (kill-buffer buf3))))
+
+(ert-deftest codex-test-get-or-prompt-prefers-current-codex-buffer ()
+  "Test selecting the current Codex buffer before prompting."
+  (let ((buf (generate-new-buffer "*codex:/tmp/current/*"))
+        (prompted nil))
+    (unwind-protect
+        (with-current-buffer buf
+          (cl-letf (((symbol-function 'codex--directory)
+                     (lambda () (error "should not inspect directory")))
+                    ((symbol-function 'codex--select-buffer-from-choices)
+                     (lambda (&rest _)
+                       (setq prompted t)
+                       nil)))
+            (should (eq (codex--get-or-prompt-for-buffer) buf))
+            (should-not prompted)))
+      (kill-buffer buf))))
+
+(ert-deftest codex-test-adjust-window-size-skips-unchanged-width ()
+  "Test Codex resize advice suppresses unchanged-width terminal resizes."
+  (let ((buf (generate-new-buffer "*codex:/tmp/resize/*"))
+        (called nil))
+    (unwind-protect
+        (with-current-buffer buf
+          (cl-letf (((symbol-function 'codex--codex-window-width-changed-p)
+                     (lambda () nil))
+                    ((symbol-function 'codex--term-in-read-only-p)
+                     (lambda (_backend) nil)))
+            (let ((codex-terminal-backend 'eat))
+              (should-not (codex--adjust-window-size-advice
+                           (lambda (&rest _args) (setq called t))))))
+          (should-not called))
+      (kill-buffer buf))))
+
+(ert-deftest codex-test-toggle-buries-sole-visible-codex-window ()
+  "Test toggling the sole Codex window buries instead of deleting it."
+  (let ((buf (generate-new-buffer "*codex:/tmp/toggle/*"))
+        buried
+        deleted)
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (switch-to-buffer buf)
+          (cl-letf (((symbol-function 'codex--get-or-prompt-for-buffer)
+                     (lambda () buf))
+                    ((symbol-function 'bury-buffer)
+                     (lambda (buffer) (setq buried buffer)))
+                    ((symbol-function 'delete-window)
+                     (lambda (_window) (setq deleted t))))
+            (codex-toggle)
+            (should (eq buried buf))
+            (should-not deleted)))
+      (kill-buffer buf))))
+
+(ert-deftest codex-test-clear-vterm-multiline-buffer-cancels-timer ()
+  "Test vterm multiline cleanup clears buffered output and timer state."
+  (let ((timer (run-at-time 1000 nil #'ignore)))
+    (with-temp-buffer
+      (setq-local codex--vterm-multiline-buffer "pending")
+      (setq-local codex--vterm-multiline-buffer-timer timer)
+      (codex--clear-vterm-multiline-buffer)
+      (should-not codex--vterm-multiline-buffer)
+      (should-not codex--vterm-multiline-buffer-timer))))
 
 ;;;; Background color remapping tests
 
@@ -907,7 +1035,7 @@
                            "--no-alt-screen"
                            "--model" "gpt-5.4"
                            "--profile" "work"
-                           "--reasoning-effort" "high"
+                           "-c" "model_reasoning_effort=\"high\""
                            "resume"
                            "--last"))))
       (when (buffer-live-p buffer)
