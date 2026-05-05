@@ -788,6 +788,7 @@ Returns the buffer containing the terminal.")
 (declare-function eat-term-redisplay "eat" (terminal))
 (declare-function eat-term-reset "eat" (terminal))
 (declare-function eat-term-send-string "eat" (terminal string))
+(declare-function eat-self-input "eat" (n &optional e))
 
 (defun codex--ensure-eat ()
   "Ensure eat package is loaded."
@@ -943,6 +944,8 @@ _BACKEND is the terminal backend type (should be \\='eat)."
     (define-key map (kbd "C-l") #'codex-redraw)
     (define-key map (kbd "M-<left>") #'codex-previous-agent)
     (define-key map (kbd "M-<right>") #'codex-next-agent)
+    (define-key map (kbd "TAB") #'codex--eat-send-tab)
+    (define-key map [tab] #'codex--eat-send-tab)
     (pcase codex-newline-keybinding-style
       ('newline-on-shift-return
        (define-key map (kbd "<S-return>") #'codex--eat-insert-newline)
@@ -962,6 +965,12 @@ _BACKEND is the terminal backend type (should be \\='eat)."
   "Send <return> to eat."
   (interactive)
   (eat-term-send-string eat-terminal (kbd "RET")))
+
+(defun codex--eat-send-tab ()
+  "Accept a prompt autosuggestion or send TAB to eat."
+  (interactive)
+  (unless (codex-accept-prompt-autosuggestion)
+    (eat-self-input 1 ?\t)))
 
 (defun codex--eat-insert-newline ()
   "Insert a line break in the Codex prompt without submitting.
@@ -1691,6 +1700,23 @@ the default font."
       (codex--show-prompt-autosuggestion (plist-get context :beg)
                                          (plist-get context :end))
     (codex--clear-prompt-autosuggestion)))
+
+(defun codex-accept-prompt-autosuggestion ()
+  "Accept the visible Codex prompt autosuggestion.
+Return non-nil when an autosuggestion was accepted."
+  (interactive)
+  (if-let* ((context (and codex-enable-prompt-autosuggestions
+                          (codex--buffer-p (current-buffer))
+                          (codex--prompt-autosuggestion-context)))
+            (suffix (plist-get context :suffix))
+            ((not (string-empty-p suffix))))
+      (progn
+        (codex--term-send-string codex-terminal-backend suffix)
+        (codex--clear-prompt-autosuggestion)
+        t)
+    (when (called-interactively-p 'interactive)
+      (message "No Codex autosuggestion at point"))
+    nil))
 
 (defun codex--show-prompt-autosuggestion (beg end)
   "Apply autosuggestion styling between BEG and END."

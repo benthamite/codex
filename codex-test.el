@@ -775,6 +775,48 @@
         (should (equal (overlay-get codex--prompt-autosuggestion-overlay 'face)
                        'codex-prompt-autosuggestion-face))))))
 
+(ert-deftest codex-test-accept-prompt-autosuggestion-sends-suffix ()
+  "Accepting a prompt autosuggestion sends only the suggested suffix."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/*" t)
+    (insert "› Su" "mmarize recent commits   ")
+    (let ((codex-terminal-backend 'eat)
+          (codex-enable-prompt-autosuggestions t)
+          (codex-prompt-autosuggestion-placeholders
+           '("Summarize recent commits"))
+          (codex-prompt-autosuggestion-history-path
+           "/tmp/codex-test-missing-history.jsonl")
+          (cursor (+ (point-min) 4))
+          sent)
+      (cl-letf (((symbol-function 'codex--terminal-cursor-position)
+                 (lambda () cursor))
+                ((symbol-function 'codex--term-send-string)
+                 (lambda (backend string)
+                   (setq sent (list backend string)))))
+        (should (codex-accept-prompt-autosuggestion))
+        (should (equal sent '(eat "mmarize recent commits")))))))
+
+(ert-deftest codex-test-eat-send-tab-falls-back-without-autosuggestion ()
+  "TAB sends a raw terminal tab when no autosuggestion is accepted."
+  (let (sent)
+    (cl-letf (((symbol-function 'codex-accept-prompt-autosuggestion)
+               (lambda () nil))
+              ((symbol-function 'eat-self-input)
+               (lambda (n e)
+                 (setq sent (list n e)))))
+      (codex--eat-send-tab)
+      (should (equal sent (list 1 ?\t))))))
+
+(ert-deftest codex-test-eat-keymap-binds-tab-to-autosuggestion-handler ()
+  "Eat Codex buffers bind TAB to the autosuggestion-aware handler."
+  (with-temp-buffer
+    (let ((codex-newline-keybinding-style 'newline-on-shift-return))
+      (codex--term-setup-keymap 'eat)
+      (should (eq (lookup-key (current-local-map) (kbd "TAB"))
+                  #'codex--eat-send-tab))
+      (should (eq (lookup-key (current-local-map) [tab])
+                  #'codex--eat-send-tab)))))
+
 (ert-deftest codex-test-start-subcommand-includes-cli-options ()
   "Subcommands inherit configured CLI options and extra program switches."
   (let ((codex-terminal-backend 'eat)

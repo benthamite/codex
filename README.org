@@ -74,7 +74,7 @@ The user option ~codex-confirm-kill~ controls whether ~codex-kill~ and ~codex-ki
 
 The user option ~codex-newline-keybinding-style~ controls how the return key behaves in Codex buffers.  The default, ~newline-on-shift-return~, makes ~S-RET~ insert a line break and plain ~RET~ submit the prompt, mirroring the behavior of =claude-code.el=.  The other choices are ~newline-on-alt-return~ (~M-RET~ for newline, ~RET~ to submit), ~shift-return-to-send~ (~RET~ for newline, ~S-RET~ to submit), and ~super-return-to-send~ (~RET~ for newline, ~s-RET~ — the COMMAND key on macOS — to submit).  The line-break action is delivered to Codex as ~Ctrl+J~ (byte ~0x0A~), which the Codex CLI binds to its ~insert_newline~ editor action by default; submission is delivered as a plain ~Return~.
 
-The user option ~codex-enable-prompt-autosuggestions~ controls whether =codex.el= styles prompt autosuggestions in =eat= buffers.  The default is ~t~.  Codex renders placeholder and suggestion text after the terminal cursor; when that text arrives in Emacs without the CLI's dim styling, =codex.el= recognizes known suggestions and applies ~codex-prompt-autosuggestion-face~.  The options ~codex-prompt-autosuggestion-placeholders~, ~codex-prompt-autosuggestion-history-path~, and ~codex-prompt-autosuggestion-history-limit~ control which built-in placeholder strings and recent history entries are recognized as autosuggestions.
+The user option ~codex-enable-prompt-autosuggestions~ controls whether =codex.el= styles prompt autosuggestions in =eat= buffers.  The default is ~t~.  Codex renders placeholder and suggestion text after the terminal cursor; when that text arrives in Emacs without the CLI's dim styling, =codex.el= recognizes known suggestions and applies ~codex-prompt-autosuggestion-face~.  The options ~codex-prompt-autosuggestion-placeholders~, ~codex-prompt-autosuggestion-history-path~, and ~codex-prompt-autosuggestion-history-limit~ control which built-in placeholder strings and recent history entries are recognized as autosuggestions.  In =eat= Codex buffers, =TAB= first accepts the visible autosuggestion when there is one; otherwise it is sent through to the Codex TUI as a normal tab.
 
 ** Sandbox and approval
 :PROPERTIES:
@@ -303,6 +303,7 @@ The command ~codex-fix-error-at-point~ examines the error at point (using Flyche
 #+findex: codex-queue-followup
 #+findex: codex-inject-mid-turn
 #+findex: codex-header-search
+#+findex: codex-accept-prompt-autosuggestion
 #+findex: codex-send-1
 #+findex: codex-send-2
 #+findex: codex-send-3
@@ -322,6 +323,8 @@ The command ~codex-queue-followup~ sends a =Tab= key press to queue a follow-up 
 The command ~codex-inject-mid-turn~ sends a =Return= key press to inject instructions while Codex is in the middle of processing.
 
 The command ~codex-header-search~ sends =Ctrl+K= to open the header search overlay in the Codex TUI.
+
+The command ~codex-accept-prompt-autosuggestion~ accepts the visible prompt autosuggestion in an =eat= Codex buffer by sending only the suggested suffix to the terminal.  It returns non-nil when it accepted a suggestion, which lets =TAB= handlers use it before falling back to a raw tab for Codex's own queue/submit behavior.
 
 The commands ~codex-send-1~, ~codex-send-2~, and ~codex-send-3~ send the corresponding digit to the Codex TUI.  These are useful for selecting numbered options in menus.
 
