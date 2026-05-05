@@ -775,6 +775,11 @@
         (should (equal (overlay-get codex--prompt-autosuggestion-overlay 'face)
                        'codex-prompt-autosuggestion-face))))))
 
+(ert-deftest codex-test-prompt-autosuggestion-face-is-not-italic ()
+  "Prompt autosuggestion styling does not force italic text."
+  (should (eq (face-attribute 'codex-prompt-autosuggestion-face :slant nil)
+              'unspecified)))
+
 (ert-deftest codex-test-accept-prompt-autosuggestion-sends-suffix ()
   "Accepting a prompt autosuggestion sends only the suggested suffix."
   (with-temp-buffer

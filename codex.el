@@ -46,9 +46,15 @@
   :group 'codex)
 
 (defface codex-prompt-autosuggestion-face
-  '((t :inherit shadow :slant italic))
+  '((t :inherit shadow))
   "Face for Codex prompt autosuggestions."
   :group 'codex)
+
+;; Reapply the default spec on reload so older sessions drop the previous
+;; italic slant; custom face specs still take precedence.
+(face-spec-set 'codex-prompt-autosuggestion-face
+               '((t :inherit shadow))
+               'face-defface-spec)
 
 ;;;; Core customization options
 (defcustom codex-program "codex"
