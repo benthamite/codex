@@ -913,6 +913,7 @@ _BACKEND is the terminal backend type (should be \\='eat)."
   (setq-local eat-enable-shell-command-history nil)
   (setq-local eat-enable-shell-prompt-annotation nil)
   (setq-local eat--synchronize-scroll-function #'codex--eat-synchronize-scroll)
+  (setq-local cursor-in-non-selected-windows nil)
   (when (bound-and-true-p eat-terminal)
     (eval '(setf (eat-term-parameter eat-terminal 'ring-bell-function) #'codex--notify)))
   (when codex-remap-light-backgrounds
@@ -1703,8 +1704,9 @@ the default font."
   (if-let* ((context (and codex-enable-prompt-autosuggestions
                           (codex--buffer-p (current-buffer))
                           (codex--prompt-autosuggestion-context))))
-      (codex--show-prompt-autosuggestion (plist-get context :beg)
-                                         (plist-get context :end))
+      (let ((beg (plist-get context :beg)))
+        (codex--show-prompt-autosuggestion beg (plist-get context :end))
+        (codex--sync-prompt-autosuggestion-point beg))
     (codex--clear-prompt-autosuggestion)))
 
 (defun codex-accept-prompt-autosuggestion ()
@@ -1737,6 +1739,17 @@ Return non-nil when an autosuggestion was accepted."
   "Remove prompt autosuggestion styling from the current buffer."
   (when (overlayp codex--prompt-autosuggestion-overlay)
     (delete-overlay codex--prompt-autosuggestion-overlay)))
+
+(defun codex--sync-prompt-autosuggestion-point (pos)
+  "Move buffer and visible window points to autosuggestion POS."
+  (when (and (eq codex-terminal-backend 'eat)
+             (not (condition-case nil
+                      (codex--term-in-read-only-p codex-terminal-backend)
+                    (void-variable nil))))
+    (setq-local cursor-in-non-selected-windows nil)
+    (goto-char pos)
+    (dolist (window (get-buffer-window-list (current-buffer) nil t))
+      (set-window-point window pos))))
 
 (defun codex--prompt-autosuggestion-context ()
   "Return context for a visible prompt autosuggestion at the cursor."

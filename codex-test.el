@@ -775,6 +775,49 @@
         (should (equal (overlay-get codex--prompt-autosuggestion-overlay 'face)
                        'codex-prompt-autosuggestion-face))))))
 
+(ert-deftest codex-test-update-prompt-autosuggestion-syncs-point ()
+  "Prompt autosuggestion styling keeps point at the input cursor."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/*" t)
+    (insert "› Summarize recent commits   \n  gpt-5.5 xhigh · /tmp")
+    (goto-char (point-max))
+    (let ((codex-terminal-backend 'eat)
+          (codex-enable-prompt-autosuggestions t)
+          (codex-prompt-autosuggestion-placeholders
+           '("Summarize recent commits"))
+          (codex-prompt-autosuggestion-history-path
+           "/tmp/codex-test-missing-history.jsonl")
+          (cursor (+ (point-min) 2)))
+      (cl-letf (((symbol-function 'codex--terminal-cursor-position)
+                 (lambda () cursor))
+                ((symbol-function 'codex--term-in-read-only-p)
+                 (lambda (_backend) nil)))
+        (codex--update-prompt-autosuggestion)
+        (should (= (point) cursor))
+        (should-not (buffer-local-value 'cursor-in-non-selected-windows
+                                        (current-buffer)))))))
+
+(ert-deftest codex-test-update-prompt-autosuggestion-keeps-read-only-point ()
+  "Read-only Codex buffers do not jump point to autosuggestions."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/*" t)
+    (insert "› Summarize recent commits   \n  gpt-5.5 xhigh · /tmp")
+    (goto-char (point-max))
+    (let ((codex-terminal-backend 'eat)
+          (codex-enable-prompt-autosuggestions t)
+          (codex-prompt-autosuggestion-placeholders
+           '("Summarize recent commits"))
+          (codex-prompt-autosuggestion-history-path
+           "/tmp/codex-test-missing-history.jsonl")
+          (cursor (+ (point-min) 2))
+          (old-point (point)))
+      (cl-letf (((symbol-function 'codex--terminal-cursor-position)
+                 (lambda () cursor))
+                ((symbol-function 'codex--term-in-read-only-p)
+                 (lambda (_backend) t)))
+        (codex--update-prompt-autosuggestion)
+        (should (= (point) old-point))))))
+
 (ert-deftest codex-test-prompt-autosuggestion-face-is-not-italic ()
   "Prompt autosuggestion styling does not force italic text."
   (should (eq (face-attribute 'codex-prompt-autosuggestion-face :slant nil)
@@ -1048,6 +1091,18 @@
         (should (= (buffer-local-value 'eat-term-scrollback-size
                                        (current-buffer))
                    4096))))))
+
+(ert-deftest codex-test-eat-configure-hides-non-selected-window-cursor ()
+  "Eat Codex buffers hide cursors in non-selected windows."
+  (let ((codex-remap-light-backgrounds nil)
+        (codex-startup-delay 0))
+    (with-temp-buffer
+      (let ((cursor-in-non-selected-windows t))
+        (cl-letf (((symbol-function 'codex--ensure-eat)
+                   #'ignore))
+          (codex--term-configure 'eat))
+        (should-not (buffer-local-value 'cursor-in-non-selected-windows
+                                        (current-buffer)))))))
 
 (ert-deftest codex-test-eat-configure-uses-eat-terminfo-by-default ()
   "Eat Codex buffers use eat's bundled TERM choice by default."
