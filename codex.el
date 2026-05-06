@@ -19,6 +19,7 @@
 (require 'cl-lib)
 (require 'inheritenv)
 (require 'json)
+(require 'server)
 (require 'seq)
 (require 'subr-x)
 
@@ -246,6 +247,14 @@ When nil, the CLI default is used."
   :type 'string
   :group 'codex)
 
+(defcustom codex-emacsclient-program nil
+  "Path to emacsclient for Codex hook dispatch.
+When nil, use the first emacsclient found in PATH when hooks are
+configured."
+  :type '(choice (const :tag "Find emacsclient in PATH" nil)
+                 file)
+  :group 'codex)
+
 ;;;; Background color remapping
 ;;
 ;; Why this section exists: Codex emits 24-bit RGB escape codes for
@@ -390,8 +399,10 @@ Each should return a list of strings in the format \"VAR=VALUE\"."
 
 (defvar codex-event-hook nil
   "Hook run when Codex CLI triggers events.
-Functions are called with one argument: a plist with :type, :buffer-name,
-and event-specific data.")
+Functions are called with one argument: a plist with :type,
+:buffer-name, :json-data, and :args.  This is an abnormal hook:
+dispatch stops at the first function that returns non-nil, and that
+value is returned to the Codex CLI hook process.")
 
 ;;;;; Eat terminal customizations
 (defface codex-eat-prompt-annotation-running-face
@@ -1218,7 +1229,8 @@ SWITCHES is an optional list of command-line arguments."
   (let ((name (cond
                ((stringp buffer) buffer)
                ((buffer-live-p buffer) (buffer-name buffer)))))
-    (and name (string-match-p "^\\*codex:" name))))
+    (when-let* ((parsed (codex--parse-buffer-name name)))
+      (not (string-empty-p (car parsed))))))
 
 (defun codex--directory ()
   "Get the root Codex directory for the current buffer.
@@ -1862,15 +1874,55 @@ The suffix starts after CURSOR and ends before LINE-END."
 (defvar codex--color-luminance-cache (make-hash-table :test 'equal)
   "Memoization cache mapping color string to luminance (or nil).")
 
+(defconst codex--color-luminance-cache-algorithm-version 2
+  "Version of the color luminance algorithm used for cache invalidation.")
+
+(defvar codex--color-luminance-cache-version nil
+  "Algorithm version used to populate `codex--color-luminance-cache'.")
+
+(unless (equal codex--color-luminance-cache-version
+               codex--color-luminance-cache-algorithm-version)
+  (setq codex--color-luminance-cache (make-hash-table :test 'equal))
+  (setq codex--color-luminance-cache-version
+        codex--color-luminance-cache-algorithm-version))
+
 (defun codex--color-luminance--compute (color)
-  "Return the uncached luminance for COLOR, or nil if unresolvable."
-  (when-let* ((rgb (color-name-to-rgb color)))
-    (+ (* 0.299 (nth 0 rgb))
-       (* 0.587 (nth 1 rgb))
-       (* 0.114 (nth 2 rgb)))))
+  "Return the uncached WCAG relative luminance for COLOR.
+Return nil if COLOR cannot be resolved."
+  (when-let* ((rgb (codex--color-rgb color)))
+    (+ (* 0.2126 (codex--color-channel-luminance (nth 0 rgb)))
+       (* 0.7152 (codex--color-channel-luminance (nth 1 rgb)))
+       (* 0.0722 (codex--color-channel-luminance (nth 2 rgb))))))
+
+(defun codex--color-rgb (color)
+  "Return normalized RGB components for COLOR."
+  (or (codex--hex-color-rgb color)
+      (when (or (stringp color) (symbolp color))
+        (color-name-to-rgb color))))
+
+(defun codex--hex-color-rgb (color)
+  "Return exact normalized RGB components for hexadecimal COLOR."
+  (when (and (stringp color)
+             (string-match-p
+              "\\`#[[:xdigit:]]\\{3\\}\\(?:[[:xdigit:]]\\{3\\}\\)*\\'"
+              color))
+    (let* ((digits (substring color 1))
+           (width (/ (length digits) 3)))
+      (when (memq width '(1 2 3 4))
+        (cl-loop for channel below 3
+                 for beg = (* channel width)
+                 for end = (+ beg width)
+                 collect (/ (string-to-number (substring digits beg end) 16)
+                            (float (1- (expt 16 width)))))))))
+
+(defun codex--color-channel-luminance (channel)
+  "Return the WCAG linear luminance contribution for CHANNEL."
+  (if (<= channel 0.03928)
+      (/ channel 12.92)
+    (expt (/ (+ channel 0.055) 1.055) 2.4)))
 
 (defun codex--color-luminance (color)
-  "Return the perceived luminance (0.0–1.0) of COLOR.
+  "Return the WCAG relative luminance (0.0-1.0) of COLOR.
 COLOR is a hex string like \"#EEEEEE\" or a named color.  Results are
 memoized in `codex--color-luminance-cache' to keep eat-output remapping
 cheap."
@@ -2250,25 +2302,29 @@ ARGS are passed to ORIG-FUN unchanged."
 ;;;; Error formatting
 
 (defun codex--format-errors-at-point ()
-  "Format errors at point as a string with file and line numbers."
+  "Format errors at point as a string, or nil when none exist."
   (cond
    ((and (featurep 'flycheck) (bound-and-true-p flycheck-mode))
-    (let ((errors (flycheck-overlay-errors-at (point)))
-          (result ""))
-      (if (not errors)
-          "No flycheck errors at point"
-        (dolist (err errors)
-          (let ((file (flycheck-error-filename err))
-                (line (flycheck-error-line err))
-                (msg (flycheck-error-message err)))
-            (setq result (concat result (format "%s:%d: %s\n" file line msg)))))
-        (string-trim-right result))))
+    (if-let* ((errors (flycheck-overlay-errors-at (point))))
+        (mapconcat #'codex--format-flycheck-error errors "\n")
+      nil))
    ((help-at-pt-kbd-string)
     (let ((help-str (help-at-pt-kbd-string)))
       (if (not (null help-str))
           (substring-no-properties help-str)
-        "No help string available at point")))
-   (t "No errors at point")))
+        nil)))
+   (t nil)))
+
+(defun codex--format-flycheck-error (error)
+  "Format Flycheck ERROR for Codex."
+  (let ((file (or (flycheck-error-filename error)
+                  (codex--get-buffer-file-name)
+                  "current buffer"))
+        (line (flycheck-error-line error))
+        (text (or (flycheck-error-message error) "Unknown error")))
+    (if line
+        (format "%s:%d: %s" file line text)
+      (format "%s: %s" file text))))
 
 ;;;; Interactive commands
 ;;;;;; Session management
@@ -2365,7 +2421,11 @@ With prefix ARG, switch to the Codex buffer after sending."
                        (codex--format-file-reference
                         nil
                         (line-number-at-pos (region-beginning) t)
-                        (line-number-at-pos (region-end) t))
+                        (line-number-at-pos
+                         (if (= (region-beginning) (region-end))
+                             (region-end)
+                           (1- (region-end)))
+                         t))
                      (codex--format-file-reference)))
          (cmd-with-context (if file-ref
                                (format "%s\n%s" cmd file-ref)
@@ -2427,15 +2487,20 @@ With prefix ARG, switch to the Codex buffer after sending."
   (interactive "P")
   (let* ((error-text (codex--format-errors-at-point))
          (file-ref (codex--format-file-reference)))
-    (if (string= error-text "No errors at point")
-        (message "No errors found at point")
-      (let ((command (format "Fix this error at %s:\nDo not run any external linter or other program, just fix the error at point using the context provided in the error message: <%s>"
-                             (or file-ref "current position") error-text)))
-        (let ((selected-buffer (codex--do-send-command command)))
-          (when (and arg selected-buffer)
-            (pop-to-buffer selected-buffer)))))))
+    (if error-text
+        (let ((command (format "Fix this error at %s:\nDo not run any external linter or other program, just fix the error at point using the context provided in the error message: <%s>"
+                               (or file-ref "current position") error-text)))
+          (let ((selected-buffer (codex--do-send-command command)))
+            (when (and arg selected-buffer)
+              (pop-to-buffer selected-buffer))))
+      (message "No errors found at point"))))
 
 ;;;;;; TUI key sequence commands
+
+(defun codex--send-digit (digit)
+  "Send DIGIT to the Codex TUI without submitting."
+  (codex--with-buffer
+   (codex--term-send-string codex-terminal-backend digit)))
 
 ;;;###autoload
 (defun codex-send-return ()
@@ -2516,19 +2581,19 @@ failure by default because `codex-use-alt-screen' is nil."
 (defun codex-send-1 ()
   "Send \"1\" to the Codex REPL."
   (interactive)
-  (codex--do-send-command "1"))
+  (codex--send-digit "1"))
 
 ;;;###autoload
 (defun codex-send-2 ()
   "Send \"2\" to the Codex REPL."
   (interactive)
-  (codex--do-send-command "2"))
+  (codex--send-digit "2"))
 
 ;;;###autoload
 (defun codex-send-3 ()
   "Send \"3\" to the Codex REPL."
   (interactive)
-  (codex--do-send-command "3"))
+  (codex--send-digit "3"))
 
 ;;;;;; Buffer and window management
 
@@ -2681,8 +2746,37 @@ as JSON."
   "Ensure hooks are enabled in config.toml and hooks.json is configured.
 Only runs when `codex-enable-hooks' is non-nil."
   (when codex-enable-hooks
+    (codex--ensure-emacs-server)
     (codex--ensure-config-toml-hooks)
     (codex--ensure-hooks-json)))
+
+(defun codex--ensure-emacs-server ()
+  "Ensure this Emacs process is reachable by emacsclient."
+  (unless (process-live-p server-process)
+    (when (server-running-p server-name)
+      (setq server-name (format "codex-%d" (emacs-pid))))
+    (server-start nil t))
+  (unless (process-live-p server-process)
+    (error "Failed to start Emacs server for Codex hooks")))
+
+(defun codex--emacsclient-program ()
+  "Return the emacsclient executable for hook dispatch."
+  (or codex-emacsclient-program
+      (executable-find "emacsclient")
+      (error "Cannot find emacsclient for Codex hook dispatch")))
+
+(defun codex--hook-wrapper-switches ()
+  "Return wrapper switches that target this Emacs server."
+  (append (list "--emacsclient" (codex--emacsclient-program))
+          (if server-use-tcp
+              (list "--server-file" server-name)
+            (list "--socket-name" server-name))))
+
+(defun codex--hook-command (wrapper-path hook-type)
+  "Return the shell command for WRAPPER-PATH handling HOOK-TYPE."
+  (codex--shell-command-from-argv
+   wrapper-path
+   (cons hook-type (codex--hook-wrapper-switches))))
 
 (defmacro codex--with-file-lock (file &rest body)
   "Evaluate BODY while holding FILE's Emacs file lock."
@@ -2736,6 +2830,9 @@ Only runs when `codex-enable-hooks' is non-nil."
                          (line-beginning-position)
                        (point-max)))))
     (forward-line 1)
+    (unless (bolp)
+      (insert "\n")
+      (setq table-end (1+ table-end)))
     (if (re-search-forward "^[ \t]*codex_hooks[ \t]*=[^\n]*" table-end t)
         (replace-match "codex_hooks = true" t t)
       (insert "codex_hooks = true\n"))))
@@ -2783,27 +2880,26 @@ Only runs when `codex-enable-hooks' is non-nil."
         (dolist (hook-type hook-types)
           (let* ((hook-key (intern hook-type))
                  (existing-entries (alist-get hook-key existing-hooks))
-                 (our-command (codex--shell-command-from-argv wrapper-path (list hook-type)))
-                 (found nil))
-            (when existing-entries
-              (dotimes (i (length existing-entries))
-                (let* ((entry (aref existing-entries i))
-                       (entry-hooks (alist-get 'hooks entry)))
-                  (when entry-hooks
-                    (dotimes (j (length entry-hooks))
-                      (let ((h (aref entry-hooks j)))
-                        (when (string= (alist-get 'command h) our-command)
-                          (setq found t))))))))
-            (unless found
+                 (our-command (codex--hook-command wrapper-path hook-type))
+                 (legacy-command
+                  (codex--shell-command-from-argv wrapper-path
+                                                  (list hook-type)))
+                 (new-entry (codex--hook-entry hook-type our-command))
+                 (entries (and existing-entries
+                               (seq-into existing-entries 'list)))
+                 (owned-entry-p
+                  (lambda (entry)
+                    (or (codex--hook-entry-command-p entry our-command)
+                        (codex--hook-entry-command-p entry legacy-command))))
+                 (owned-entries (seq-filter owned-entry-p entries))
+                 (other-entries (seq-remove owned-entry-p entries)))
+            (unless (and (= (length owned-entries) 1)
+                         (equal (car owned-entries) new-entry))
               (setq modified t)
-              (let ((new-entry `((matcher . ,(codex--hook-matcher hook-type))
-                                 (hooks . [((type . "command")
-                                             (command . ,our-command)
-                                             (timeout . 30))]))))
-                (if existing-entries
-                    (setf (alist-get hook-key existing-hooks)
-                          (vconcat existing-entries (vector new-entry)))
-                  (push (cons hook-key (vector new-entry)) existing-hooks))))))
+              (if existing-entries
+                  (setf (alist-get hook-key existing-hooks)
+                        (vconcat (append other-entries (list new-entry))))
+                (push (cons hook-key (vector new-entry)) existing-hooks)))))
         (when modified
           (let ((output (if existing
                             (progn
@@ -2820,6 +2916,20 @@ Only runs when `codex-enable-hooks' is non-nil."
 (defun codex--hook-matcher (hook-type)
   "Return the default matcher for HOOK-TYPE."
   (if (string= hook-type "UserPromptSubmit") "" "*"))
+
+(defun codex--hook-entry (hook-type command)
+  "Return the hooks.json entry for HOOK-TYPE running COMMAND."
+  `((matcher . ,(codex--hook-matcher hook-type))
+    (hooks . [((type . "command")
+               (command . ,command)
+               (timeout . 30))])))
+
+(defun codex--hook-entry-command-p (entry command)
+  "Return non-nil if hooks.json ENTRY runs COMMAND."
+  (when-let* ((hooks (alist-get 'hooks entry)))
+    (seq-some (lambda (hook)
+                (string= (alist-get 'command hook) command))
+              hooks)))
 
 ;;;; Mode definition
 

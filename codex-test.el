@@ -48,6 +48,8 @@
   "Test Codex buffer predicate."
   (should (codex--buffer-p "*codex:/some/path/*"))
   (should (codex--buffer-p "*codex:/some/path/:instance*"))
+  (should-not (codex--buffer-p "*codex:/some/path/"))
+  (should-not (codex--buffer-p "*codex:*"))
   (should-not (codex--buffer-p "*claude:/some/path/*"))
   (should-not (codex--buffer-p "*scratch*"))
   (should-not (codex--buffer-p nil)))
@@ -243,6 +245,11 @@
                   "[other]\ncodex_hooks = true\n")
                  "[other]\ncodex_hooks = true\n\n[features]\ncodex_hooks = true\n")))
 
+(ert-deftest codex-test-config-toml-hooks-header-at-eof ()
+  "Test enabling hooks when [features] has no trailing newline."
+  (should (equal (codex--config-toml-with-hooks-enabled "[features]")
+                 "[features]\ncodex_hooks = true\n")))
+
 ;;;; hooks.json merging tests
 
 (ert-deftest codex-test-hooks-json-creates-new-file ()
@@ -309,7 +316,10 @@
   (let* ((temp-dir (make-temp-file "codex-test-hooks" t))
          (temp-file (expand-file-name "hooks.json" temp-dir))
          (codex-hooks-json-path temp-file)
-         (codex-enable-hooks t))
+         (codex-enable-hooks t)
+         (codex-emacsclient-program "/mock path/emacsclient")
+         (server-name "mock server")
+         (server-use-tcp nil))
     (unwind-protect
         (cl-letf (((symbol-function 'codex--hook-wrapper-path)
                    (lambda () "/mock path/codex hook-wrapper")))
@@ -321,9 +331,9 @@
                  (stop-entry (aref (alist-get 'Stop hooks) 0))
                  (command (alist-get 'command (aref (alist-get 'hooks stop-entry) 0))))
             (should (equal command
-                           (codex--shell-command-from-argv
+                           (codex--hook-command
                             "/mock path/codex hook-wrapper"
-                            '("Stop"))))))
+                            "Stop")))))
       (delete-directory temp-dir t))))
 
 ;;;; Buffer display name tests
@@ -403,6 +413,32 @@
     ;; No file associated with this buffer
     (should (null (codex--format-file-reference nil 1 nil)))))
 
+(ert-deftest codex-test-send-command-with-context-region-inclusive-end ()
+  "Region context uses the last selected character for the end line."
+  (let (sent)
+    (with-temp-buffer
+      (insert "line one\nline two\n")
+      (let ((beg (point-min))
+            (end (save-excursion
+                   (goto-char (point-min))
+                   (line-beginning-position 2))))
+        (cl-letf (((symbol-function 'read-string)
+                   (lambda (&rest _) "Inspect this"))
+                  ((symbol-function 'use-region-p)
+                   (lambda () t))
+                  ((symbol-function 'region-beginning)
+                   (lambda () beg))
+                  ((symbol-function 'region-end)
+                   (lambda () end))
+                  ((symbol-function 'codex--get-buffer-file-name)
+                   (lambda () "/tmp/example.el"))
+                  ((symbol-function 'codex--do-send-command)
+                   (lambda (command)
+                     (setq sent command)
+                     nil)))
+          (codex-send-command-with-context)
+          (should (equal sent "Inspect this\n@/tmp/example.el:1-1")))))))
+
 ;;;; Buffer name generation tests
 
 (ert-deftest codex-test-buffer-name-without-instance ()
@@ -444,26 +480,34 @@
 (ert-deftest codex-test-ensure-hooks-config-disabled ()
   "Test that hooks config does nothing when codex-enable-hooks is nil."
   (let* ((codex-enable-hooks nil)
+         (server-called nil)
          (toml-called nil)
          (json-called nil))
-    (cl-letf (((symbol-function 'codex--ensure-config-toml-hooks)
+    (cl-letf (((symbol-function 'codex--ensure-emacs-server)
+               (lambda () (setq server-called t)))
+              ((symbol-function 'codex--ensure-config-toml-hooks)
                (lambda () (setq toml-called t)))
               ((symbol-function 'codex--ensure-hooks-json)
                (lambda () (setq json-called t))))
       (codex--ensure-hooks-config)
+      (should-not server-called)
       (should-not toml-called)
       (should-not json-called))))
 
 (ert-deftest codex-test-ensure-hooks-config-enabled ()
   "Test that hooks config calls both helpers when enabled."
   (let* ((codex-enable-hooks t)
+         (server-called nil)
          (toml-called nil)
          (json-called nil))
-    (cl-letf (((symbol-function 'codex--ensure-config-toml-hooks)
+    (cl-letf (((symbol-function 'codex--ensure-emacs-server)
+               (lambda () (setq server-called t)))
+              ((symbol-function 'codex--ensure-config-toml-hooks)
                (lambda () (setq toml-called t)))
               ((symbol-function 'codex--ensure-hooks-json)
                (lambda () (setq json-called t))))
       (codex--ensure-hooks-config)
+      (should server-called)
       (should toml-called)
       (should json-called))))
 
@@ -492,6 +536,71 @@
             (should (= 1 (length (alist-get 'PermissionRequest hooks))))
             (should (= 1 (length (alist-get 'PostToolUse hooks))))
             (should (= 1 (length (alist-get 'UserPromptSubmit hooks))))))
+      (delete-directory temp-dir t))))
+
+(ert-deftest codex-test-hooks-json-repairs-stale-owned-entry ()
+  "Test that stale generated hook entries are repaired."
+  (let* ((temp-dir (make-temp-file "codex-test-hooks" t))
+         (temp-file (expand-file-name "hooks.json" temp-dir))
+         (codex-hooks-json-path temp-file)
+         (codex-enable-hooks t)
+         (codex-emacsclient-program "/mock/emacsclient")
+         (server-name "mock-server")
+         (server-use-tcp nil)
+         (wrapper "/mock/path/codex-hook-wrapper")
+         (command (codex--hook-command wrapper "Stop")))
+    (unwind-protect
+        (progn
+          (with-temp-file temp-file
+            (insert (json-encode
+                     `((hooks . ((Stop . [((matcher . "stale")
+                                            (hooks . [((type . "command")
+                                                       (command . ,command)
+                                                       (timeout . 5))]))])))))))
+          (cl-letf (((symbol-function 'codex--hook-wrapper-path)
+                     (lambda () wrapper)))
+            (codex--ensure-hooks-json)
+            (let* ((content (with-temp-buffer
+                              (insert-file-contents temp-file)
+                              (json-parse-buffer :object-type 'alist)))
+                   (hooks (alist-get 'hooks content))
+                   (stop-hooks (alist-get 'Stop hooks)))
+              (should (= 1 (length stop-hooks)))
+              (should (equal (aref stop-hooks 0)
+                             (codex--hook-entry "Stop" command))))))
+      (delete-directory temp-dir t))))
+
+(ert-deftest codex-test-hooks-json-replaces-legacy-owned-entry ()
+  "Test that pre-server-arg generated hook entries are replaced."
+  (let* ((temp-dir (make-temp-file "codex-test-hooks" t))
+         (temp-file (expand-file-name "hooks.json" temp-dir))
+         (codex-hooks-json-path temp-file)
+         (codex-enable-hooks t)
+         (codex-emacsclient-program "/mock/emacsclient")
+         (server-name "mock-server")
+         (server-use-tcp nil)
+         (wrapper "/mock/path/codex-hook-wrapper")
+         (legacy-command (codex--shell-command-from-argv wrapper '("Stop")))
+         (command (codex--hook-command wrapper "Stop")))
+    (unwind-protect
+        (progn
+          (with-temp-file temp-file
+            (insert (json-encode
+                     `((hooks . ((Stop . [((matcher . "*")
+                                            (hooks . [((type . "command")
+                                                       (command . ,legacy-command)
+                                                       (timeout . 30))]))])))))))
+          (cl-letf (((symbol-function 'codex--hook-wrapper-path)
+                     (lambda () wrapper)))
+            (codex--ensure-hooks-json)
+            (let* ((content (with-temp-buffer
+                              (insert-file-contents temp-file)
+                              (json-parse-buffer :object-type 'alist)))
+                   (hooks (alist-get 'hooks content))
+                   (stop-hooks (alist-get 'Stop hooks)))
+              (should (= 1 (length stop-hooks)))
+              (should (equal (aref stop-hooks 0)
+                             (codex--hook-entry "Stop" command))))))
       (delete-directory temp-dir t))))
 
 ;;;; config.toml edge case tests
@@ -638,7 +747,34 @@
   "Test error formatting when no error system is active."
   (with-temp-buffer
     ;; No flycheck, no help-at-pt
-    (should (equal (codex--format-errors-at-point) "No errors at point"))))
+    (should-not (codex--format-errors-at-point))))
+
+(ert-deftest codex-test-format-errors-flycheck-no-errors ()
+  "Test error formatting when Flycheck has no errors at point."
+  (with-temp-buffer
+    (cl-letf (((symbol-function 'featurep)
+               (lambda (feature) (eq feature 'flycheck)))
+              ((symbol-function 'flycheck-overlay-errors-at)
+               (lambda (_point) nil)))
+      (cl-progv '(flycheck-mode) '(t)
+        (should-not (codex--format-errors-at-point))))))
+
+(ert-deftest codex-test-format-errors-flycheck-missing-line ()
+  "Flycheck errors without file or line are formatted safely."
+  (with-temp-buffer
+    (cl-letf (((symbol-function 'featurep)
+               (lambda (feature) (eq feature 'flycheck)))
+              ((symbol-function 'flycheck-overlay-errors-at)
+               (lambda (_point) '(error)))
+              ((symbol-function 'flycheck-error-filename)
+               (lambda (_error) nil))
+              ((symbol-function 'flycheck-error-line)
+               (lambda (_error) nil))
+              ((symbol-function 'flycheck-error-message)
+               (lambda (_error) "Project-level problem")))
+      (cl-progv '(flycheck-mode) '(t)
+        (should (equal (codex--format-errors-at-point)
+                       "current buffer: Project-level problem"))))))
 
 (ert-deftest codex-test-handle-hook-from-emacsclient ()
   "Test safe hook dispatch via `server-eval-args-left'."
@@ -1058,6 +1194,29 @@
           (should (= escape-count 2)))
       (kill-buffer buf))))
 
+(ert-deftest codex-test-send-digits-do-not-submit ()
+  "Digit helpers send only the digit key, not Return."
+  (let ((buf (generate-new-buffer "*codex:/tmp/project/*"))
+        sent
+        submitted)
+    (unwind-protect
+        (cl-letf (((symbol-function 'codex--get-or-prompt-for-buffer)
+                   (lambda () buf))
+                  ((symbol-function 'codex--term-send-string)
+                   (lambda (_backend string) (push string sent)))
+                  ((symbol-function 'codex--term-send-return)
+                   (lambda (&rest _) (setq submitted t)))
+                  ((symbol-function 'display-buffer)
+                   (lambda (&rest _) nil)))
+          (with-current-buffer buf
+            (let ((codex-terminal-backend 'eat))
+              (codex-send-1)
+              (codex-send-2)
+              (codex-send-3)))
+          (should (equal (nreverse sent) '("1" "2" "3")))
+          (should-not submitted))
+      (kill-buffer buf))))
+
 (ert-deftest codex-test-redraw-dispatches-to-terminal-backend ()
   "Redrawing dispatches through the terminal backend abstraction."
   (let ((buf (generate-new-buffer "*codex:/tmp/project/*"))
@@ -1409,7 +1568,9 @@
 
 (ert-deftest codex-test-color-luminance-eeeeee ()
   "Near-white #EEEEEE has high luminance."
-  (should (> (codex--color-luminance "#EEEEEE") 0.9)))
+  (let ((luminance (codex--color-luminance "#EEEEEE")))
+    (should (> luminance 0.85))
+    (should (< luminance 0.86))))
 
 (ert-deftest codex-test-color-luminance-dark ()
   "Dark color has low luminance."
@@ -1534,6 +1695,12 @@ When only :inherit remains, the face is removed entirely."
 (ert-deftest codex-test-contrast-ratio-identical ()
   "Contrast between identical colors is 1:1."
   (should (= (codex--contrast-ratio "#808080" "#808080") 1.0)))
+
+(ert-deftest codex-test-contrast-ratio-medium-gray-white ()
+  "Contrast between #777777 and white follows the WCAG formula."
+  (let ((ratio (codex--contrast-ratio "#777777" "#ffffff")))
+    (should (> ratio 4.47))
+    (should (< ratio 4.49))))
 
 (ert-deftest codex-test-strip-low-contrast-fg ()
   "Low-contrast foreground is stripped, leaving the rest of the face."
