@@ -2996,14 +2996,27 @@ Only runs when `codex-enable-hooks' is non-nil."
 
 (defun codex--owned-hook-entry-p (entry wrapper-path hook-type)
   "Return non-nil if ENTRY is owned for WRAPPER-PATH and HOOK-TYPE."
-  (seq-some (lambda (command)
-              (codex--hook-entry-command-p entry command))
-            (codex--owned-hook-commands wrapper-path hook-type)))
+  (or (seq-some (lambda (command)
+                  (codex--hook-entry-command-p entry command))
+                (codex--owned-hook-commands wrapper-path hook-type))
+      (codex--legacy-notify-hook-entry-p entry hook-type)))
 
 (defun codex--owned-hook-commands (wrapper-path hook-type)
   "Return current and legacy owned commands for WRAPPER-PATH and HOOK-TYPE."
   (list (codex--hook-command wrapper-path hook-type)
         (codex--shell-command-from-argv wrapper-path (list hook-type))))
+
+(defun codex--legacy-notify-hook-entry-p (entry hook-type)
+  "Return non-nil if ENTRY is the old notify wrapper for HOOK-TYPE."
+  (when-let* ((hooks (alist-get 'hooks entry)))
+    (seq-some
+     (lambda (hook)
+       (when-let* ((command (alist-get 'command hook)))
+         (string-match-p
+          (format "\\(?:^\\|/\\)notify-emacs-hook\\.sh[[:space:]]+%s\\(?:[[:space:]]\\|\\'\\)"
+                  (regexp-quote hook-type))
+          command)))
+     hooks)))
 
 (defun codex--hook-matcher (hook-type)
   "Return the default matcher for HOOK-TYPE."
