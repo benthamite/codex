@@ -50,6 +50,10 @@ Requires Emacs 30.0 or later.
 
 ## Quick start
 
+Enabling `codex-mode` writes or repairs `~/.codex/config.toml` and
+`~/.codex/hooks.json` so Codex CLI hooks reach Emacs; existing user hooks are
+preserved.
+
 ```emacs-lisp
 ;; Enable the minor mode (auto-configures CLI hooks)
 (codex-mode 1)

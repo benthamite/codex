@@ -543,14 +543,9 @@ recompiled with a larger SB_MAX value."
 (defvar-local codex--prompt-autosuggestion-overlay nil
   "Overlay used to style the active prompt autosuggestion.")
 
-(defvar codex--prompt-autosuggestion-history-cache nil
-  "Cached Codex prompt history entries, newest first.")
-
-(defvar codex--prompt-autosuggestion-history-cache-file nil
-  "File backing `codex--prompt-autosuggestion-history-cache'.")
-
-(defvar codex--prompt-autosuggestion-history-cache-mtime nil
-  "Modification time for `codex--prompt-autosuggestion-history-cache-file'.")
+(defvar codex--prompt-autosuggestion-history-state nil
+  "Prompt autosuggestion history cache plist.
+The plist keys are `:file', `:mtime', and `:entries'.")
 
 (defvar codex-command-history nil
   "History of commands sent to Codex.")
@@ -741,20 +736,8 @@ Returns the buffer containing the terminal.")
 (cl-defgeneric codex--term-send-string (backend string)
   "Send STRING to the terminal using BACKEND.")
 
-(cl-defgeneric codex--term-send-return (backend)
-  "Send <return> to the terminal using BACKEND.")
-
-(cl-defgeneric codex--term-send-escape (backend)
-  "Send <escape> to the terminal using BACKEND.")
-
-(cl-defgeneric codex--term-send-previous-agent (backend)
-  "Send Codex's previous-agent key sequence using BACKEND.")
-
-(cl-defgeneric codex--term-send-next-agent (backend)
-  "Send Codex's next-agent key sequence using BACKEND.")
-
-(cl-defgeneric codex--term-redraw (backend)
-  "Redraw the terminal using BACKEND.")
+(cl-defgeneric codex--term-send-action (backend action &optional payload)
+  "Send terminal ACTION with optional PAYLOAD using BACKEND.")
 
 (cl-defgeneric codex--term-kill-process (backend buffer)
   "Kill the terminal process in BUFFER using BACKEND.")
@@ -774,11 +757,11 @@ Returns the buffer containing the terminal.")
 (cl-defgeneric codex--term-customize-faces (backend)
   "Apply face customizations for the terminal using BACKEND.")
 
-(cl-defgeneric codex--term-setup-keymap (backend)
-  "Set up the local keymap for Codex buffers using BACKEND.")
-
 (cl-defgeneric codex--term-get-adjust-process-window-size-fn (backend)
   "Get the BACKEND specific function that adjusts window size.")
+
+(cl-defgeneric codex--term-post-start (backend)
+  "Run BACKEND specific post-start setup in the current Codex buffer.")
 
 ;;;;; eat backend implementations
 
@@ -842,38 +825,20 @@ _BACKEND is the terminal backend type (should be \\='eat)."
 _BACKEND is the terminal backend type (should be \\='eat)."
   (eat-term-send-string eat-terminal string))
 
-(cl-defmethod codex--term-send-return ((_backend (eql eat)))
-  "Send <return> to eat terminal.
+(cl-defmethod codex--term-send-action ((_backend (eql eat)) action &optional payload)
+  "Send ACTION with optional PAYLOAD to eat.
 _BACKEND is the terminal backend type (should be \\='eat)."
-  (eat-term-send-string eat-terminal (kbd "RET")))
-
-(cl-defmethod codex--term-send-escape ((_backend (eql eat)))
-  "Send <escape> to eat terminal.
-_BACKEND is the terminal backend type (should be \\='eat)."
-  (eat-term-send-string eat-terminal (kbd "ESC")))
-
-(cl-defmethod codex--term-send-previous-agent ((_backend (eql eat)))
-  "Send Alt-left to eat terminal for Codex agent navigation.
-_BACKEND is the terminal backend type (should be \\='eat)."
-  (eat-term-send-string eat-terminal "\e[1;3D"))
-
-(cl-defmethod codex--term-send-next-agent ((_backend (eql eat)))
-  "Send Alt-right to eat terminal for Codex agent navigation.
-_BACKEND is the terminal backend type (should be \\='eat)."
-  (eat-term-send-string eat-terminal "\e[1;3C"))
-
-(cl-defmethod codex--term-redraw ((_backend (eql eat)))
-  "Redraw the eat terminal in the current Codex buffer.
-_BACKEND is the terminal backend type (should be \\='eat)."
-  ;; Ask the TUI to repaint its screen, then force eat/Emacs to rebuild
-  ;; their display state.  Local redisplay alone cannot fix stale prompt
-  ;; text that belongs to the subprocess UI state.
-  (eat-term-send-string eat-terminal "\C-l")
-  (sit-for 0.1)
-  (when (fboundp 'eat-term-redisplay)
-    (eat-term-redisplay eat-terminal))
-  (force-window-update (current-buffer))
-  (redisplay t))
+  (pcase action
+    (:string (eat-term-send-string eat-terminal payload))
+    (:return (eat-term-send-string eat-terminal (kbd "RET")))
+    (:escape (eat-term-send-string eat-terminal (kbd "ESC")))
+    (:newline (eat-term-send-string eat-terminal "\C-j"))
+    (:tab (unless (codex-accept-prompt-autosuggestion)
+            (eat-self-input 1 ?\t)))
+    (:previous-agent (eat-term-send-string eat-terminal "\e[1;3D"))
+    (:next-agent (eat-term-send-string eat-terminal "\e[1;3C"))
+    (:redraw (codex--eat-redraw))
+    (_ (error "Unknown eat terminal action: %S" action))))
 
 (cl-defmethod codex--term-kill-process ((_backend (eql eat)) buffer)
   "Kill the eat terminal process in BUFFER.
@@ -961,49 +926,20 @@ _BACKEND is the terminal backend type (should be \\='eat)."
           (codex-face (intern (format "codex-eat-term-font-%d-face" i))))
       (face-remap-add-relative eat-face codex-face))))
 
-(cl-defmethod codex--term-setup-keymap ((_backend (eql eat)))
-  "Set up the local keymap for Codex eat buffers.
+(cl-defmethod codex--term-post-start ((_backend (eql eat)))
+  "Run eat-specific post-start setup.
 _BACKEND is the terminal backend type (should be \\='eat)."
-  (let ((map (make-sparse-keymap)))
-    (set-keymap-parent map (current-local-map))
-    (define-key map (kbd "C-g") #'codex-send-escape)
-    (define-key map (kbd "C-l") #'codex-redraw)
-    (define-key map (kbd "M-<left>") #'codex-previous-agent)
-    (define-key map (kbd "M-<right>") #'codex-next-agent)
-    (define-key map (kbd "TAB") #'codex--eat-send-tab)
-    (define-key map [tab] #'codex--eat-send-tab)
-    (pcase codex-newline-keybinding-style
-      ('newline-on-shift-return
-       (define-key map (kbd "<S-return>") #'codex--eat-insert-newline)
-       (define-key map (kbd "<return>") #'codex--eat-send-return))
-      ('newline-on-alt-return
-       (define-key map (kbd "<M-return>") #'codex--eat-insert-newline)
-       (define-key map (kbd "<return>") #'codex--eat-send-return))
-      ('shift-return-to-send
-       (define-key map (kbd "<return>") #'codex--eat-insert-newline)
-       (define-key map (kbd "<S-return>") #'codex--eat-send-return))
-      ('super-return-to-send
-       (define-key map (kbd "<return>") #'codex--eat-insert-newline)
-       (define-key map (kbd "<s-return>") #'codex--eat-send-return)))
-    (use-local-map map)))
+  (codex--setup-prompt-autosuggestions)
+  (codex--propagate-font-to-eat-faces))
 
-(defun codex--eat-send-return ()
-  "Send <return> to eat."
-  (interactive)
-  (eat-term-send-string eat-terminal (kbd "RET")))
-
-(defun codex--eat-send-tab ()
-  "Accept a prompt autosuggestion or send TAB to eat."
-  (interactive)
-  (unless (codex-accept-prompt-autosuggestion)
-    (eat-self-input 1 ?\t)))
-
-(defun codex--eat-insert-newline ()
-  "Insert a line break in the Codex prompt without submitting.
-Sends Ctrl+J, which Codex's TUI binds to its `insert_newline' editor
-action.  Plain Return still submits the prompt."
-  (interactive)
-  (eat-term-send-string eat-terminal "\C-j"))
+(defun codex--eat-redraw ()
+  "Redraw the eat terminal in the current Codex buffer."
+  (eat-term-send-string eat-terminal "\C-l")
+  (sit-for 0.1)
+  (when (fboundp 'eat-term-redisplay)
+    (eat-term-redisplay eat-terminal))
+  (force-window-update (current-buffer))
+  (redisplay t))
 
 (cl-defmethod codex--term-get-adjust-process-window-size-fn ((_backend (eql eat)))
   "Get the eat-specific function that adjusts window size.
@@ -1040,39 +976,38 @@ _BACKEND is the terminal backend type (should be \\='vterm)."
          (vterm-max-scrollback codex-vterm-max-scrollback)
          (buffer (get-buffer-create buffer-name)))
     (inheritenv
-     (with-current-buffer buffer
-       (pop-to-buffer buffer)
-       (if codex-term-name
-           (let ((vterm-term-environment-variable codex-term-name))
-             (vterm-mode))
-         (vterm-mode))
-       (delete-window (get-buffer-window buffer))
-       buffer))))
+     (codex--vterm-start-hidden-buffer buffer))))
+
+(defun codex--vterm-start-hidden-buffer (buffer)
+  "Start vterm in BUFFER without making it the final displayed buffer."
+  (with-current-buffer buffer
+    (pop-to-buffer buffer)
+    (if codex-term-name
+        (let ((vterm-term-environment-variable codex-term-name))
+          (vterm-mode))
+      (vterm-mode))
+    (when-let ((window (get-buffer-window buffer)))
+      (ignore-errors (delete-window window)))
+    buffer))
 
 (cl-defmethod codex--term-send-string ((_backend (eql vterm)) string)
   "Send STRING to vterm terminal.
 _BACKEND is the terminal backend type (should be \\='vterm)."
   (vterm-send-string string))
 
-(cl-defmethod codex--term-send-return ((_backend (eql vterm)))
-  "Send <return> to vterm terminal.
+(cl-defmethod codex--term-send-action ((_backend (eql vterm)) action &optional payload)
+  "Send ACTION with optional PAYLOAD to vterm.
 _BACKEND is the terminal backend type (should be \\='vterm)."
-  (vterm-send-key "\C-m"))
-
-(cl-defmethod codex--term-send-escape ((_backend (eql vterm)))
-  "Send <escape> to vterm terminal.
-_BACKEND is the terminal backend type (should be \\='vterm)."
-  (vterm-send-key "\C-["))
-
-(cl-defmethod codex--term-send-previous-agent ((_backend (eql vterm)))
-  "Send Alt-left to vterm terminal for Codex agent navigation.
-_BACKEND is the terminal backend type (should be \\='vterm)."
-  (vterm-send-key "<left>" nil t))
-
-(cl-defmethod codex--term-send-next-agent ((_backend (eql vterm)))
-  "Send Alt-right to vterm terminal for Codex agent navigation.
-_BACKEND is the terminal backend type (should be \\='vterm)."
-  (vterm-send-key "<right>" nil t))
+  (pcase action
+    (:string (vterm-send-string payload))
+    (:return (vterm-send-key "\C-m"))
+    (:escape (vterm-send-key "\C-["))
+    (:newline (vterm-send-key "j" nil nil t))
+    (:tab (vterm-send-string "\t"))
+    (:previous-agent (vterm-send-key "<left>" nil t))
+    (:next-agent (vterm-send-key "<right>" nil t))
+    (:redraw (codex--vterm-redraw))
+    (_ (error "Unknown vterm terminal action: %S" action))))
 
 (cl-defmethod codex--term-kill-process ((_backend (eql vterm)) buffer)
   "Kill the vterm terminal process in BUFFER.
@@ -1127,53 +1062,16 @@ _BACKEND is the terminal backend type (should be \\='vterm)."
 _BACKEND is the terminal backend type (should be \\='vterm)."
   nil)
 
-(defun codex--vterm-send-escape ()
-  "Send escape key to vterm."
-  (interactive)
-  (vterm-send-key "\C-["))
-
-(defun codex--vterm-send-return ()
-  "Send return key to vterm."
-  (interactive)
-  (vterm-send-key "\C-m"))
-
-(cl-defmethod codex--term-redraw ((_backend (eql vterm)))
-  "Redraw the vterm terminal in the current Codex buffer.
+(cl-defmethod codex--term-post-start ((_backend (eql vterm)))
+  "Run vterm-specific post-start setup.
 _BACKEND is the terminal backend type (should be \\='vterm)."
+  nil)
+
+(defun codex--vterm-redraw ()
+  "Redraw the vterm terminal in the current Codex buffer."
   (vterm-send-key "l" nil nil t)
   (force-window-update (current-buffer))
   (redisplay t))
-
-(defun codex--vterm-insert-newline ()
-  "Insert a line break in the Codex prompt without submitting.
-Sends Ctrl+J, which Codex's TUI binds to its `insert_newline' editor
-action.  Plain Return still submits the prompt."
-  (interactive)
-  (vterm-send-key "j" nil nil t))
-
-(cl-defmethod codex--term-setup-keymap ((_backend (eql vterm)))
-  "Set up the local keymap for Codex vterm buffers.
-_BACKEND is the terminal backend type (should be \\='vterm)."
-  (let ((map (make-sparse-keymap)))
-    (set-keymap-parent map (current-local-map))
-    (define-key map (kbd "C-g") #'codex--vterm-send-escape)
-    (define-key map (kbd "C-l") #'codex-redraw)
-    (define-key map (kbd "M-<left>") #'codex-previous-agent)
-    (define-key map (kbd "M-<right>") #'codex-next-agent)
-    (pcase codex-newline-keybinding-style
-      ('newline-on-shift-return
-       (define-key map (kbd "<S-return>") #'codex--vterm-insert-newline)
-       (define-key map (kbd "<return>") #'codex--vterm-send-return))
-      ('newline-on-alt-return
-       (define-key map (kbd "<M-return>") #'codex--vterm-insert-newline)
-       (define-key map (kbd "<return>") #'codex--vterm-send-return))
-      ('shift-return-to-send
-       (define-key map (kbd "<return>") #'codex--vterm-insert-newline)
-       (define-key map (kbd "<S-return>") #'codex--vterm-send-return))
-      ('super-return-to-send
-       (define-key map (kbd "<return>") #'codex--vterm-insert-newline)
-       (define-key map (kbd "<s-return>") #'codex--vterm-send-return)))
-    (use-local-map map)))
 
 (cl-defmethod codex--term-get-adjust-process-window-size-fn ((_backend (eql vterm)))
   "Get the vterm-specific function that adjusts window size.
@@ -1217,12 +1115,56 @@ SWITCHES is an optional list of command-line arguments."
   (setq codex--managed-advice-specs nil))
 
 (defmacro codex--with-buffer (&rest body)
-  "Execute BODY with the Codex buffer, handling buffer selection and display."
+  "Execute BODY in the selected Codex buffer and display that buffer."
   `(if-let ((codex-buffer (codex--get-or-prompt-for-buffer)))
        (with-current-buffer codex-buffer
          ,@body
          (display-buffer codex-buffer))
      (codex--show-not-running-message)))
+
+(defun codex--terminal-send-return ()
+  "Send Return to the current Codex terminal buffer."
+  (interactive)
+  (codex--term-send-action codex-terminal-backend :return))
+
+(defun codex--terminal-insert-newline ()
+  "Insert a line break in the current Codex prompt."
+  (interactive)
+  (codex--term-send-action codex-terminal-backend :newline))
+
+(defun codex--terminal-send-tab ()
+  "Send Tab to the current Codex terminal buffer."
+  (interactive)
+  (codex--term-send-action codex-terminal-backend :tab))
+
+(defun codex--term-setup-keymap (_backend)
+  "Set up the local Codex terminal keymap."
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map (current-local-map))
+    (define-key map (kbd "C-g") #'codex-send-escape)
+    (define-key map (kbd "C-l") #'codex-redraw)
+    (define-key map (kbd "M-<left>") #'codex-previous-agent)
+    (define-key map (kbd "M-<right>") #'codex-next-agent)
+    (define-key map (kbd "TAB") #'codex--terminal-send-tab)
+    (define-key map [tab] #'codex--terminal-send-tab)
+    (codex--term-bind-newline-keys map)
+    (use-local-map map)))
+
+(defun codex--term-bind-newline-keys (map)
+  "Bind Codex newline and submit keys in MAP."
+  (pcase codex-newline-keybinding-style
+    ('newline-on-shift-return
+     (define-key map (kbd "<S-return>") #'codex--terminal-insert-newline)
+     (define-key map (kbd "<return>") #'codex--terminal-send-return))
+    ('newline-on-alt-return
+     (define-key map (kbd "<M-return>") #'codex--terminal-insert-newline)
+     (define-key map (kbd "<return>") #'codex--terminal-send-return))
+    ('shift-return-to-send
+     (define-key map (kbd "<return>") #'codex--terminal-insert-newline)
+     (define-key map (kbd "<S-return>") #'codex--terminal-send-return))
+    ('super-return-to-send
+     (define-key map (kbd "<return>") #'codex--terminal-insert-newline)
+     (define-key map (kbd "<s-return>") #'codex--terminal-send-return))))
 
 (defun codex--buffer-p (buffer)
   "Return non-nil if BUFFER is a Codex buffer."
@@ -1267,7 +1209,11 @@ If not in a project and no buffer file, return `default-directory'."
      (codex--find-all-codex-buffers))))
 
 (defun codex--buffer-name-instance-separator (payload)
-  "Return the index of the instance separator in Codex buffer PAYLOAD."
+  "Return the index of the instance separator in Codex buffer PAYLOAD.
+PAYLOAD is the text between the `*codex:' prefix and trailing `*'.  The
+separator is the last colon whose suffix is non-empty and contains no slash or
+backslash.  This keeps path colons such as `C:/repo' or `/tmp/a:b/' in the
+directory part while splitting `/tmp/project/:tests' before `tests'."
   (let ((search-end (length payload))
         separator)
     (while (and (not separator)
@@ -1469,7 +1415,7 @@ After sending the command, move point to the end of the buffer."
         (with-current-buffer codex-buffer
           (codex--term-send-string codex-terminal-backend cmd)
           (sit-for 0.1)
-          (codex--term-send-return codex-terminal-backend)
+          (codex--term-send-action codex-terminal-backend :return)
           (display-buffer codex-buffer))
         codex-buffer)
     (codex--show-not-running-message)
@@ -1538,68 +1484,14 @@ If FORCE-SWITCH-TO-BUFFER is non-nil, always switch to the Codex buffer."
   (let* ((dir (if (equal arg '(16))
                   (read-directory-name "Project directory: ")
                 (codex--directory)))
-         (backend codex-terminal-backend)
          (switch-after (or (equal arg '(4)) force-switch-to-buffer))
-         (default-directory dir)
-         (existing-buffers (codex--find-codex-buffers-for-directory dir))
-         (existing-instance-names (mapcar (lambda (buf)
-                                            (or (codex--buffer-instance-name-for buf)
-                                                "default"))
-                                          existing-buffers))
-         (instance-name (codex--prompt-for-instance-name dir existing-instance-names force-prompt))
-         (buffer-name (codex--buffer-name instance-name))
-         (cli-args (codex--build-cli-args))
-         (program-switches (append codex-program-switches cli-args extra-switches))
-         (process-adaptive-read-buffering nil)
-         (extra-env-variables (apply #'append
-                                     (mapcar (lambda (func)
-                                               (funcall func buffer-name dir))
-                                             codex-process-environment-functions)))
-         (process-environment (append `(,(format "CODEX_BUFFER_NAME=%s" buffer-name))
-                                      extra-env-variables
-                                      process-environment)))
-
-    (unless (executable-find codex-program)
-      (error "Codex program '%s' not found in PATH" codex-program))
-
-    (let ((buffer (codex--term-make backend buffer-name codex-program program-switches)))
-      (unless (buffer-live-p buffer)
-        (error "Failed to create Codex buffer"))
-
-      (with-current-buffer buffer
-        (setq-local codex-terminal-backend backend)
-        (setq-local codex--buffer-directory (file-truename dir))
-        (setq-local codex--buffer-instance-name instance-name)
-        (codex--term-configure codex-terminal-backend)
-        (when codex-optimize-window-resize
-          (codex--acquire-managed-advice
-           (codex--term-get-adjust-process-window-size-fn codex-terminal-backend)
-           :around
-           #'codex--adjust-window-size-advice))
-        (codex--term-setup-keymap codex-terminal-backend)
-        (codex--term-customize-faces codex-terminal-backend)
-        (face-remap-add-relative 'nobreak-space :underline nil)
-        (buffer-face-set :inherit 'codex-repl-face)
-        (setq-local vertical-scroll-bar nil)
-        (setq-local fringe-mode 0)
-        (add-hook 'kill-buffer-hook #'codex--cleanup-buffer-state nil t)
-        (run-hooks 'codex-start-hook)
-        (codex--setup-prompt-autosuggestions)
-        ;; After all face configuration (including user hooks), propagate
-        ;; the buffer's font family to eat terminal faces.  Without this,
-        ;; text with eat face properties may resolve to a different font
-        ;; family than faceless text, which can leave redraw artifacts.
-        (codex--propagate-font-to-eat-faces)
-        (let ((window (funcall codex-display-window-fn buffer)))
-          (when window
-            (set-window-parameter window 'left-margin-width 0)
-            (set-window-parameter window 'right-margin-width 0)
-            (set-window-parameter window 'left-fringe-width 0)
-            (set-window-parameter window 'right-fringe-width 0)
-            (set-window-parameter window 'no-delete-other-windows codex-no-delete-other-windows))))
-
-      (when switch-after
-        (pop-to-buffer buffer)))))
+         (instance-name (codex--session-instance-name dir force-prompt))
+         (buffer-name (codex--buffer-name-for-directory dir instance-name))
+         (switches (append codex-program-switches
+                           (codex--build-cli-args)
+                           extra-switches)))
+    (codex--launch-session dir codex-terminal-backend buffer-name
+                           instance-name switches switch-after)))
 
 (defun codex--start-subcommand (subcommand &optional last-flag extra-args
                                                        instance-name)
@@ -1610,72 +1502,105 @@ after the subcommand and its flags.  When INSTANCE-NAME is
 non-nil, use it directly instead of prompting.
 Codex subcommands run as separate processes."
   (let* ((dir (codex--directory))
-         (backend codex-terminal-backend)
-         (default-directory dir)
-         (existing-buffers (codex--find-codex-buffers-for-directory dir))
-         (existing-instance-names (mapcar (lambda (buf)
-                                            (or (codex--buffer-instance-name-for buf)
-                                                "default"))
-                                          existing-buffers))
          (instance-name (or instance-name
-                            (codex--prompt-for-instance-name
-                             dir existing-instance-names)))
-         (buffer-name (codex--buffer-name instance-name))
-         (cli-args (codex--build-cli-args))
-         (program-switches (append codex-program-switches
-                                   cli-args
-                                   (list subcommand)
-                                   (when last-flag '("--last"))
-                                   extra-args))
-         (process-adaptive-read-buffering nil)
-         (extra-env-variables (apply #'append
-                                     (mapcar (lambda (func)
-                                               (funcall func buffer-name dir))
-                                             codex-process-environment-functions)))
-         (process-environment (append `(,(format "CODEX_BUFFER_NAME=%s" buffer-name))
-                                      extra-env-variables
-                                      process-environment)))
+                            (codex--session-instance-name dir)))
+         (buffer-name (codex--buffer-name-for-directory dir instance-name))
+         (switches (append codex-program-switches
+                           (codex--build-cli-args)
+                           (list subcommand)
+                           (when last-flag '("--last"))
+                           extra-args)))
+    (codex--launch-session dir codex-terminal-backend buffer-name
+                           instance-name switches t)))
 
+(defun codex--session-instance-name (dir &optional force-prompt)
+  "Return the instance name for a new Codex session in DIR."
+  (codex--prompt-for-instance-name dir
+                                   (codex--existing-instance-names dir)
+                                   force-prompt))
+
+(defun codex--existing-instance-names (dir)
+  "Return existing Codex instance names for DIR."
+  (mapcar (lambda (buf)
+            (or (codex--buffer-instance-name-for buf)
+                "default"))
+          (codex--find-codex-buffers-for-directory dir)))
+
+(defun codex--buffer-name-for-directory (dir instance-name)
+  "Return the Codex buffer name for DIR and INSTANCE-NAME."
+  (let ((default-directory dir))
+    (codex--buffer-name instance-name)))
+
+(defun codex--launch-session (dir backend buffer-name instance-name switches
+                                  switch-after)
+  "Launch a Codex session in DIR using BACKEND and SWITCHES."
+  (let ((default-directory dir)
+        (process-adaptive-read-buffering nil)
+        (process-environment
+         (codex--session-process-environment buffer-name dir)))
     (unless (executable-find codex-program)
       (error "Codex program '%s' not found in PATH" codex-program))
-
-    (let ((buffer (codex--term-make backend buffer-name codex-program program-switches)))
+    (let ((buffer (codex--term-make backend buffer-name codex-program switches)))
       (unless (buffer-live-p buffer)
         (error "Failed to create Codex buffer"))
+      (codex--initialize-terminal-buffer buffer backend dir instance-name)
+      (when switch-after
+        (pop-to-buffer buffer))
+      buffer)))
 
-      (with-current-buffer buffer
-        (setq-local codex-terminal-backend backend)
-        (setq-local codex--buffer-directory (file-truename dir))
-        (setq-local codex--buffer-instance-name instance-name)
-        (codex--term-configure codex-terminal-backend)
-        (when codex-optimize-window-resize
-          (codex--acquire-managed-advice
-           (codex--term-get-adjust-process-window-size-fn codex-terminal-backend)
-           :around
-           #'codex--adjust-window-size-advice))
-        (codex--term-setup-keymap codex-terminal-backend)
-        (codex--term-customize-faces codex-terminal-backend)
-        (face-remap-add-relative 'nobreak-space :underline nil)
-        (buffer-face-set :inherit 'codex-repl-face)
-        (setq-local vertical-scroll-bar nil)
-        (setq-local fringe-mode 0)
-        (add-hook 'kill-buffer-hook #'codex--cleanup-buffer-state nil t)
-        (run-hooks 'codex-start-hook)
-        (codex--setup-prompt-autosuggestions)
-        ;; After all face configuration (including user hooks), propagate
-        ;; the buffer's font family to eat terminal faces.  Without this,
-        ;; text with eat face properties may resolve to a different font
-        ;; weight than faceless text, creating visible rectangular blocks.
-        (codex--propagate-font-to-eat-faces)
-        (let ((window (funcall codex-display-window-fn buffer)))
-          (when window
-            (set-window-parameter window 'left-margin-width 0)
-            (set-window-parameter window 'right-margin-width 0)
-            (set-window-parameter window 'left-fringe-width 0)
-            (set-window-parameter window 'right-fringe-width 0)
-            (set-window-parameter window 'no-delete-other-windows codex-no-delete-other-windows))))
+(defun codex--session-process-environment (buffer-name dir)
+  "Return the process environment for BUFFER-NAME in DIR."
+  (append `(,(format "CODEX_BUFFER_NAME=%s" buffer-name))
+          (codex--session-extra-environment buffer-name dir)
+          process-environment))
 
-      (pop-to-buffer buffer))))
+(defun codex--session-extra-environment (buffer-name dir)
+  "Return extra environment entries for BUFFER-NAME in DIR."
+  (apply #'append
+         (mapcar (lambda (func)
+                   (funcall func buffer-name dir))
+                 codex-process-environment-functions)))
+
+(defun codex--initialize-terminal-buffer (buffer backend dir instance-name)
+  "Initialize Codex BUFFER for BACKEND, DIR, and INSTANCE-NAME."
+  (with-current-buffer buffer
+    (setq-local codex-terminal-backend backend)
+    (setq-local codex--buffer-directory (file-truename dir))
+    (setq-local codex--buffer-instance-name instance-name)
+    (codex--term-configure backend)
+    (codex--maybe-install-window-resize-advice backend)
+    (codex--term-setup-keymap backend)
+    (codex--term-customize-faces backend)
+    (codex--apply-terminal-buffer-ui)
+    (add-hook 'kill-buffer-hook #'codex--cleanup-buffer-state nil t)
+    (run-hooks 'codex-start-hook)
+    (codex--term-post-start backend)
+    (codex--configure-codex-window (funcall codex-display-window-fn buffer))))
+
+(defun codex--maybe-install-window-resize-advice (backend)
+  "Install resize optimization advice for BACKEND when enabled."
+  (when codex-optimize-window-resize
+    (codex--acquire-managed-advice
+     (codex--term-get-adjust-process-window-size-fn backend)
+     :around
+     #'codex--adjust-window-size-advice)))
+
+(defun codex--apply-terminal-buffer-ui ()
+  "Apply common Codex terminal buffer UI settings."
+  (face-remap-add-relative 'nobreak-space :underline nil)
+  (buffer-face-set :inherit 'codex-repl-face)
+  (setq-local vertical-scroll-bar nil)
+  (setq-local fringe-mode 0))
+
+(defun codex--configure-codex-window (window)
+  "Apply Codex-specific WINDOW parameters."
+  (when window
+    (set-window-parameter window 'left-margin-width 0)
+    (set-window-parameter window 'right-margin-width 0)
+    (set-window-parameter window 'left-fringe-width 0)
+    (set-window-parameter window 'right-fringe-width 0)
+    (set-window-parameter window 'no-delete-other-windows
+                          codex-no-delete-other-windows)))
 
 (defun codex--face-family-from-spec (spec)
   "Return the first explicit font family contributed by face SPEC."
@@ -1718,6 +1643,14 @@ the default font."
 
 ;;;; Prompt autosuggestions
 
+(defconst codex--prompt-leading-space-chars " \t "
+  "Characters skipped before Codex prompt markers.
+Includes no-break space because terminal output can pad prompt columns with
+U+00A0.")
+
+(defconst codex--prompt-marker-regexp "[›❯>]"
+  "Regexp matching current and legacy Codex prompt marker glyphs.")
+
 (defun codex--setup-prompt-autosuggestions ()
   "Set up prompt autosuggestion styling in the current Codex buffer."
   (when (and codex-enable-prompt-autosuggestions
@@ -1752,7 +1685,7 @@ Return non-nil when an autosuggestion was accepted."
             (suffix (plist-get context :suffix))
             ((not (string-empty-p suffix))))
       (progn
-        (codex--term-send-string codex-terminal-backend suffix)
+        (codex--term-send-action codex-terminal-backend :string suffix)
         (codex--clear-prompt-autosuggestion)
         t)
     (when (called-interactively-p 'interactive)
@@ -1811,10 +1744,10 @@ Return non-nil when an autosuggestion was accepted."
   "Return the input start between LINE-BEG and CURSOR."
   (save-excursion
     (goto-char line-beg)
-    (skip-chars-forward " \t " cursor)
-    (when (looking-at-p "[›❯>]")
+    (skip-chars-forward codex--prompt-leading-space-chars cursor)
+    (when (looking-at-p codex--prompt-marker-regexp)
       (forward-char)
-      (skip-chars-forward " \t " cursor)
+      (skip-chars-forward codex--prompt-leading-space-chars cursor)
       (point))))
 
 (defun codex--prompt-suffix-end (cursor line-end)
@@ -1822,7 +1755,7 @@ Return non-nil when an autosuggestion was accepted."
 The suffix starts after CURSOR and ends before LINE-END."
   (save-excursion
     (goto-char line-end)
-    (skip-chars-backward " \t " cursor)
+    (skip-chars-backward codex--prompt-leading-space-chars cursor)
     (point)))
 
 (defun codex--known-prompt-autosuggestion-p (candidate)
@@ -1836,13 +1769,19 @@ The suffix starts after CURSOR and ends before LINE-END."
   "Return cached Codex prompt history entries, newest first."
   (let* ((file (expand-file-name codex-prompt-autosuggestion-history-path))
          (mtime (codex--file-mtime file)))
-    (unless (and (equal file codex--prompt-autosuggestion-history-cache-file)
-                 (equal mtime codex--prompt-autosuggestion-history-cache-mtime))
-      (setq codex--prompt-autosuggestion-history-cache-file file)
-      (setq codex--prompt-autosuggestion-history-cache-mtime mtime)
-      (setq codex--prompt-autosuggestion-history-cache
-            (codex--read-prompt-autosuggestion-history file)))
-    codex--prompt-autosuggestion-history-cache))
+    (unless (and (equal file (plist-get codex--prompt-autosuggestion-history-state
+                                        :file))
+                 (equal mtime (plist-get codex--prompt-autosuggestion-history-state
+                                         :mtime)))
+      (setq codex--prompt-autosuggestion-history-state
+            (list :file file
+                  :mtime mtime
+                  :entries (codex--read-prompt-autosuggestion-history file))))
+    (plist-get codex--prompt-autosuggestion-history-state :entries)))
+
+(defun codex--reset-prompt-autosuggestion-history-cache ()
+  "Reset the prompt autosuggestion history cache."
+  (setq codex--prompt-autosuggestion-history-state nil))
 
 (defun codex--file-mtime (file)
   "Return FILE's modification time, or nil if FILE is unavailable."
@@ -1976,6 +1915,20 @@ cannot be resolved."
        (not (plist-get face :box))
        (not (plist-get face :inverse-video))))
 
+(defun codex--for-each-face-span (beg end function)
+  "Call FUNCTION for each contiguous face span between BEG and END."
+  (let ((pos beg))
+    (while (< pos end)
+      (let ((next (or (next-single-property-change pos 'face nil end) end))
+            (face (get-text-property pos 'face)))
+        (funcall function pos next face)
+        (setq pos next)))))
+
+(defun codex--put-face-span (beg end face)
+  "Set FACE and `font-lock-face' on text between BEG and END."
+  (put-text-property beg end 'face face)
+  (put-text-property beg end 'font-lock-face face))
+
 (defun codex--remap-light-backgrounds-in-region (beg end card-bg threshold)
   "Replace clashing backgrounds between BEG and END with CARD-BG.
 CARD-BG is the replacement color, or nil to strip backgrounds entirely.
@@ -1983,29 +1936,47 @@ Backgrounds whose WCAG contrast against the Emacs default
 background exceeds THRESHOLD are remapped.  Also strips
 inherit-only faces on trailing whitespace that carry no visual
 attributes, since these can cause font-weight mismatches."
-  (let ((pos beg)
-        (theme-bg (face-background 'default)))
-    (while (< pos end)
-      (let* ((next (or (next-single-property-change pos 'face nil end) end))
-             (face (get-text-property pos 'face))
-             (bg (and (consp face) (plist-get face :background))))
-        (cond
-         ((codex--background-clashes-p bg theme-bg threshold)
-          (let ((new-face (if card-bg
-                              (plist-put (copy-sequence face) :background card-bg)
-                            (codex--strip-plist-key face :background))))
-            (when (and (null card-bg) (codex--face-inherit-only-p new-face))
-              (setq new-face nil))
-            (put-text-property pos next 'face new-face)
-            (put-text-property pos next 'font-lock-face new-face)))
-         ((and (null card-bg)
-               (codex--face-inherit-only-p face)
-               (save-excursion
-                 (goto-char pos)
-                 (looking-at-p "[ \t]*$")))
-          (put-text-property pos next 'face nil)
-          (put-text-property pos next 'font-lock-face nil)))
-        (setq pos next)))))
+  (let ((theme-bg (face-background 'default)))
+    (codex--for-each-face-span
+     beg end
+     (lambda (pos next face)
+       (let* ((background-face
+               (codex--remap-clashing-background face card-bg theme-bg threshold))
+              (new-face
+               (codex--strip-inherit-only-trailing-face
+                background-face card-bg pos)))
+         (unless (eq new-face face)
+           (codex--put-face-span pos next new-face)))))))
+
+(defun codex--remap-clashing-background (face card-bg theme-bg threshold)
+  "Return FACE with a clashing background remapped."
+  (let ((bg (and (consp face) (plist-get face :background))))
+    (if (codex--background-clashes-p bg theme-bg threshold)
+        (codex--remapped-background-face face card-bg)
+      face)))
+
+(defun codex--remapped-background-face (face card-bg)
+  "Return FACE with its background replaced by CARD-BG or stripped."
+  (let ((new-face (if card-bg
+                      (plist-put (copy-sequence face) :background card-bg)
+                    (codex--strip-plist-key face :background))))
+    (if (and (null card-bg) (codex--face-inherit-only-p new-face))
+        nil
+      new-face)))
+
+(defun codex--strip-inherit-only-trailing-face (face card-bg pos)
+  "Return nil for inherit-only trailing FACE at POS when CARD-BG is nil."
+  (if (and (null card-bg)
+           (codex--face-inherit-only-p face)
+           (codex--trailing-whitespace-span-p pos))
+      nil
+    face))
+
+(defun codex--trailing-whitespace-span-p (pos)
+  "Return non-nil if the span at POS is trailing whitespace."
+  (save-excursion
+    (goto-char pos)
+    (looking-at-p "[ \t]*$")))
 
 (defun codex--background-clashes-p (bg theme-bg threshold)
   "Return non-nil when BG clashes with THEME-BG past THRESHOLD.
@@ -2070,15 +2041,12 @@ against the effective background (explicit or default) is below
 THRESHOLD.  Stripping lets the Emacs theme's default foreground
 show through, which is always well-contrasted with the default
 background."
-  (let ((pos beg))
-    (while (< pos end)
-      (let* ((next (or (next-single-property-change pos 'face nil end) end))
-             (face (get-text-property pos 'face))
-             (new-face (codex--strip-low-contrast-fg face threshold)))
-        (unless (eq new-face face)
-          (put-text-property pos next 'face new-face)
-          (put-text-property pos next 'font-lock-face new-face))
-        (setq pos next)))))
+  (codex--for-each-face-span
+   beg end
+   (lambda (pos next face)
+     (let ((new-face (codex--strip-low-contrast-fg face threshold)))
+       (unless (eq new-face face)
+         (codex--put-face-span pos next new-face))))))
 
 (defun codex--strip-low-contrast-fg (face threshold)
   "Return FACE with `:foreground' stripped if its contrast is too low.
@@ -2145,17 +2113,16 @@ With no active region, audits the visible portion of the buffer."
    (if (use-region-p)
        (list (region-beginning) (region-end))
      (list (window-start) (window-end))))
-  (let ((pos beg)
-        (problems nil))
-    (while (< pos end)
-      (let* ((next (or (next-single-property-change pos 'face nil end) end))
-             (problem (codex--diagnose-span pos next)))
-        (when problem (push problem problems))
-        (setq pos next)))
+  (let (problems)
+    (codex--for-each-face-span
+     beg end
+     (lambda (pos next _face)
+       (when-let* ((problem (codex--diagnose-span pos next)))
+         (push problem problems))))
     (codex--report-diagnostic-results problems)))
 
 (defun codex--diagnose-span (pos next)
-  "Return a diagnostic string for the face span from POS to NEXT.
+  "Return diagnostic data for the face span from POS to NEXT.
 Returns nil if the span has adequate contrast or is whitespace."
   (let* ((face (get-text-property pos 'face))
          (fg (and (consp face) (plist-get face :foreground)))
@@ -2168,17 +2135,30 @@ Returns nil if the span has adequate contrast or is whitespace."
                  pos (min (+ pos 60) next)))))
     (when (and contrast (< contrast 3.0)
                (not (string-match-p "\\`[ \t\n]*\\'" text)))
-      (format "  L%d: contrast %.1f:1, fg=%s bg=%s text=%S"
-              (line-number-at-pos pos) contrast
-              (or fg "default") (or bg "default")
-              (truncate-string-to-width text 40)))))
+      (list :line (line-number-at-pos pos)
+            :contrast contrast
+            :fg fg
+            :bg bg
+            :text (truncate-string-to-width text 40)))))
+
+(defun codex--format-diagnostic-result (problem)
+  "Return a display string for diagnostic PROBLEM."
+  (format "  L%d: contrast %.1f:1, fg=%s bg=%s text=%S"
+          (plist-get problem :line)
+          (plist-get problem :contrast)
+          (or (plist-get problem :fg) "default")
+          (or (plist-get problem :bg) "default")
+          (plist-get problem :text)))
 
 (defun codex--report-diagnostic-results (problems)
   "Display PROBLEMS found by face diagnostics."
   (if problems
       (message "Found %d low-contrast spans:\n%s"
                (length problems)
-               (string-join (nreverse problems) "\n"))
+               (string-join
+                (mapcar #'codex--format-diagnostic-result
+                        (nreverse problems))
+                "\n"))
     (message "No low-contrast spans found in region.")))
 
 ;;;; Notification system
@@ -2237,35 +2217,48 @@ PROCESS is the vterm process.  INPUT is the terminal output string."
           (not (codex--buffer-p (process-buffer process))))
       (funcall orig-fun process input)
     (with-current-buffer (process-buffer process)
-      (let ((has-clear-line (string-match-p "\033\\[K" input))
-            (has-cursor-pos (string-match-p "\033\\[[0-9]+;[0-9]+H" input))
-            (has-cursor-move (string-match-p "\033\\[[0-9]*[ABCD]" input))
-            (escape-count (cl-count ?\033 input)))
-        (if (or (and (>= escape-count 3)
-                     (or has-clear-line has-cursor-pos has-cursor-move))
-                codex--vterm-multiline-buffer)
-            (progn
-              (setq codex--vterm-multiline-buffer
-                    (concat codex--vterm-multiline-buffer input))
-              (when codex--vterm-multiline-buffer-timer
-                (cancel-timer codex--vterm-multiline-buffer-timer))
-              (setq codex--vterm-multiline-buffer-timer
-                    (run-at-time codex-vterm-multiline-delay nil
-                                 (lambda (buf proc)
-                                   (when (buffer-live-p buf)
-                                     (with-current-buffer buf
-                                       (setq codex--vterm-multiline-buffer-timer nil)
-                                       (if (and codex--vterm-multiline-buffer
-                                                (process-live-p proc)
-                                                (eq (process-buffer proc) buf))
-                                           (let ((inhibit-redisplay t)
-                                                 (data codex--vterm-multiline-buffer))
-                                             (setq codex--vterm-multiline-buffer nil)
-                                             (funcall orig-fun proc data))
-                                         (setq codex--vterm-multiline-buffer nil)))))
-                                 (current-buffer)
-                                 process)))
-          (funcall orig-fun process input))))))
+      (if (or (codex--vterm-multiline-redraw-p input)
+              codex--vterm-multiline-buffer)
+          (codex--buffer-vterm-multiline-output orig-fun process input)
+        (funcall orig-fun process input)))))
+
+(defun codex--vterm-multiline-redraw-p (input)
+  "Return non-nil when INPUT looks like a Codex multi-line prompt redraw.
+Codex redraws edited multi-line prompts as a burst of ANSI cursor movement,
+cursor positioning, and clear-line sequences.  A single escape can be ordinary
+output, so buffering starts only after at least three escapes plus one redraw
+control sequence."
+  (and (>= (cl-count ?\033 input) 3)
+       (or (string-match-p "\033\\[K" input)
+           (string-match-p "\033\\[[0-9]+;[0-9]+H" input)
+           (string-match-p "\033\\[[0-9]*[ABCD]" input))))
+
+(defun codex--buffer-vterm-multiline-output (orig-fun process input)
+  "Append INPUT to the pending vterm redraw buffer for ORIG-FUN and PROCESS."
+  (setq codex--vterm-multiline-buffer
+        (concat codex--vterm-multiline-buffer input))
+  (when codex--vterm-multiline-buffer-timer
+    (cancel-timer codex--vterm-multiline-buffer-timer))
+  (setq codex--vterm-multiline-buffer-timer
+        (run-at-time codex-vterm-multiline-delay nil
+                     #'codex--flush-vterm-multiline-buffer
+                     (current-buffer)
+                     process
+                     orig-fun)))
+
+(defun codex--flush-vterm-multiline-buffer (buffer process orig-fun)
+  "Flush BUFFER's pending multiline vterm output through ORIG-FUN for PROCESS."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq codex--vterm-multiline-buffer-timer nil)
+      (if (and codex--vterm-multiline-buffer
+               (process-live-p process)
+               (eq (process-buffer process) buffer))
+          (let ((inhibit-redisplay t)
+                (data codex--vterm-multiline-buffer))
+            (setq codex--vterm-multiline-buffer nil)
+            (funcall orig-fun process data))
+        (setq codex--vterm-multiline-buffer nil)))))
 
 (defun codex--clear-vterm-multiline-buffer ()
   "Clear pending vterm multiline output state for the current buffer."
@@ -2497,37 +2490,61 @@ With prefix ARG, switch to the Codex buffer after sending."
 
 ;;;;;; TUI key sequence commands
 
-(defun codex--send-digit (digit)
-  "Send DIGIT to the Codex TUI without submitting."
+(defconst codex--tui-actions
+  '((send-return :return)
+    (send-escape :escape)
+    (previous-agent :previous-agent)
+    (next-agent :next-agent)
+    (redraw :redraw)
+    (edit-previous-message :escape :escape)
+    (queue-followup :tab)
+    (inject-mid-turn :return)
+    (header-search (:string "\C-k"))
+    (send-1 (:string "1"))
+    (send-2 (:string "2"))
+    (send-3 (:string "3")))
+  "Terminal action sequences for interactive Codex TUI commands.
+Each value is a sequence of action forms.  A keyword such as `:return' calls
+`codex--term-send-action' without a payload.  A list such as `(:string
+PAYLOAD)' sends the named action with PAYLOAD.  The table describes Codex TUI
+shortcuts rather than Emacs key bindings.")
+
+(defun codex--dispatch-tui-action (name)
+  "Dispatch the TUI action sequence named NAME."
   (codex--with-buffer
-   (codex--term-send-string codex-terminal-backend digit)))
+   (dolist (action (cdr (assq name codex--tui-actions)))
+     (codex--send-tui-action action))))
+
+(defun codex--send-tui-action (action)
+  "Send one TUI ACTION in the current Codex buffer.
+ACTION is either a keyword or a list of the form (KEYWORD PAYLOAD)."
+  (if (listp action)
+      (codex--term-send-action codex-terminal-backend (car action) (cadr action))
+    (codex--term-send-action codex-terminal-backend action)))
 
 ;;;###autoload
 (defun codex-send-return ()
   "Send <return> to the Codex REPL."
   (interactive)
-  (codex--do-send-command ""))
+  (codex--dispatch-tui-action 'send-return))
 
 ;;;###autoload
 (defun codex-send-escape ()
   "Send <escape> to the Codex REPL."
   (interactive)
-  (codex--with-buffer
-   (codex--term-send-escape codex-terminal-backend)))
+  (codex--dispatch-tui-action 'send-escape))
 
 ;;;###autoload
 (defun codex-previous-agent ()
   "Send Codex's previous-agent shortcut."
   (interactive)
-  (codex--with-buffer
-   (codex--term-send-previous-agent codex-terminal-backend)))
+  (codex--dispatch-tui-action 'previous-agent))
 
 ;;;###autoload
 (defun codex-next-agent ()
   "Send Codex's next-agent shortcut."
   (interactive)
-  (codex--with-buffer
-   (codex--term-send-next-agent codex-terminal-backend)))
+  (codex--dispatch-tui-action 'next-agent))
 
 ;;;###autoload
 (defun codex-redraw ()
@@ -2537,8 +2554,7 @@ backend to redisplay.  It is mainly useful for existing alt-screen
 sessions that have stale screen state; new sessions avoid that class of
 failure by default because `codex-use-alt-screen' is nil."
   (interactive)
-  (codex--with-buffer
-   (codex--term-redraw codex-terminal-backend)))
+  (codex--dispatch-tui-action 'redraw))
 
 ;; `codex-command-map' is a `defvar', so package reloads do not rebuild an
 ;; already-existing keymap.  Refresh this binding explicitly for live Emacs
@@ -2549,51 +2565,43 @@ failure by default because `codex-use-alt-screen' is nil."
 (defun codex-edit-previous-message ()
   "Send Esc Esc to walk back and edit previous message."
   (interactive)
-  (if-let ((codex-buffer (codex--get-or-prompt-for-buffer)))
-      (with-current-buffer codex-buffer
-        (codex--term-send-escape codex-terminal-backend)
-        (codex--term-send-escape codex-terminal-backend)
-        (pop-to-buffer codex-buffer))
-    (codex--show-not-running-message)))
+  (codex--dispatch-tui-action 'edit-previous-message))
 
 ;;;###autoload
 (defun codex-queue-followup ()
   "Send Tab to queue a follow-up prompt."
   (interactive)
-  (codex--with-buffer
-   (codex--term-send-string codex-terminal-backend "\t")))
+  (codex--dispatch-tui-action 'queue-followup))
 
 ;;;###autoload
 (defun codex-inject-mid-turn ()
   "Send Enter to inject instructions mid-turn."
   (interactive)
-  (codex--with-buffer
-   (codex--term-send-return codex-terminal-backend)))
+  (codex--dispatch-tui-action 'inject-mid-turn))
 
 ;;;###autoload
 (defun codex-header-search ()
   "Send Ctrl+K to open header search overlay."
   (interactive)
-  (codex--with-buffer
-   (codex--term-send-string codex-terminal-backend "\C-k")))
+  (codex--dispatch-tui-action 'header-search))
 
 ;;;###autoload
 (defun codex-send-1 ()
   "Send \"1\" to the Codex REPL."
   (interactive)
-  (codex--send-digit "1"))
+  (codex--dispatch-tui-action 'send-1))
 
 ;;;###autoload
 (defun codex-send-2 ()
   "Send \"2\" to the Codex REPL."
   (interactive)
-  (codex--send-digit "2"))
+  (codex--dispatch-tui-action 'send-2))
 
 ;;;###autoload
 (defun codex-send-3 ()
   "Send \"3\" to the Codex REPL."
   (interactive)
-  (codex--send-digit "3"))
+  (codex--dispatch-tui-action 'send-3))
 
 ;;;;;; Buffer and window management
 
@@ -2672,6 +2680,33 @@ With prefix ARG, show all Codex instances across all directories."
 
 ;;;; Hook handler
 
+(defconst codex--hook-default-timeout 30
+  "Seconds Codex waits for Emacs hook dispatch before timing out.")
+
+(defconst codex--hook-all-events-matcher "*"
+  "Matcher used for hook types that should receive every event.")
+
+(defconst codex--hook-no-tool-matcher ""
+  "Matcher used for hook types whose Codex payload has no tool name.")
+
+(defconst codex--hook-specs
+  `((:type "Stop" :matcher ,codex--hook-all-events-matcher
+           :timeout ,codex--hook-default-timeout :notify t)
+    (:type "SessionStart" :matcher ,codex--hook-all-events-matcher
+           :timeout ,codex--hook-default-timeout)
+    (:type "PreToolUse" :matcher ,codex--hook-all-events-matcher
+           :timeout ,codex--hook-default-timeout)
+    (:type "PermissionRequest" :matcher ,codex--hook-all-events-matcher
+           :timeout ,codex--hook-default-timeout)
+    (:type "PostToolUse" :matcher ,codex--hook-all-events-matcher
+           :timeout ,codex--hook-default-timeout)
+    (:type "UserPromptSubmit" :matcher ,codex--hook-no-tool-matcher
+           :timeout ,codex--hook-default-timeout))
+  "Supported Codex hook metadata used to generate hooks.json.
+`matcher' follows Codex hook semantics: `*' receives all lifecycle and tool
+events, while UserPromptSubmit uses the empty matcher because it has no tool
+name to match.")
+
 (defun codex-handle-hook (hook-type buffer-name &optional json-data &rest args)
   "Handle hook of HOOK-TYPE for BUFFER-NAME with JSON-DATA and ARGS."
   (let* ((message (list :type hook-type
@@ -2679,26 +2714,51 @@ With prefix ARG, show all Codex instances across all directories."
                         :json-data json-data
                         :args args))
          (hook-response (run-hook-with-args-until-success 'codex-event-hook message)))
-    (when (string= hook-type "Stop")
+    (when (plist-get (codex--hook-spec hook-type) :notify)
       (codex--notify nil))
     hook-response))
 
 (defun codex-handle-hook-from-emacsclient ()
   "Handle a Codex hook using `server-eval-args-left'."
-  (let* ((hook-args (prog1 server-eval-args-left
-                      (setq server-eval-args-left nil)))
-         (hook-type (pop hook-args))
-         (buffer-name (pop hook-args)))
+  (let ((invocation
+         (codex--parse-hook-invocation
+          (prog1 server-eval-args-left
+            (setq server-eval-args-left nil)))))
+    (let ((response (apply #'codex-handle-hook
+                           (plist-get invocation :type)
+                           (plist-get invocation :buffer-name)
+                           (plist-get invocation :json-data)
+                           (plist-get invocation :args))))
+      (if-let* ((response-file (plist-get invocation :response-file)))
+          (codex--write-hook-response response response-file)
+        response))))
+
+(defun codex--parse-hook-invocation (hook-args)
+  "Parse HOOK-ARGS from `server-eval-args-left' into a plist.
+After hook type and buffer name, HOOK-ARGS uses one of two wire formats.  The
+wrapper format is (\"json-file\" JSON-FILE \"response-file\" RESPONSE-FILE .
+ARGS), which keeps large or secret hook JSON out of argv and gives Emacs a file
+for hook responses.  Direct callers may pass (JSON-DATA . ARGS)."
+  (let ((hook-type (pop hook-args))
+        (buffer-name (pop hook-args)))
     (pcase hook-args
       (`("json-file" ,json-file "response-file" ,response-file . ,args)
-       (codex--write-hook-response
-        (apply #'codex-handle-hook
-               hook-type buffer-name
-               (codex--read-hook-json-file json-file)
-               args)
-        response-file))
+       (list :type hook-type
+             :buffer-name buffer-name
+             :json-data (codex--read-hook-json-file json-file)
+             :args args
+             :response-file response-file))
       (`(,json-data . ,args)
-       (apply #'codex-handle-hook hook-type buffer-name json-data args)))))
+       (list :type hook-type
+             :buffer-name buffer-name
+             :json-data json-data
+             :args args)))))
+
+(defun codex--hook-spec (hook-type)
+  "Return the hook spec for HOOK-TYPE."
+  (seq-find (lambda (spec)
+              (string= hook-type (plist-get spec :type)))
+            codex--hook-specs))
 
 (defun codex--read-hook-json-file (file)
   "Return the hook JSON stored in FILE."
@@ -2788,17 +2848,24 @@ Only runs when `codex-enable-hooks' is non-nil."
      (ignore-errors
        (unlock-file ,file))))
 
-(defun codex--ensure-config-toml-hooks ()
-  "Ensure `features.codex_hooks = true' exists in config.toml."
-  (let* ((config-path (expand-file-name codex-hooks-config-path))
-         (dir (file-name-directory config-path)))
+(defun codex--ensure-managed-file (file read-fn transform-fn write-fn)
+  "Update FILE by applying TRANSFORM-FN to content read by READ-FN."
+  (let* ((path (expand-file-name file))
+         (dir (file-name-directory path)))
     (unless (file-directory-p dir)
       (make-directory dir t))
-    (codex--with-file-lock config-path
-      (let* ((content (codex--read-file-string config-path))
-             (updated (codex--config-toml-with-hooks-enabled content)))
+    (codex--with-file-lock path
+      (let* ((content (funcall read-fn path))
+             (updated (funcall transform-fn content)))
         (unless (equal updated content)
-          (codex--write-file-atomically config-path updated))))))
+          (funcall write-fn path updated))))))
+
+(defun codex--ensure-config-toml-hooks ()
+  "Ensure `features.codex_hooks = true' exists in config.toml."
+  (codex--ensure-managed-file codex-hooks-config-path
+                              #'codex--read-file-string
+                              #'codex--config-toml-with-hooks-enabled
+                              #'codex--write-file-atomically))
 
 (defun codex--read-file-string (file)
   "Return FILE contents as a string, or the empty string if FILE is absent."
@@ -2862,67 +2929,96 @@ Only runs when `codex-enable-hooks' is non-nil."
 
 (defun codex--ensure-hooks-json ()
   "Ensure hooks.json has entries pointing to the hook wrapper."
-  (let* ((hooks-path (expand-file-name codex-hooks-json-path))
-         (wrapper-path (codex--hook-wrapper-path))
-         (dir (file-name-directory hooks-path)))
-    (unless (file-directory-p dir)
-      (make-directory dir t))
-    (codex--with-file-lock hooks-path
-      (let* ((existing (when (file-exists-p hooks-path)
-                         (with-temp-buffer
-                           (insert-file-contents hooks-path)
-                           (json-parse-buffer :object-type 'alist))))
-             (existing-hooks (alist-get 'hooks existing))
-             (hook-types '("Stop" "SessionStart" "PreToolUse"
-                           "PermissionRequest" "PostToolUse"
-                           "UserPromptSubmit"))
-             (modified nil))
-        (dolist (hook-type hook-types)
-          (let* ((hook-key (intern hook-type))
-                 (existing-entries (alist-get hook-key existing-hooks))
-                 (our-command (codex--hook-command wrapper-path hook-type))
-                 (legacy-command
-                  (codex--shell-command-from-argv wrapper-path
-                                                  (list hook-type)))
-                 (new-entry (codex--hook-entry hook-type our-command))
-                 (entries (and existing-entries
-                               (seq-into existing-entries 'list)))
-                 (owned-entry-p
-                  (lambda (entry)
-                    (or (codex--hook-entry-command-p entry our-command)
-                        (codex--hook-entry-command-p entry legacy-command))))
-                 (owned-entries (seq-filter owned-entry-p entries))
-                 (other-entries (seq-remove owned-entry-p entries)))
-            (unless (and (= (length owned-entries) 1)
-                         (equal (car owned-entries) new-entry))
-              (setq modified t)
-              (if existing-entries
-                  (setf (alist-get hook-key existing-hooks)
-                        (vconcat (append other-entries (list new-entry))))
-                (push (cons hook-key (vector new-entry)) existing-hooks)))))
-        (when modified
-          (let ((output (if existing
-                            (progn
-                              (setf (alist-get 'hooks existing) existing-hooks)
-                              existing)
-                          `((hooks . ,existing-hooks)))))
-            (codex--write-file-atomically
-             hooks-path
-             (with-temp-buffer
-               (insert (json-encode output))
-               (json-pretty-print-buffer)
-               (buffer-string)))))))))
+  (let ((wrapper-path (codex--hook-wrapper-path)))
+    (codex--ensure-managed-file
+     codex-hooks-json-path
+     #'codex--read-hooks-json
+     (lambda (existing)
+       (codex--hooks-json-with-installed-hooks existing wrapper-path))
+     #'codex--write-hooks-json)))
+
+(defun codex--read-hooks-json (file)
+  "Return parsed hooks JSON from FILE, or nil if FILE is absent."
+  (when (file-exists-p file)
+    (with-temp-buffer
+      (insert-file-contents file)
+      (json-parse-buffer :object-type 'alist))))
+
+(defun codex--write-hooks-json (file content)
+  "Write hooks JSON CONTENT to FILE."
+  (codex--write-file-atomically file (codex--json-pretty-string content)))
+
+(defun codex--json-pretty-string (content)
+  "Return pretty JSON for CONTENT."
+  (with-temp-buffer
+    (insert (json-encode content))
+    (json-pretty-print-buffer)
+    (buffer-string)))
+
+(defun codex--hooks-json-with-installed-hooks (existing wrapper-path)
+  "Return EXISTING hooks JSON with Codex hooks for WRAPPER-PATH."
+  (let ((hooks (copy-tree (alist-get 'hooks existing)))
+        (modified nil))
+    (dolist (spec codex--hook-specs)
+      (pcase-let ((`(,updated-hooks . ,changed)
+                   (codex--merge-hook-entry hooks spec wrapper-path)))
+        (setq hooks updated-hooks
+              modified (or modified changed))))
+    (if (or modified (not existing))
+        (let ((output (copy-tree existing)))
+          (setf (alist-get 'hooks output) hooks)
+          output)
+      existing)))
+
+(defun codex--merge-hook-entry (hooks spec wrapper-path)
+  "Return HOOKS with SPEC installed for WRAPPER-PATH."
+  (let* ((hook-type (plist-get spec :type))
+         (hook-key (intern hook-type))
+         (existing-entries (alist-get hook-key hooks))
+         (new-entry (codex--hook-entry spec
+                                       (codex--hook-command wrapper-path
+                                                            hook-type)))
+         (entries (and existing-entries
+                       (seq-into existing-entries 'list)))
+         (owned-entry-p (lambda (entry)
+                          (codex--owned-hook-entry-p entry wrapper-path
+                                                     hook-type)))
+         (owned-entries (seq-filter owned-entry-p entries))
+         (other-entries (seq-remove owned-entry-p entries)))
+    (if (and (= (length owned-entries) 1)
+             (equal (car owned-entries) new-entry))
+        (cons hooks nil)
+      (if existing-entries
+          (setf (alist-get hook-key hooks)
+                (vconcat (append other-entries (list new-entry))))
+        (push (cons hook-key (vector new-entry)) hooks))
+      (cons hooks t))))
+
+(defun codex--owned-hook-entry-p (entry wrapper-path hook-type)
+  "Return non-nil if ENTRY is owned for WRAPPER-PATH and HOOK-TYPE."
+  (seq-some (lambda (command)
+              (codex--hook-entry-command-p entry command))
+            (codex--owned-hook-commands wrapper-path hook-type)))
+
+(defun codex--owned-hook-commands (wrapper-path hook-type)
+  "Return current and legacy owned commands for WRAPPER-PATH and HOOK-TYPE."
+  (list (codex--hook-command wrapper-path hook-type)
+        (codex--shell-command-from-argv wrapper-path (list hook-type))))
 
 (defun codex--hook-matcher (hook-type)
   "Return the default matcher for HOOK-TYPE."
-  (if (string= hook-type "UserPromptSubmit") "" "*"))
+  (or (plist-get (codex--hook-spec hook-type) :matcher)
+      codex--hook-all-events-matcher))
 
-(defun codex--hook-entry (hook-type command)
-  "Return the hooks.json entry for HOOK-TYPE running COMMAND."
-  `((matcher . ,(codex--hook-matcher hook-type))
-    (hooks . [((type . "command")
-               (command . ,command)
-               (timeout . 30))])))
+(defun codex--hook-entry (spec command)
+  "Return the hooks.json entry for SPEC running COMMAND."
+  (let ((hook-spec (if (stringp spec)
+                       (codex--hook-spec spec)
+                     spec)))
+    `((matcher . ,(plist-get hook-spec :matcher))
+      (hooks . [((type . "command")
+                 (command . ,command)
+                 (timeout . ,(plist-get hook-spec :timeout)))]))))
 
 (defun codex--hook-entry-command-p (entry command)
   "Return non-nil if hooks.json ENTRY runs COMMAND."

@@ -1,11 +1,21 @@
 ;;; codex-test.el --- Tests for codex.el -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; Tests for the pure-logic functions in codex.el.
+;; Tests for Codex buffer parsing, CLI argument building, hooks integration,
+;; terminal backend dispatch, prompt autosuggestions, and display remapping.
 
 ;;; Code:
 (require 'ert)
 (require 'codex)
+
+(defvar eat-term-inside-emacs)
+(defvar eat-term-name)
+(defvar eat-term-scrollback-size)
+(defvar eat-term-shell-integration-directory)
+(defvar eat-terminal)
+(defvar vterm-max-scrollback)
+(defvar vterm-term-environment-variable)
+(declare-function eat-term-get-suitable-term-name "eat" (&optional display))
 
 (defun codex-test--noop-target (&rest _args)
   "No-op target used by advice lifecycle tests."
@@ -14,6 +24,55 @@
 (defun codex-test--pass-through-advice (orig-fun &rest args)
   "Advice helper that delegates to ORIG-FUN with ARGS."
   (apply orig-fun args))
+
+(defmacro codex-test--with-temp-hooks-json (path &rest body)
+  "Bind PATH to a temporary hooks.json file while running BODY."
+  (declare (indent 1))
+  `(let* ((temp-dir (make-temp-file "codex-test-hooks" t))
+          (,path (expand-file-name "hooks.json" temp-dir))
+          (codex-hooks-json-path ,path)
+          (codex-enable-hooks t))
+     (unwind-protect
+         (progn ,@body)
+       (delete-directory temp-dir t))))
+
+(defun codex-test--read-json-file (file)
+  "Return parsed JSON from FILE."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (json-parse-buffer :object-type 'alist)))
+
+(defun codex-test--ensure-hooks-json (&optional wrapper)
+  "Install hooks.json with optional WRAPPER and return parsed content."
+  (cl-letf (((symbol-function 'codex--hook-wrapper-path)
+             (lambda () (or wrapper "/mock/path/codex-hook-wrapper"))))
+    (codex--ensure-hooks-json)
+    (codex-test--read-json-file codex-hooks-json-path)))
+
+(cl-defmacro codex-test--with-autosuggestion-buffer
+    ((&key insert cursor
+           (placeholders ''("Summarize recent commits"))
+           (history-path '"/tmp/codex-test-missing-history.jsonl")
+           (enable t)
+           read-only)
+     &rest body)
+  "Create a Codex prompt autosuggestion fixture for BODY."
+  (declare (indent 1))
+  `(with-temp-buffer
+     (rename-buffer "*codex:/tmp/*" t)
+     (insert ,@insert)
+     (let ((codex-terminal-backend 'eat)
+           (codex-enable-prompt-autosuggestions ,enable)
+           (codex-prompt-autosuggestion-placeholders ,placeholders)
+           (codex-prompt-autosuggestion-history-path ,history-path)
+           (codex--prompt-autosuggestion-history-state nil)
+           (cursor ,cursor))
+       (cl-letf (((symbol-function 'codex--terminal-cursor-position)
+                  (lambda () cursor))
+                 ,@(when read-only
+                     `(((symbol-function 'codex--term-in-read-only-p)
+                        (lambda (_backend) ,read-only)))))
+         ,@body))))
 
 ;;;; Buffer name parsing tests
 
@@ -254,87 +313,47 @@
 
 (ert-deftest codex-test-hooks-json-creates-new-file ()
   "Test that hooks.json is created from scratch."
-  (let* ((temp-dir (make-temp-file "codex-test-hooks" t))
-         (temp-file (expand-file-name "hooks.json" temp-dir))
-         (codex-hooks-json-path temp-file)
-         (codex-enable-hooks t))
-    (unwind-protect
-        (progn
-          ;; Mock the hook wrapper path
-          (cl-letf (((symbol-function 'codex--hook-wrapper-path)
-                     (lambda () "/mock/path/codex-hook-wrapper")))
-            (codex--ensure-hooks-json)
-            (should (file-exists-p temp-file))
-            (let ((content (with-temp-buffer
-                             (insert-file-contents temp-file)
-                             (json-parse-buffer :object-type 'alist))))
-              (should (alist-get 'hooks content))
-              ;; Check all hook types are present
-              (let ((hooks (alist-get 'hooks content)))
-                (should (alist-get 'Stop hooks))
-                (should (alist-get 'SessionStart hooks))
-                (should (alist-get 'PreToolUse hooks))
-                (should (alist-get 'PermissionRequest hooks))
-                (should (alist-get 'PostToolUse hooks))
-                (should (alist-get 'UserPromptSubmit hooks))))))
-      (delete-directory temp-dir t))))
+  (codex-test--with-temp-hooks-json temp-file
+    (let* ((content (codex-test--ensure-hooks-json))
+           (hooks (alist-get 'hooks content)))
+      (should (file-exists-p temp-file))
+      (should hooks)
+      (dolist (spec codex--hook-specs)
+        (should (alist-get (intern (plist-get spec :type)) hooks))))))
 
 (ert-deftest codex-test-hooks-json-preserves-existing ()
   "Test that existing hooks.json entries are preserved."
-  (let* ((temp-dir (make-temp-file "codex-test-hooks" t))
-         (temp-file (expand-file-name "hooks.json" temp-dir))
-         (codex-hooks-json-path temp-file)
-         (codex-enable-hooks t))
-    (unwind-protect
-        (progn
-          ;; Write an existing hooks.json with a user hook
-          (with-temp-file temp-file
-            (insert (json-encode
-                     '((hooks . ((Stop . [((matcher . "*")
-                                           (hooks . [((type . "command")
-                                                      (command . "/usr/bin/my-custom-hook Stop")
-                                                      (timeout . 10))]))])))))))
-          (cl-letf (((symbol-function 'codex--hook-wrapper-path)
-                     (lambda () "/mock/path/codex-hook-wrapper")))
-            (codex--ensure-hooks-json)
-            (let* ((content (with-temp-buffer
-                              (insert-file-contents temp-file)
-                              (json-parse-buffer :object-type 'alist)))
-                   (hooks (alist-get 'hooks content))
-                   (stop-hooks (alist-get 'Stop hooks)))
-              ;; Should have 2 entries: existing + ours
-              (should (= 2 (length stop-hooks)))
-              ;; Verify the user's hook is preserved
-              (let* ((first-entry (aref stop-hooks 0))
-                     (first-hooks (alist-get 'hooks first-entry))
-                     (first-cmd (alist-get 'command (aref first-hooks 0))))
-                (should (string= first-cmd "/usr/bin/my-custom-hook Stop"))))))
-      (delete-directory temp-dir t))))
+  (codex-test--with-temp-hooks-json temp-file
+    (with-temp-file temp-file
+      (insert (json-encode
+               '((hooks . ((Stop . [((matcher . "*")
+                                     (hooks . [((type . "command")
+                                                (command . "/usr/bin/my-custom-hook Stop")
+                                                (timeout . 10))]))])))))))
+    (let* ((content (codex-test--ensure-hooks-json))
+           (hooks (alist-get 'hooks content))
+           (stop-hooks (alist-get 'Stop hooks)))
+      (should (= 2 (length stop-hooks)))
+      (let* ((first-entry (aref stop-hooks 0))
+             (first-hooks (alist-get 'hooks first-entry))
+             (first-cmd (alist-get 'command (aref first-hooks 0))))
+        (should (string= first-cmd "/usr/bin/my-custom-hook Stop"))))))
 
 (ert-deftest codex-test-hooks-json-quotes-wrapper-command ()
   "Test that generated hook commands shell-quote wrapper paths with spaces."
-  (let* ((temp-dir (make-temp-file "codex-test-hooks" t))
-         (temp-file (expand-file-name "hooks.json" temp-dir))
-         (codex-hooks-json-path temp-file)
-         (codex-enable-hooks t)
-         (codex-emacsclient-program "/mock path/emacsclient")
+  (codex-test--with-temp-hooks-json temp-file
+    (let ((codex-emacsclient-program "/mock path/emacsclient")
          (server-name "mock server")
          (server-use-tcp nil))
-    (unwind-protect
-        (cl-letf (((symbol-function 'codex--hook-wrapper-path)
-                   (lambda () "/mock path/codex hook-wrapper")))
-          (codex--ensure-hooks-json)
-          (let* ((content (with-temp-buffer
-                            (insert-file-contents temp-file)
-                            (json-parse-buffer :object-type 'alist)))
-                 (hooks (alist-get 'hooks content))
-                 (stop-entry (aref (alist-get 'Stop hooks) 0))
-                 (command (alist-get 'command (aref (alist-get 'hooks stop-entry) 0))))
-            (should (equal command
-                           (codex--hook-command
-                            "/mock path/codex hook-wrapper"
-                            "Stop")))))
-      (delete-directory temp-dir t))))
+      (let* ((content (codex-test--ensure-hooks-json
+                       "/mock path/codex hook-wrapper"))
+             (hooks (alist-get 'hooks content))
+             (stop-entry (aref (alist-get 'Stop hooks) 0))
+             (command (alist-get 'command (aref (alist-get 'hooks stop-entry) 0))))
+        (should (equal command
+                       (codex--hook-command
+                        "/mock path/codex hook-wrapper"
+                        "Stop")))))))
 
 ;;;; Buffer display name tests
 
@@ -515,93 +534,56 @@
 
 (ert-deftest codex-test-hooks-json-idempotent ()
   "Test that running ensure-hooks-json twice doesn't duplicate entries."
-  (let* ((temp-dir (make-temp-file "codex-test-hooks" t))
-         (temp-file (expand-file-name "hooks.json" temp-dir))
-         (codex-hooks-json-path temp-file)
-         (codex-enable-hooks t))
-    (unwind-protect
-        (cl-letf (((symbol-function 'codex--hook-wrapper-path)
-                   (lambda () "/mock/path/codex-hook-wrapper")))
-          (codex--ensure-hooks-json)
-          (codex--ensure-hooks-json)
-          (let* ((content (with-temp-buffer
-                            (insert-file-contents temp-file)
-                            (json-parse-buffer :object-type 'alist)))
-                 (hooks (alist-get 'hooks content))
-                 (stop-hooks (alist-get 'Stop hooks)))
-            ;; Each hook type should have exactly 1 entry, not 2
-            (should (= 1 (length stop-hooks)))
-            (should (= 1 (length (alist-get 'SessionStart hooks))))
-            (should (= 1 (length (alist-get 'PreToolUse hooks))))
-            (should (= 1 (length (alist-get 'PermissionRequest hooks))))
-            (should (= 1 (length (alist-get 'PostToolUse hooks))))
-            (should (= 1 (length (alist-get 'UserPromptSubmit hooks))))))
-      (delete-directory temp-dir t))))
+  (codex-test--with-temp-hooks-json temp-file
+    (codex-test--ensure-hooks-json)
+    (let* ((content (codex-test--ensure-hooks-json))
+           (hooks (alist-get 'hooks content)))
+      (dolist (spec codex--hook-specs)
+        (should (= 1 (length (alist-get (intern (plist-get spec :type))
+                                        hooks))))))))
 
 (ert-deftest codex-test-hooks-json-repairs-stale-owned-entry ()
   "Test that stale generated hook entries are repaired."
-  (let* ((temp-dir (make-temp-file "codex-test-hooks" t))
-         (temp-file (expand-file-name "hooks.json" temp-dir))
-         (codex-hooks-json-path temp-file)
-         (codex-enable-hooks t)
-         (codex-emacsclient-program "/mock/emacsclient")
-         (server-name "mock-server")
-         (server-use-tcp nil)
-         (wrapper "/mock/path/codex-hook-wrapper")
-         (command (codex--hook-command wrapper "Stop")))
-    (unwind-protect
-        (progn
-          (with-temp-file temp-file
-            (insert (json-encode
-                     `((hooks . ((Stop . [((matcher . "stale")
-                                            (hooks . [((type . "command")
-                                                       (command . ,command)
-                                                       (timeout . 5))]))])))))))
-          (cl-letf (((symbol-function 'codex--hook-wrapper-path)
-                     (lambda () wrapper)))
-            (codex--ensure-hooks-json)
-            (let* ((content (with-temp-buffer
-                              (insert-file-contents temp-file)
-                              (json-parse-buffer :object-type 'alist)))
-                   (hooks (alist-get 'hooks content))
-                   (stop-hooks (alist-get 'Stop hooks)))
-              (should (= 1 (length stop-hooks)))
-              (should (equal (aref stop-hooks 0)
-                             (codex--hook-entry "Stop" command))))))
-      (delete-directory temp-dir t))))
+  (codex-test--with-temp-hooks-json temp-file
+    (let* ((codex-emacsclient-program "/mock/emacsclient")
+           (server-name "mock-server")
+           (server-use-tcp nil)
+           (wrapper "/mock/path/codex-hook-wrapper")
+           (command (codex--hook-command wrapper "Stop")))
+      (with-temp-file temp-file
+        (insert (json-encode
+                 `((hooks . ((Stop . [((matcher . "stale")
+                                        (hooks . [((type . "command")
+                                                   (command . ,command)
+                                                   (timeout . 5))]))])))))))
+      (let* ((content (codex-test--ensure-hooks-json wrapper))
+             (hooks (alist-get 'hooks content))
+             (stop-hooks (alist-get 'Stop hooks)))
+        (should (= 1 (length stop-hooks)))
+        (should (equal (aref stop-hooks 0)
+                       (codex--hook-entry "Stop" command)))))))
 
 (ert-deftest codex-test-hooks-json-replaces-legacy-owned-entry ()
   "Test that pre-server-arg generated hook entries are replaced."
-  (let* ((temp-dir (make-temp-file "codex-test-hooks" t))
-         (temp-file (expand-file-name "hooks.json" temp-dir))
-         (codex-hooks-json-path temp-file)
-         (codex-enable-hooks t)
-         (codex-emacsclient-program "/mock/emacsclient")
-         (server-name "mock-server")
-         (server-use-tcp nil)
-         (wrapper "/mock/path/codex-hook-wrapper")
-         (legacy-command (codex--shell-command-from-argv wrapper '("Stop")))
-         (command (codex--hook-command wrapper "Stop")))
-    (unwind-protect
-        (progn
-          (with-temp-file temp-file
-            (insert (json-encode
-                     `((hooks . ((Stop . [((matcher . "*")
-                                            (hooks . [((type . "command")
-                                                       (command . ,legacy-command)
-                                                       (timeout . 30))]))])))))))
-          (cl-letf (((symbol-function 'codex--hook-wrapper-path)
-                     (lambda () wrapper)))
-            (codex--ensure-hooks-json)
-            (let* ((content (with-temp-buffer
-                              (insert-file-contents temp-file)
-                              (json-parse-buffer :object-type 'alist)))
-                   (hooks (alist-get 'hooks content))
-                   (stop-hooks (alist-get 'Stop hooks)))
-              (should (= 1 (length stop-hooks)))
-              (should (equal (aref stop-hooks 0)
-                             (codex--hook-entry "Stop" command))))))
-      (delete-directory temp-dir t))))
+  (codex-test--with-temp-hooks-json temp-file
+    (let* ((codex-emacsclient-program "/mock/emacsclient")
+           (server-name "mock-server")
+           (server-use-tcp nil)
+           (wrapper "/mock/path/codex-hook-wrapper")
+           (legacy-command (codex--shell-command-from-argv wrapper '("Stop")))
+           (command (codex--hook-command wrapper "Stop")))
+      (with-temp-file temp-file
+        (insert (json-encode
+                 `((hooks . ((Stop . [((matcher . "*")
+                                        (hooks . [((type . "command")
+                                                   (command . ,legacy-command)
+                                                   (timeout . 30))]))])))))))
+      (let* ((content (codex-test--ensure-hooks-json wrapper))
+             (hooks (alist-get 'hooks content))
+             (stop-hooks (alist-get 'Stop hooks)))
+        (should (= 1 (length stop-hooks)))
+        (should (equal (aref stop-hooks 0)
+                       (codex--hook-entry "Stop" command)))))))
 
 ;;;; config.toml edge case tests
 
@@ -827,27 +809,15 @@
 
 (ert-deftest codex-test-hooks-json-user-prompt-submit-matcher ()
   "Test that UserPromptSubmit hook uses empty string matcher."
-  (let* ((temp-dir (make-temp-file "codex-test-hooks" t))
-         (temp-file (expand-file-name "hooks.json" temp-dir))
-         (codex-hooks-json-path temp-file)
-         (codex-enable-hooks t))
-    (unwind-protect
-        (cl-letf (((symbol-function 'codex--hook-wrapper-path)
-                   (lambda () "/mock/path/codex-hook-wrapper")))
-          (codex--ensure-hooks-json)
-          (let* ((content (with-temp-buffer
-                            (insert-file-contents temp-file)
-                            (json-parse-buffer :object-type 'alist)))
-                 (hooks (alist-get 'hooks content))
-                 (ups-entry (aref (alist-get 'UserPromptSubmit hooks) 0))
-                 (permission-entry (aref (alist-get 'PermissionRequest hooks) 0))
-                 (stop-entry (aref (alist-get 'Stop hooks) 0)))
-            ;; UserPromptSubmit uses "" matcher
-            (should (equal (alist-get 'matcher ups-entry) ""))
-            ;; Other hooks use "*" matcher
-            (should (equal (alist-get 'matcher permission-entry) "*"))
-            (should (equal (alist-get 'matcher stop-entry) "*"))))
-      (delete-directory temp-dir t))))
+  (codex-test--with-temp-hooks-json temp-file
+    (let* ((content (codex-test--ensure-hooks-json))
+           (hooks (alist-get 'hooks content))
+           (ups-entry (aref (alist-get 'UserPromptSubmit hooks) 0))
+           (permission-entry (aref (alist-get 'PermissionRequest hooks) 0))
+           (stop-entry (aref (alist-get 'Stop hooks) 0)))
+      (should (equal (alist-get 'matcher ups-entry) ""))
+      (should (equal (alist-get 'matcher permission-entry) "*"))
+      (should (equal (alist-get 'matcher stop-entry) "*")))))
 
 ;;;; Find codex buffers tests
 
@@ -976,109 +946,76 @@
 
 (ert-deftest codex-test-prompt-autosuggestion-context-placeholder ()
   "Prompt autosuggestion context recognizes Codex placeholders."
-  (with-temp-buffer
-    (rename-buffer "*codex:/tmp/*" t)
-    (insert "› Summarize recent commits   ")
-    (let ((codex-terminal-backend 'eat)
-          (codex-prompt-autosuggestion-placeholders
-           '("Summarize recent commits"))
-          (codex-prompt-autosuggestion-history-path
-           "/tmp/codex-test-missing-history.jsonl")
-          (cursor (+ (point-min) 2)))
-      (cl-letf (((symbol-function 'codex--terminal-cursor-position)
-                 (lambda () cursor)))
-        (let ((context (codex--prompt-autosuggestion-context)))
-          (should (equal (plist-get context :beg) cursor))
-          (should (equal (plist-get context :end) 27))
-          (should (equal (plist-get context :suffix)
-                         "Summarize recent commits")))))))
+  (let ((suggestion "Summarize recent commits"))
+    (codex-test--with-autosuggestion-buffer
+        (:insert ("› " suggestion "   ")
+         :cursor (+ (point-min) 2)
+         :placeholders (list suggestion))
+      (let* ((suggestion-start (+ (point-min) 2))
+             (suggestion-end (+ suggestion-start (length suggestion)))
+             (context (codex--prompt-autosuggestion-context)))
+        (should (equal (plist-get context :beg) suggestion-start))
+        (should (equal (plist-get context :end) suggestion-end))
+        (should (equal (plist-get context :suffix) suggestion))))))
 
 (ert-deftest codex-test-prompt-autosuggestion-context-history ()
   "Prompt autosuggestion context recognizes history-backed completions."
-  (let ((history-file (make-temp-file "codex-history" nil ".jsonl")))
+  (let ((history-file (make-temp-file "codex-history" nil ".jsonl"))
+        (history-entry "done, it worked"))
     (unwind-protect
         (progn
           (with-temp-file history-file
-            (insert "{\"text\":\"done, it worked\"}\n"))
-          (setq codex--prompt-autosuggestion-history-cache nil)
-          (setq codex--prompt-autosuggestion-history-cache-file nil)
-          (setq codex--prompt-autosuggestion-history-cache-mtime nil)
-          (with-temp-buffer
-            (rename-buffer "*codex:/tmp/*" t)
-            (insert "› do" "ne, it worked   ")
-            (let ((codex-terminal-backend 'eat)
-                  (codex-prompt-autosuggestion-placeholders nil)
-                  (codex-prompt-autosuggestion-history-path history-file)
-                  (cursor (+ (point-min) 4)))
-              (cl-letf (((symbol-function 'codex--terminal-cursor-position)
-                         (lambda () cursor)))
-                (let ((context (codex--prompt-autosuggestion-context)))
-                  (should (equal (plist-get context :prefix) "do"))
-                  (should (equal (plist-get context :suffix)
-                                 "ne, it worked")))))))
+            (insert (json-encode `((text . ,history-entry))) "\n"))
+          (codex-test--with-autosuggestion-buffer
+              (:insert ("› do" "ne, it worked   ")
+               :cursor (+ (point-min) 4)
+               :placeholders nil
+               :history-path history-file)
+            (let ((context (codex--prompt-autosuggestion-context)))
+              (should (equal (plist-get context :prefix) "do"))
+              (should (equal (plist-get context :suffix) "ne, it worked")))))
       (delete-file history-file))))
 
 (ert-deftest codex-test-update-prompt-autosuggestion-uses-overlay ()
   "Prompt autosuggestion styling uses a buffer-local overlay."
-  (with-temp-buffer
-    (rename-buffer "*codex:/tmp/*" t)
-    (insert "› Summarize recent commits   ")
-    (let ((codex-terminal-backend 'eat)
-          (codex-enable-prompt-autosuggestions t)
-          (codex-prompt-autosuggestion-placeholders
-           '("Summarize recent commits"))
-          (codex-prompt-autosuggestion-history-path
-           "/tmp/codex-test-missing-history.jsonl")
-          (cursor (+ (point-min) 2)))
-      (cl-letf (((symbol-function 'codex--terminal-cursor-position)
-                 (lambda () cursor)))
+  (let ((suggestion "Summarize recent commits"))
+    (codex-test--with-autosuggestion-buffer
+        (:insert ("› " suggestion "   ")
+         :cursor (+ (point-min) 2)
+         :placeholders (list suggestion))
+      (let ((suggestion-start (+ (point-min) 2)))
         (codex--update-prompt-autosuggestion)
         (should (overlayp codex--prompt-autosuggestion-overlay))
         (should (equal (overlay-start codex--prompt-autosuggestion-overlay)
-                       cursor))
+                       suggestion-start))
         (should (equal (overlay-get codex--prompt-autosuggestion-overlay 'face)
                        'codex-prompt-autosuggestion-face))))))
 
 (ert-deftest codex-test-update-prompt-autosuggestion-syncs-point ()
   "Prompt autosuggestion styling keeps point at the input cursor."
-  (with-temp-buffer
-    (rename-buffer "*codex:/tmp/*" t)
-    (insert "› Summarize recent commits   \n  gpt-5.5 xhigh · /tmp")
-    (goto-char (point-max))
-    (let ((codex-terminal-backend 'eat)
-          (codex-enable-prompt-autosuggestions t)
-          (codex-prompt-autosuggestion-placeholders
-           '("Summarize recent commits"))
-          (codex-prompt-autosuggestion-history-path
-           "/tmp/codex-test-missing-history.jsonl")
-          (cursor (+ (point-min) 2)))
-      (cl-letf (((symbol-function 'codex--terminal-cursor-position)
-                 (lambda () cursor))
-                ((symbol-function 'codex--term-in-read-only-p)
-                 (lambda (_backend) nil)))
+  (let ((suggestion "Summarize recent commits"))
+    (codex-test--with-autosuggestion-buffer
+        (:insert ("› " suggestion "   \n  gpt-5.5 xhigh · /tmp")
+         :cursor (+ (point-min) 2)
+         :placeholders (list suggestion)
+         :read-only nil)
+      (goto-char (point-max))
+      (let ((suggestion-start (+ (point-min) 2)))
         (codex--update-prompt-autosuggestion)
-        (should (= (point) cursor))
+        (should (= (point) suggestion-start))
         (should-not (buffer-local-value 'cursor-in-non-selected-windows
                                         (current-buffer)))))))
 
 (ert-deftest codex-test-update-prompt-autosuggestion-keeps-read-only-point ()
   "Read-only Codex buffers do not jump point to autosuggestions."
-  (with-temp-buffer
-    (rename-buffer "*codex:/tmp/*" t)
-    (insert "› Summarize recent commits   \n  gpt-5.5 xhigh · /tmp")
-    (goto-char (point-max))
-    (let ((codex-terminal-backend 'eat)
-          (codex-enable-prompt-autosuggestions t)
-          (codex-prompt-autosuggestion-placeholders
-           '("Summarize recent commits"))
-          (codex-prompt-autosuggestion-history-path
-           "/tmp/codex-test-missing-history.jsonl")
-          (cursor (+ (point-min) 2))
-          (old-point (point)))
-      (cl-letf (((symbol-function 'codex--terminal-cursor-position)
-                 (lambda () cursor))
-                ((symbol-function 'codex--term-in-read-only-p)
-                 (lambda (_backend) t)))
+  (let ((suggestion "Summarize recent commits"))
+    (codex-test--with-autosuggestion-buffer
+        (:insert ("› " suggestion "   \n  gpt-5.5 xhigh · /tmp")
+         :cursor (+ (point-min) 2)
+         :placeholders (list suggestion)
+         :read-only t)
+      (goto-char (point-max))
+      (let ((old-point (point)))
         (codex--update-prompt-autosuggestion)
         (should (= (point) old-point))))))
 
@@ -1089,26 +1026,19 @@
 
 (ert-deftest codex-test-accept-prompt-autosuggestion-sends-suffix ()
   "Accepting a prompt autosuggestion sends only the suggested suffix."
-  (with-temp-buffer
-    (rename-buffer "*codex:/tmp/*" t)
-    (insert "› Su" "mmarize recent commits   ")
-    (let ((codex-terminal-backend 'eat)
-          (codex-enable-prompt-autosuggestions t)
-          (codex-prompt-autosuggestion-placeholders
-           '("Summarize recent commits"))
-          (codex-prompt-autosuggestion-history-path
-           "/tmp/codex-test-missing-history.jsonl")
-          (cursor (+ (point-min) 4))
-          sent)
-      (cl-letf (((symbol-function 'codex--terminal-cursor-position)
-                 (lambda () cursor))
-                ((symbol-function 'codex--term-send-string)
-                 (lambda (backend string)
-                   (setq sent (list backend string)))))
+  (let ((suggestion "Summarize recent commits")
+        sent)
+    (codex-test--with-autosuggestion-buffer
+        (:insert ("› Su" "mmarize recent commits   ")
+         :cursor (+ (point-min) 4)
+         :placeholders (list suggestion))
+      (cl-letf (((symbol-function 'codex--term-send-action)
+                 (lambda (backend action &optional payload)
+                   (setq sent (list backend action payload)))))
         (should (codex-accept-prompt-autosuggestion))
-        (should (equal sent '(eat "mmarize recent commits")))))))
+        (should (equal sent '(eat :string "mmarize recent commits")))))))
 
-(ert-deftest codex-test-eat-send-tab-falls-back-without-autosuggestion ()
+(ert-deftest codex-test-eat-tab-action-falls-back-without-autosuggestion ()
   "TAB sends a raw terminal tab when no autosuggestion is accepted."
   (let (sent)
     (cl-letf (((symbol-function 'codex-accept-prompt-autosuggestion)
@@ -1116,18 +1046,18 @@
               ((symbol-function 'eat-self-input)
                (lambda (n e)
                  (setq sent (list n e)))))
-      (codex--eat-send-tab)
+      (codex--term-send-action 'eat :tab)
       (should (equal sent (list 1 ?\t))))))
 
-(ert-deftest codex-test-eat-keymap-binds-tab-to-autosuggestion-handler ()
-  "Eat Codex buffers bind TAB to the autosuggestion-aware handler."
+(ert-deftest codex-test-keymap-binds-tab-to-terminal-handler ()
+  "Codex terminal buffers bind TAB to the backend-neutral handler."
   (with-temp-buffer
     (let ((codex-newline-keybinding-style 'newline-on-shift-return))
       (codex--term-setup-keymap 'eat)
       (should (eq (lookup-key (current-local-map) (kbd "TAB"))
-                  #'codex--eat-send-tab))
+                  #'codex--terminal-send-tab))
       (should (eq (lookup-key (current-local-map) [tab])
-                  #'codex--eat-send-tab)))))
+                  #'codex--terminal-send-tab)))))
 
 (ert-deftest codex-test-start-subcommand-includes-cli-options ()
   "Subcommands inherit configured CLI options and extra program switches."
@@ -1180,32 +1110,31 @@
 (ert-deftest codex-test-edit-previous-message-sends-double-escape ()
   "Editing the previous message sends two escape key presses."
   (let ((buf (generate-new-buffer "*codex:/tmp/project/*"))
-        (escape-count 0))
+        actions)
     (unwind-protect
         (cl-letf (((symbol-function 'codex--get-or-prompt-for-buffer)
                    (lambda () buf))
-                  ((symbol-function 'codex--term-send-escape)
-                   (lambda (_backend) (setq escape-count (1+ escape-count))))
-                  ((symbol-function 'pop-to-buffer)
+                  ((symbol-function 'codex--term-send-action)
+                   (lambda (_backend action &optional _payload)
+                     (push action actions)))
+                  ((symbol-function 'display-buffer)
                    (lambda (&rest _) nil)))
           (with-current-buffer buf
             (let ((codex-terminal-backend 'eat))
               (codex-edit-previous-message)))
-          (should (= escape-count 2)))
+          (should (equal (nreverse actions) '(:escape :escape))))
       (kill-buffer buf))))
 
 (ert-deftest codex-test-send-digits-do-not-submit ()
   "Digit helpers send only the digit key, not Return."
   (let ((buf (generate-new-buffer "*codex:/tmp/project/*"))
-        sent
-        submitted)
+        actions)
     (unwind-protect
         (cl-letf (((symbol-function 'codex--get-or-prompt-for-buffer)
                    (lambda () buf))
-                  ((symbol-function 'codex--term-send-string)
-                   (lambda (_backend string) (push string sent)))
-                  ((symbol-function 'codex--term-send-return)
-                   (lambda (&rest _) (setq submitted t)))
+                  ((symbol-function 'codex--term-send-action)
+                   (lambda (_backend action &optional payload)
+                     (push (list action payload) actions)))
                   ((symbol-function 'display-buffer)
                    (lambda (&rest _) nil)))
           (with-current-buffer buf
@@ -1213,25 +1142,26 @@
               (codex-send-1)
               (codex-send-2)
               (codex-send-3)))
-          (should (equal (nreverse sent) '("1" "2" "3")))
-          (should-not submitted))
+          (should (equal (nreverse actions)
+                         '((:string "1") (:string "2") (:string "3")))))
       (kill-buffer buf))))
 
 (ert-deftest codex-test-redraw-dispatches-to-terminal-backend ()
   "Redrawing dispatches through the terminal backend abstraction."
   (let ((buf (generate-new-buffer "*codex:/tmp/project/*"))
-        redrawn)
+        sent)
     (unwind-protect
         (cl-letf (((symbol-function 'codex--get-or-prompt-for-buffer)
                    (lambda () buf))
-                  ((symbol-function 'codex--term-redraw)
-                   (lambda (backend) (setq redrawn backend)))
+                  ((symbol-function 'codex--term-send-action)
+                   (lambda (backend action &optional payload)
+                     (setq sent (list backend action payload))))
                   ((symbol-function 'display-buffer)
                    (lambda (&rest _) nil)))
           (with-current-buffer buf
             (let ((codex-terminal-backend 'eat))
               (codex-redraw)))
-          (should (eq redrawn 'eat)))
+          (should (equal sent '(eat :redraw nil))))
       (kill-buffer buf))))
 
 (ert-deftest codex-test-agent-navigation-dispatches-to-terminal-backend ()
@@ -1241,10 +1171,9 @@
     (unwind-protect
         (cl-letf (((symbol-function 'codex--get-or-prompt-for-buffer)
                    (lambda () buf))
-                  ((symbol-function 'codex--term-send-previous-agent)
-                   (lambda (backend) (push (list :previous backend) sent)))
-                  ((symbol-function 'codex--term-send-next-agent)
-                   (lambda (backend) (push (list :next backend) sent)))
+                  ((symbol-function 'codex--term-send-action)
+                   (lambda (backend action &optional _payload)
+                     (push (list action backend) sent)))
                   ((symbol-function 'display-buffer)
                    (lambda (&rest _) nil)))
           (with-current-buffer buf
@@ -1252,7 +1181,7 @@
               (codex-previous-agent)
               (codex-next-agent)))
           (should (equal (nreverse sent)
-                         '((:previous eat) (:next eat)))))
+                         '((:previous-agent eat) (:next-agent eat)))))
       (kill-buffer buf))))
 
 (ert-deftest codex-test-eat-keymap-forwards-agent-navigation ()
@@ -1284,8 +1213,8 @@
           (cl-letf (((symbol-function 'eat-term-send-string)
                      (lambda (terminal string)
                        (push (list terminal string) sent))))
-            (codex--term-send-previous-agent 'eat)
-            (codex--term-send-next-agent 'eat)
+            (codex--term-send-action 'eat :previous-agent)
+            (codex--term-send-action 'eat :next-agent)
             (should (equal (nreverse sent)
                            '((terminal "\e[1;3D")
                              (terminal "\e[1;3C"))))))
@@ -1298,8 +1227,8 @@
   (let (sent)
     (cl-letf (((symbol-function 'vterm-send-key)
                (lambda (&rest args) (push args sent))))
-      (codex--term-send-previous-agent 'vterm)
-      (codex--term-send-next-agent 'vterm)
+      (codex--term-send-action 'vterm :previous-agent)
+      (codex--term-send-action 'vterm :next-agent)
       (should (equal (nreverse sent)
                      '(("<left>" nil t)
                        ("<right>" nil t)))))))
@@ -1385,12 +1314,12 @@
         (codex-remap-light-backgrounds nil)
         (codex-startup-delay 0))
     (with-temp-buffer
-      (let ((eat-term-scrollback-size 131072))
-        (cl-letf (((symbol-function 'codex--ensure-eat)
-                   #'ignore))
-          (codex--term-configure 'eat))
-        (should (null (buffer-local-value 'eat-term-scrollback-size
-                                          (current-buffer))))))))
+      (setq-local eat-term-scrollback-size 131072)
+      (cl-letf (((symbol-function 'codex--ensure-eat)
+                 #'ignore))
+        (codex--term-configure 'eat))
+      (should (null (buffer-local-value 'eat-term-scrollback-size
+                                        (current-buffer)))))))
 
 (ert-deftest codex-test-eat-configure-honors-scrollback-size ()
   "Eat Codex buffers honor an explicitly bounded scrollback size."
@@ -1398,13 +1327,13 @@
         (codex-remap-light-backgrounds nil)
         (codex-startup-delay 0))
     (with-temp-buffer
-      (let ((eat-term-scrollback-size nil))
-        (cl-letf (((symbol-function 'codex--ensure-eat)
-                   #'ignore))
-          (codex--term-configure 'eat))
-        (should (= (buffer-local-value 'eat-term-scrollback-size
-                                       (current-buffer))
-                   4096))))))
+      (setq-local eat-term-scrollback-size nil)
+      (cl-letf (((symbol-function 'codex--ensure-eat)
+                 #'ignore))
+        (codex--term-configure 'eat))
+      (should (= (buffer-local-value 'eat-term-scrollback-size
+                                     (current-buffer))
+                 4096)))))
 
 (ert-deftest codex-test-eat-configure-hides-non-selected-window-cursor ()
   "Eat Codex buffers hide cursors in non-selected windows."
@@ -1437,13 +1366,13 @@
         (codex-remap-light-backgrounds nil)
         (codex-startup-delay 0))
     (with-temp-buffer
-      (let ((eat-term-name 'eat-default))
-        (cl-letf (((symbol-function 'codex--ensure-eat)
-                   #'ignore))
-          (codex--term-configure 'eat))
-        (should (equal (buffer-local-value 'eat-term-name
-                                           (current-buffer))
-                       "xterm-256color"))))))
+      (setq-local eat-term-name 'eat-default)
+      (cl-letf (((symbol-function 'codex--ensure-eat)
+                 #'ignore))
+        (codex--term-configure 'eat))
+      (should (equal (buffer-local-value 'eat-term-name
+                                         (current-buffer))
+                     "xterm-256color")))))
 
 (ert-deftest codex-test-migrate-legacy-term-name-resets-uncustomized-xterm ()
   "Reload migration clears the old uncustomized TERM default."
@@ -1651,30 +1580,39 @@ When only :inherit remains, the face is removed entirely."
 
 (ert-deftest codex-test-remap-after-output-skips-old-scrollback ()
   "Post-output remapping covers new output without scanning old scrollback."
-  (let ((buf (generate-new-buffer "*codex:/tmp/remap-test/*"))
-        (codex-remap-light-backgrounds t)
-        (codex-card-background nil)
-        (codex-background-contrast-threshold 3.0)
-        (codex-minimum-contrast-ratio nil))
+  (let* ((buf (generate-new-buffer "*codex:/tmp/remap-test/*"))
+         (old-remapped-text "AAAA")
+         (new-hidden-text "BBBB")
+         (new-visible-text "CCCC")
+         (old-remapped-end (1+ (length old-remapped-text)))
+         (display-beginning (+ old-remapped-end (length new-hidden-text)))
+         (terminal-end (+ display-beginning (length new-visible-text)))
+         (codex-remap-light-backgrounds t)
+         (codex-card-background nil)
+         (codex-background-contrast-threshold 3.0)
+         (codex-minimum-contrast-ratio nil))
     (unwind-protect
         (cl-letf (((symbol-function 'face-background)
                    (lambda (&rest _) "#0d0e1c"))
                   ((symbol-function 'eat-term-display-beginning)
-                   (lambda (&rest _) 9))
+                   (lambda (&rest _) display-beginning))
                   ((symbol-function 'eat-term-end)
-                   (lambda (&rest _) 13)))
+                   (lambda (&rest _) terminal-end)))
           (with-current-buffer buf
-            (insert "AAAABBBBCCCC")
+            (insert old-remapped-text new-hidden-text new-visible-text)
             (put-text-property
-             1 13 'face '(:background "#EEEEEE" :inherit (eat-term-font-0)))
+             1 terminal-end 'face
+             '(:background "#EEEEEE" :inherit (eat-term-font-0)))
             (setq-local eat-terminal 'fake)
-            (setq-local codex--remapped-output-end (copy-marker 5 nil)))
+            (setq-local codex--remapped-output-end
+                        (copy-marker old-remapped-end nil)))
           (codex--remap-light-backgrounds-after-output buf)
           (with-current-buffer buf
             (should (plist-get (get-text-property 1 'face) :background))
-            (should-not (get-text-property 5 'face))
-            (should-not (get-text-property 9 'face))
-            (should (= (marker-position codex--remapped-output-end) 13))))
+            (should-not (get-text-property old-remapped-end 'face))
+            (should-not (get-text-property display-beginning 'face))
+            (should (= (marker-position codex--remapped-output-end)
+                       terminal-end))))
       (kill-buffer buf))))
 
 (ert-deftest codex-test-background-clashes-p ()

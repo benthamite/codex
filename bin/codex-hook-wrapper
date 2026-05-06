@@ -68,6 +68,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
+dispatch_failure_exit=1
+gatekeeping_dispatch_failure_exit=2
+
 json_file=$(mktemp "${TMPDIR:-/tmp}/codex-hook-json.XXXXXX") || exit 1
 response_file=$(mktemp "${TMPDIR:-/tmp}/codex-hook-response.XXXXXX") || exit 1
 stderr_file=$(mktemp "${TMPDIR:-/tmp}/codex-hook-stderr.XXXXXX") || exit 1
@@ -92,16 +95,21 @@ fail_for_dispatch_error() {
     printf 'codex hook dispatch failed for %s: %s\n' "$hook_type" "$message" >&2
     case "$hook_type" in
         PreToolUse|PermissionRequest)
-            exit 2
+            # Codex treats exit 2 from gatekeeping hooks as a blocking
+            # decision.  If Emacs cannot receive a tool-use or permission hook,
+            # fail closed instead of silently allowing the action.
+            exit "$gatekeeping_dispatch_failure_exit"
             ;;
         *)
-            exit 1
+            exit "$dispatch_failure_exit"
             ;;
     esac
 }
 
 # Hook JSON travels through a private temp file instead of argv, because hook
-# input may contain secrets and can be larger than ARG_MAX.
+# input may contain secrets and can be larger than ARG_MAX.  The json-file and
+# response-file labels form the argv protocol parsed by
+# `codex-handle-hook-from-emacsclient'.
 if [ -n "$socket_name" ]; then
     "$emacsclient_program" --socket-name "$socket_name" \
       --eval '(codex-handle-hook-from-emacsclient)' \
