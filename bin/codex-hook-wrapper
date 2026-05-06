@@ -70,6 +70,17 @@ trap cleanup EXIT
 
 dispatch_failure_exit=1
 gatekeeping_dispatch_failure_exit=2
+dispatch_attempts=${CODEX_HOOK_DISPATCH_ATTEMPTS:-3}
+dispatch_retry_delay=${CODEX_HOOK_DISPATCH_RETRY_DELAY:-0.15}
+
+case "$dispatch_attempts" in
+    ''|*[!0-9]*)
+        dispatch_attempts=3
+        ;;
+esac
+if [ "$dispatch_attempts" -lt 1 ]; then
+    dispatch_attempts=1
+fi
 
 json_file=$(mktemp "${TMPDIR:-/tmp}/codex-hook-json.XXXXXX") || exit 1
 response_file=$(mktemp "${TMPDIR:-/tmp}/codex-hook-response.XXXXXX") || exit 1
@@ -106,31 +117,54 @@ fail_for_dispatch_error() {
     esac
 }
 
+dispatch_error_is_transient() {
+    grep -Eq "can't connect|Connection refused|No socket or alternate editor|No such file or directory" "$stderr_file"
+}
+
+run_emacsclient_once() {
+    : > "$stderr_file"
+    if [ -n "$socket_name" ]; then
+        "$emacsclient_program" --socket-name "$socket_name" \
+          --eval '(codex-handle-hook-from-emacsclient)' \
+          "$hook_type" "$buffer_name" \
+          json-file "$json_file" \
+          response-file "$response_file" \
+          "$@" >/dev/null 2>"$stderr_file"
+    elif [ -n "$server_file" ]; then
+        "$emacsclient_program" --server-file "$server_file" \
+          --eval '(codex-handle-hook-from-emacsclient)' \
+          "$hook_type" "$buffer_name" \
+          json-file "$json_file" \
+          response-file "$response_file" \
+          "$@" >/dev/null 2>"$stderr_file"
+    else
+        "$emacsclient_program" --eval '(codex-handle-hook-from-emacsclient)' \
+          "$hook_type" "$buffer_name" \
+          json-file "$json_file" \
+          response-file "$response_file" \
+          "$@" >/dev/null 2>"$stderr_file"
+    fi
+}
+
+run_emacsclient_with_retry() {
+    attempt=1
+    while :; do
+        if run_emacsclient_once "$@"; then
+            return 0
+        fi
+        if [ "$attempt" -ge "$dispatch_attempts" ] || ! dispatch_error_is_transient; then
+            return 1
+        fi
+        sleep "$dispatch_retry_delay"
+        attempt=$((attempt + 1))
+    done
+}
+
 # Hook JSON travels through a private temp file instead of argv, because hook
 # input may contain secrets and can be larger than ARG_MAX.  The json-file and
 # response-file labels form the argv protocol parsed by
 # `codex-handle-hook-from-emacsclient'.
-if [ -n "$socket_name" ]; then
-    "$emacsclient_program" --socket-name "$socket_name" \
-      --eval '(codex-handle-hook-from-emacsclient)' \
-      "$hook_type" "$buffer_name" \
-      json-file "$json_file" \
-      response-file "$response_file" \
-      "$@" >/dev/null 2>"$stderr_file" || fail_for_dispatch_error
-elif [ -n "$server_file" ]; then
-    "$emacsclient_program" --server-file "$server_file" \
-      --eval '(codex-handle-hook-from-emacsclient)' \
-      "$hook_type" "$buffer_name" \
-      json-file "$json_file" \
-      response-file "$response_file" \
-      "$@" >/dev/null 2>"$stderr_file" || fail_for_dispatch_error
-else
-    "$emacsclient_program" --eval '(codex-handle-hook-from-emacsclient)' \
-      "$hook_type" "$buffer_name" \
-      json-file "$json_file" \
-      response-file "$response_file" \
-      "$@" >/dev/null 2>"$stderr_file" || fail_for_dispatch_error
-fi
+run_emacsclient_with_retry "$@" || fail_for_dispatch_error
 
 if [ -s "$response_file" ]; then
     cat "$response_file"
