@@ -289,9 +289,12 @@ The hook @code{codex-event-hook} runs when the Codex CLI triggers lifecycle even
 @section Eat terminal settings
 
 @vindex codex-eat-read-only-mode-cursor-type
+@vindex codex-eat-disable-cursor-blink
 @vindex codex-eat-scrollback-size
 
 The user option @code{codex-eat-read-only-mode-cursor-type} specifies the cursor appearance when the eat terminal is in read-only mode.  The value is a list of the form @code{(CURSOR-ON BLINKING-FREQUENCY CURSOR-OFF)}.  The default is @code{(box nil nil)}, which shows a non-blinking filled box cursor.
+
+The user option @code{codex-eat-disable-cursor-blink} controls whether Codex @samp{eat} buffers map blinking terminal cursor states to non-blinking equivalents.  The default is @code{t}.  This keeps the terminal cursor visible while avoiding Eat's graphical cursor blink timer, which redraws the whole frame and can flicker on macOS@.  Set this to @code{nil} if you want Codex to honor blinking cursor states exactly as emitted by the CLI@.
 
 The user option @code{codex-eat-scrollback-size} controls how much scrollback eat keeps for Codex buffers.  The default is @code{nil}, meaning unlimited scrollback.  This avoids losing earlier Codex output in long sessions; set it to a number of characters if you want a bounded buffer.
 

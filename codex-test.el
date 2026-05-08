@@ -1331,6 +1331,26 @@
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
+(ert-deftest codex-test-eat-non-blinking-cursor-state ()
+  "Eat blinking cursor states are mapped to non-blinking equivalents."
+  (should (eq (codex--eat-non-blinking-cursor-state :blinking-block) :block))
+  (should (eq (codex--eat-non-blinking-cursor-state :blinking-bar) :bar))
+  (should (eq (codex--eat-non-blinking-cursor-state :blinking-underline)
+              :underline))
+  (should (eq (codex--eat-non-blinking-cursor-state :block) :block))
+  (should (eq (codex--eat-non-blinking-cursor-state :invisible) :invisible)))
+
+(ert-deftest codex-test-eat-set-non-blinking-cursor-delegates-mapped-state ()
+  "Codex Eat cursor setter delegates non-blinking cursor state to Eat."
+  (let (seen-terminal seen-state)
+    (cl-letf (((symbol-function 'eat--set-cursor)
+               (lambda (terminal state)
+                 (setq seen-terminal terminal)
+                 (setq seen-state state))))
+      (codex--eat-set-non-blinking-cursor 'terminal :blinking-underline)
+      (should (eq seen-terminal 'terminal))
+      (should (eq seen-state :underline)))))
+
 (ert-deftest codex-test-eat-configure-disables-scrollback-truncation ()
   "Eat Codex buffers keep unlimited scrollback by default."
   (let ((codex-eat-scrollback-size nil)

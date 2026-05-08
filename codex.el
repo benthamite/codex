@@ -482,6 +482,15 @@ The value is a list of form (CURSOR-ON BLINKING-FREQUENCY CURSOR-OFF)."
            (const :tag "None" nil)))
   :group 'codex-eat)
 
+(defcustom codex-eat-disable-cursor-blink t
+  "Whether Codex eat buffers force terminal cursor states to non-blinking.
+When non-nil, Codex maps blinking terminal cursor states to their
+non-blinking equivalents before Eat handles them.  This preserves a
+visible terminal cursor while avoiding Eat's graphical cursor blink
+timer, which redraws the whole frame and can flicker on macOS."
+  :type 'boolean
+  :group 'codex-eat)
+
 (defcustom codex-eat-scrollback-size nil
   "Size of the scrollback area in Codex eat terminal buffers.
 The value is measured in characters.  Nil means unlimited scrollback,
@@ -787,6 +796,7 @@ Returns the buffer containing the terminal.")
 (declare-function eat-term-display-beginning "eat" (terminal))
 (declare-function eat-term-display-cursor "eat" (terminal))
 (declare-function eat-term-beginning "eat" (terminal))
+(declare-function eat-term-cursor-type "eat" (terminal))
 (declare-function eat-term-end "eat" (terminal))
 (declare-function eat-term-live-p "eat" (terminal))
 (declare-function eat-term-parameter "eat" (terminal parameter) t)
@@ -899,7 +909,8 @@ _BACKEND is the terminal backend type (should be \\='eat)."
   (setq-local eat--synchronize-scroll-function #'codex--eat-synchronize-scroll)
   (setq-local cursor-in-non-selected-windows nil)
   (when (bound-and-true-p eat-terminal)
-    (eval '(setf (eat-term-parameter eat-terminal 'ring-bell-function) #'codex--notify)))
+    (eval '(setf (eat-term-parameter eat-terminal 'ring-bell-function) #'codex--notify))
+    (codex--eat-apply-cursor-blink-setting))
   (when codex-remap-light-backgrounds
     (codex--acquire-managed-advice 'eat--process-output-queue
                                    :after
@@ -910,6 +921,32 @@ _BACKEND is the terminal backend type (should be \\='eat)."
                                    #'codex--update-prompt-autosuggestion-after-output))
   (sleep-for codex-startup-delay))
 
+(defun codex--eat-non-blinking-cursor-state (state)
+  "Return non-blinking equivalent of Eat cursor STATE."
+  (pcase state
+    (:blinking-block :block)
+    (:blinking-bar :bar)
+    (:blinking-underline :underline)
+    (_ state)))
+
+(defun codex--eat-set-non-blinking-cursor (terminal state)
+  "Set Eat TERMINAL cursor STATE without enabling cursor blinking."
+  (eat--set-cursor terminal (codex--eat-non-blinking-cursor-state state)))
+
+(defun codex--eat-apply-cursor-blink-setting ()
+  "Apply Codex Eat cursor blink behavior to the current buffer."
+  (when (bound-and-true-p eat-terminal)
+    (if codex-eat-disable-cursor-blink
+        (progn
+          (eval '(setf (eat-term-parameter eat-terminal 'set-cursor-function)
+                       #'codex--eat-set-non-blinking-cursor))
+          (codex--eat-set-non-blinking-cursor
+           eat-terminal
+           (if (fboundp 'eat-term-cursor-type)
+               (eat-term-cursor-type eat-terminal)
+             :block)))
+      (eval '(setf (eat-term-parameter eat-terminal 'set-cursor-function)
+                   #'eat--set-cursor)))))
 (cl-defmethod codex--term-customize-faces ((_backend (eql eat)))
   "Apply face customizations for eat terminal.
 _BACKEND is the terminal backend type (should be \\='eat)."
@@ -3051,6 +3088,17 @@ Only runs when `codex-enable-hooks' is non-nil."
   :group 'codex
   (when codex-mode
     (codex--ensure-hooks-config)))
+
+(defun codex--eat-apply-cursor-blink-setting-to-existing-buffers ()
+  "Apply Eat cursor blink behavior to existing Codex buffers."
+  (dolist (buffer (codex--find-all-codex-buffers))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (when (and (eq codex-terminal-backend 'eat)
+                   (bound-and-true-p eat-terminal))
+          (codex--eat-apply-cursor-blink-setting))))))
+
+(codex--eat-apply-cursor-blink-setting-to-existing-buffers)
 
 ;;;; Provide the feature
 (provide 'codex)
