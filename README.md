@@ -17,9 +17,9 @@ Key capabilities include:
 
 ## Installation
 
-Requires Emacs 30.0 or later.
+Requires Emacs 28.1 or later.
 
-### package-vc (built-in since Emacs 30)
+### package-vc (built-in since Emacs 29)
 
 ```emacs-lisp
 (use-package codex

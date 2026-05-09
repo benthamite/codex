@@ -2,6 +2,8 @@ EMACS ?= emacs
 DEPS_DIR ?= $(dir $(CURDIR))
 LOAD_PATH_EXTRA ?=
 LOAD_PATH := -L "$(CURDIR)" \
+             -L "$(DEPS_DIR)compat" \
+             -L "$(DEPS_DIR)seq" \
              -L "$(DEPS_DIR)inheritenv" \
              -L "$(DEPS_DIR)transient/lisp" \
              -L "$(DEPS_DIR)cond-let" \

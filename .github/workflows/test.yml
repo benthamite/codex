@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        emacs-version: ['30.1']
+        emacs-version: ['28.1', '30.2']
     steps:
       - uses: actions/checkout@v4
       - uses: purcell/setup-emacs@master
@@ -18,9 +18,13 @@ jobs:
           version: ${{ matrix.emacs-version }}
       - name: Clone dependencies
         run: |
-          git clone --depth 1 https://github.com/magit/transient.git ../transient
-          git clone --depth 1 https://github.com/purcell/inheritenv.git ../inheritenv
-          git clone --depth 1 https://github.com/tarsius/cond-let.git ../cond-let
+          git clone --depth 1 --branch 31.0.0.1 https://github.com/emacs-compat/compat.git ../compat
+          git clone --depth 1 --branch v0.13.3 https://github.com/magit/transient.git ../transient
+          git clone --depth 1 --branch 0.2 https://github.com/purcell/inheritenv.git ../inheritenv
+          git clone --depth 1 --branch v1.0.0 https://github.com/tarsius/cond-let.git ../cond-let
+          curl -fsSL https://elpa.gnu.org/packages/seq-2.24.tar -o ../seq.tar
+          mkdir ../seq
+          tar -xf ../seq.tar -C ../seq --strip-components=1
       - name: Byte-compile
         run: make compile
       - name: Run tests
