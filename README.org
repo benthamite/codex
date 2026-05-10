@@ -182,7 +182,7 @@ The user option ~codex-no-delete-other-windows~ prevents Codex windows from bein
 
 The user option ~codex-toggle-auto-select~ controls whether ~codex-toggle~ automatically selects the Codex window after opening it.  The default is ~nil~, meaning the window is displayed but focus stays in the current window.
 
-The user option ~codex-optimize-window-resize~ controls whether terminal reflows are suppressed when only the window height changes.  The default is ~t~.  This prevents unnecessary redraws when you resize frames vertically.
+The user option ~codex-optimize-window-resize~ controls whether terminal reflows are suppressed when the window size has not changed.  The default is ~t~.  This avoids redundant redraws while still keeping the terminal dimensions synchronized after width or height changes.
 
 The user option ~codex-display-window-fn~ specifies the function used to display the Codex window.  It must accept a buffer argument.  The default is ~codex-display-buffer-same-window~, which displays the Codex buffer in the current window.  An alternative ~codex-display-buffer-below~ is also provided, which displays it below the currently selected window.
 

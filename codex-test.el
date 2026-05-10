@@ -874,13 +874,13 @@
             (should-not prompted)))
       (kill-buffer buf))))
 
-(ert-deftest codex-test-adjust-window-size-skips-unchanged-width ()
-  "Test Codex resize advice suppresses unchanged-width terminal resizes."
+(ert-deftest codex-test-adjust-window-size-skips-unchanged-size ()
+  "Test Codex resize advice suppresses unchanged-size terminal resizes."
   (let ((buf (generate-new-buffer "*codex:/tmp/resize/*"))
         (called nil))
     (unwind-protect
         (with-current-buffer buf
-          (cl-letf (((symbol-function 'codex--codex-window-width-changed-p)
+          (cl-letf (((symbol-function 'codex--codex-window-size-changed-p)
                      (lambda () nil))
                     ((symbol-function 'codex--term-in-read-only-p)
                      (lambda (_backend) nil)))
@@ -888,6 +888,20 @@
               (should-not (codex--adjust-window-size-advice
                            (lambda (&rest _args) (setq called t))))))
           (should-not called))
+      (kill-buffer buf))))
+
+(ert-deftest codex-test-window-size-change-includes-height ()
+  "Test Codex resize tracking notices height-only window changes."
+  (let ((buf (generate-new-buffer "*codex:/tmp/resize/*")))
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (switch-to-buffer buf)
+          (clrhash codex--window-sizes)
+          (should (codex--codex-window-size-changed-p))
+          (should-not (codex--codex-window-size-changed-p))
+          (split-window-below)
+          (should (codex--codex-window-size-changed-p)))
       (kill-buffer buf))))
 
 (ert-deftest codex-test-toggle-buries-sole-visible-codex-window ()

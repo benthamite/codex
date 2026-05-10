@@ -373,8 +373,8 @@ The function is called with two arguments: TITLE and MESSAGE."
 
 (defcustom codex-optimize-window-resize t
   "Whether to optimize terminal window resizing to prevent unnecessary reflows.
-When non-nil, terminal reflows are only triggered when the window width
-changes, not when only the height changes."
+When non-nil, terminal reflows are only triggered when the window size
+changes."
   :type 'boolean
   :group 'codex)
 
@@ -534,8 +534,8 @@ recompiled with a larger SB_MAX value."
 (defvar codex--managed-advice-refcounts (make-hash-table :test 'equal)
   "Reference counts for global advice registrations shared across Codex buffers.")
 
-(defvar codex--window-widths (make-hash-table :test 'eq :weakness 'key)
-  "Hash table mapping windows to their last known widths for Codex terminals.")
+(defvar codex--window-sizes (make-hash-table :test 'eq :weakness 'key)
+  "Hash table mapping windows to their last known sizes for Codex terminals.")
 
 (defvar-local codex--managed-advice-specs nil
   "Advice registrations owned by the current Codex buffer.")
@@ -2307,27 +2307,28 @@ control sequence."
 ;;;; Window resize optimization
 
 (defun codex--adjust-window-size-advice (orig-fun &rest args)
-  "Advice to only signal terminal resize on width change.
+  "Advice to signal terminal resize only when the window size changes.
 ORIG-FUN is the original window size adjustment function.
 ARGS are passed to ORIG-FUN unchanged."
   (if (not (codex--buffer-p (current-buffer)))
       (apply orig-fun args)
-    (when (and (codex--codex-window-width-changed-p)
+    (when (and (codex--codex-window-size-changed-p)
                (not (codex--term-in-read-only-p codex-terminal-backend)))
       (apply orig-fun args))))
 
-(defun codex--codex-window-width-changed-p ()
-  "Return non-nil if any visible Codex window changed width."
-  (let ((width-changed nil))
+(defun codex--codex-window-size-changed-p ()
+  "Return non-nil if any visible Codex window changed size."
+  (let ((size-changed nil))
     (dolist (window (window-list))
       (let ((buffer (window-buffer window)))
         (when (codex--buffer-p buffer)
-          (let ((current-width (window-width window))
-                (stored-width (gethash window codex--window-widths)))
-            (when (or (not stored-width) (/= current-width stored-width))
-              (setq width-changed t)
-              (puthash window current-width codex--window-widths))))))
-    width-changed))
+          (let ((current-size (cons (window-width window)
+                                    (window-height window)))
+                (stored-size (gethash window codex--window-sizes)))
+            (when (not (equal current-size stored-size))
+              (setq size-changed t)
+              (puthash window current-size codex--window-sizes))))))
+    size-changed))
 
 ;;;; Error formatting
 
