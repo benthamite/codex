@@ -751,6 +751,9 @@ Returns the buffer containing the terminal.")
 (cl-defgeneric codex--term-send-action (backend action &optional payload)
   "Send terminal ACTION with optional PAYLOAD using BACKEND.")
 
+(cl-defgeneric codex--term-submit-command (backend command)
+  "Type COMMAND into the current terminal using BACKEND and submit it.")
+
 (cl-defgeneric codex--term-kill-process (backend buffer)
   "Kill the terminal process in BUFFER using BACKEND.")
 
@@ -843,8 +846,8 @@ _BACKEND is the terminal backend type (should be \\='eat)."
 _BACKEND is the terminal backend type (should be \\='eat)."
   (pcase action
     (:string (eat-term-send-string eat-terminal payload))
-    (:return (eat-term-send-string eat-terminal (kbd "RET")))
-    (:escape (eat-term-send-string eat-terminal (kbd "ESC")))
+    (:return (eat-self-input 1 ?\C-m))
+    (:escape (eat-self-input 1 'escape))
     (:newline (eat-term-send-string eat-terminal "\C-j"))
     (:tab (unless (codex-accept-prompt-autosuggestion)
             (eat-self-input 1 ?\t)))
@@ -852,6 +855,30 @@ _BACKEND is the terminal backend type (should be \\='eat)."
     (:next-agent (eat-term-send-string eat-terminal "\e[1;3C"))
     (:redraw (codex--eat-redraw))
     (_ (error "Unknown eat terminal action: %S" action))))
+
+(cl-defmethod codex--term-submit-command ((_backend (eql eat)) command)
+  "Type COMMAND into eat through the buffer keymap and submit it."
+  (execute-kbd-macro
+   (string-to-vector command))
+  (codex--schedule-submit-returns command (current-buffer)
+                                  (selected-window)))
+
+(defun codex--schedule-submit-returns (command buffer window)
+  "Schedule Return events to submit COMMAND in BUFFER and WINDOW."
+  (run-at-time 0.05 nil #'codex--submit-return-in-buffer buffer window)
+  (when (string-prefix-p "$" (string-trim-left command))
+    (run-at-time 0.25 nil #'codex--submit-return-in-buffer buffer window)
+    (run-at-time 0.45 nil #'codex--submit-return-in-buffer buffer window)))
+
+(defun codex--submit-return-in-buffer (buffer window)
+  "Submit the prompt in BUFFER, preserving WINDOW when possible."
+  (when (buffer-live-p buffer)
+    (if (window-live-p window)
+        (with-selected-window window
+          (with-current-buffer buffer
+            (call-interactively #'codex--terminal-send-return)))
+      (with-current-buffer buffer
+        (call-interactively #'codex--terminal-send-return)))))
 
 (cl-defmethod codex--term-kill-process ((_backend (eql eat)) buffer)
   "Kill the eat terminal process in BUFFER.
@@ -1051,6 +1078,12 @@ _BACKEND is the terminal backend type (should be \\='vterm)."
     (:next-agent (vterm-send-key "<right>" nil t))
     (:redraw (codex--vterm-redraw))
     (_ (error "Unknown vterm terminal action: %S" action))))
+
+(cl-defmethod codex--term-submit-command ((_backend (eql vterm)) command)
+  "Type COMMAND into vterm and submit it."
+  (vterm-send-key "u" nil nil t)
+  (vterm-send-string command)
+  (codex--term-send-action 'vterm :return))
 
 (cl-defmethod codex--term-kill-process ((_backend (eql vterm)) buffer)
   "Kill the vterm terminal process in BUFFER.
@@ -1508,15 +1541,22 @@ LINE-END is the ending line number for a range."
   "Send command CMD to Codex if a Codex buffer exists.
 After sending the command, move point to the end of the buffer."
   (if-let ((codex-buffer (codex--get-or-prompt-for-buffer)))
-      (progn
-        (with-current-buffer codex-buffer
-          (codex--term-send-string codex-terminal-backend cmd)
-          (sit-for 0.1)
-          (codex--term-send-action codex-terminal-backend :return)
-          (display-buffer codex-buffer))
-        codex-buffer)
+      (codex--send-command-to-buffer cmd codex-buffer)
     (codex--show-not-running-message)
     nil))
+
+(defun codex--send-command-to-buffer (cmd buffer)
+  "Send command CMD to Codex BUFFER and submit it."
+  (when (buffer-live-p buffer)
+    (let ((window (or (get-buffer-window buffer)
+                      (display-buffer buffer))))
+      (if window
+          (with-selected-window window
+            (with-current-buffer buffer
+              (codex--term-submit-command codex-terminal-backend cmd)))
+        (with-current-buffer buffer
+          (codex--term-submit-command codex-terminal-backend cmd))))
+    buffer))
 
 (defun codex--build-cli-args ()
   "Build CLI arguments from current customization settings.

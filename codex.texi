@@ -164,6 +164,11 @@ The user option @code{codex-confirm-kill} controls whether @code{codex-kill} and
 
 The user option @code{codex-newline-keybinding-style} controls how the return key behaves in Codex buffers.  The default, @code{newline-on-shift-return}, makes @code{S-RET} insert a line break and plain @code{RET} submit the prompt, mirroring the behavior of @samp{claude-code.el}.  The other choices are @code{newline-on-alt-return} (@code{M-RET} for newline, @code{RET} to submit), @code{shift-return-to-send} (@code{RET} for newline, @code{S-RET} to submit), and @code{super-return-to-send} (@code{RET} for newline, @code{s-RET} — the COMMAND key on macOS — to submit).  The line-break action is delivered to Codex as @code{Ctrl+J} (byte @code{0x0A}), which the Codex CLI binds to its @code{insert_newline} editor action by default; submission is delivered as a plain @code{Return}.
 
+In @samp{eat} buffers, plain Return is dispatched as the same @samp{RET} character event
+used by normal terminal input; Escape also goes through Eat's key-event input
+path rather than raw string insertion.  This keeps programmatic TUI actions
+aligned with real keypresses.
+
 The user option @code{codex-enable-prompt-autosuggestions} controls whether @samp{codex.el} styles prompt autosuggestions in @samp{eat} buffers.  The default is @code{t}.  Codex renders placeholder and suggestion text after the terminal cursor; when that text arrives in Emacs without the CLI's dim styling, @samp{codex.el} recognizes known suggestions and applies @code{codex-prompt-autosuggestion-face}, which inherits @code{shadow} without forcing italic text.  While an autosuggestion is visible, @samp{codex.el} keeps point at the prompt cursor rather than the footer line that Codex renders below the prompt.  The options @code{codex-prompt-autosuggestion-placeholders}, @code{codex-prompt-autosuggestion-history-path}, and @code{codex-prompt-autosuggestion-history-limit} control which built-in placeholder strings and recent history entries are recognized as autosuggestions.  In @samp{eat} Codex buffers, @samp{TAB} first accepts the visible autosuggestion when there is one; otherwise it is sent through to the Codex TUI as a normal tab.
 
 @node Sandbox and approval
@@ -363,6 +368,14 @@ The command @code{codex-kill-all} kills all Codex instances across all directori
 @findex codex-fix-error-at-point
 
 The command @code{codex-send-command} reads a command from the minibuffer and sends it to the Codex instance for the current project.  Input history is maintained in @code{codex-command-history}.  With a prefix argument, the cursor switches to the Codex buffer after sending.
+
+Programmatic callers that already know the target session can use the same
+terminal ordering through @code{codex--send-command-to-buffer}.  It types the
+command into that specific Codex buffer, selects the buffer's window, then
+submits it by calling @code{codex--terminal-send-return} interactively.  Dollar
+commands trigger Codex's skill completion UI, so they receive the additional
+Return events needed to accept the skill completion and submit the resulting
+prompt.
 
 The command @code{codex-send-command-with-context} works like @code{codex-send-command} but appends a file reference (in @code{@@file:line} format) to the command.  If a region is active, it includes the line range of the region.  This is particularly useful when you want to direct Codex's attention to a specific location in your code.
 

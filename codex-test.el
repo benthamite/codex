@@ -1120,6 +1120,74 @@
       (codex--term-send-action 'eat :tab)
       (should (equal sent (list 1 ?\t))))))
 
+(ert-deftest codex-test-eat-return-action-uses-key-event-input ()
+  "Return goes through Eat's RET key-event input path."
+  (let (sent)
+    (cl-letf (((symbol-function 'eat-self-input)
+               (lambda (n e)
+                 (setq sent (list n e)))))
+      (codex--term-send-action 'eat :return)
+      (should (equal sent (list 1 ?\C-m))))))
+
+(ert-deftest codex-test-eat-escape-action-uses-key-event-input ()
+  "Escape goes through Eat's key-event input path."
+  (let (sent)
+    (cl-letf (((symbol-function 'eat-self-input)
+               (lambda (n e)
+                 (setq sent (list n e)))))
+      (codex--term-send-action 'eat :escape)
+      (should (equal sent (list 1 'escape))))))
+
+(ert-deftest codex-test-eat-submit-command-executes-keyboard-macro ()
+  "Programmatic Eat submission routes through the buffer keymap."
+  (let (macro timers)
+    (cl-letf (((symbol-function 'execute-kbd-macro)
+               (lambda (keys &optional _count _loopfunc)
+                 (setq macro keys)))
+              ((symbol-function 'run-at-time)
+               (lambda (secs repeat function &rest args)
+                 (when (eq function #'codex--submit-return-in-buffer)
+                   (push (list secs repeat function args) timers)))))
+      (codex--term-submit-command 'eat "$x")
+      (should (equal macro (string-to-vector "$x")))
+      (should (equal (nreverse timers)
+                     (list
+                      (list 0.05 nil #'codex--submit-return-in-buffer
+                            (list (current-buffer) (selected-window)))
+                      (list 0.25 nil #'codex--submit-return-in-buffer
+                            (list (current-buffer) (selected-window)))
+                      (list 0.45 nil #'codex--submit-return-in-buffer
+                            (list (current-buffer) (selected-window)))))))))
+
+(ert-deftest codex-test-eat-submit-command-sends-one-return-for-nonskill ()
+  "Programmatic Eat submission uses one Return for ordinary commands."
+  (let (timers)
+    (cl-letf (((symbol-function 'execute-kbd-macro) #'ignore)
+              ((symbol-function 'run-at-time)
+               (lambda (secs repeat function &rest args)
+                 (when (eq function #'codex--submit-return-in-buffer)
+                   (push (list secs repeat function args) timers)))))
+      (codex--term-submit-command 'eat "/status")
+      (should (equal (nreverse timers)
+                     (list
+                      (list 0.05 nil #'codex--submit-return-in-buffer
+                            (list (current-buffer) (selected-window)))))))))
+
+(ert-deftest codex-test-submit-return-in-buffer-calls-return-in-window ()
+  "Deferred return submission preserves the target window."
+  (let ((buf (generate-new-buffer "*codex-submit-return*"))
+        (window (selected-window))
+        submitted)
+    (unwind-protect
+        (cl-letf (((symbol-function 'codex--terminal-send-return)
+                   (lambda ()
+                     (interactive)
+                     (setq submitted (list (current-buffer)
+                                           (selected-window))))))
+          (codex--submit-return-in-buffer buf window)
+          (should (equal submitted (list buf window))))
+      (kill-buffer buf))))
+
 (ert-deftest codex-test-keymap-binds-tab-to-terminal-handler ()
   "Codex terminal buffers bind TAB to the backend-neutral handler."
   (with-temp-buffer
@@ -1233,6 +1301,30 @@
             (let ((codex-terminal-backend 'eat))
               (codex-redraw)))
           (should (equal sent '(eat :redraw nil))))
+      (kill-buffer buf))))
+
+(ert-deftest codex-test-send-command-to-buffer-submits-in-selected-window ()
+  "Sending a command selects the target window before submitting it."
+  (let ((buf (generate-new-buffer "*codex:/tmp/project/*"))
+        (window (selected-window))
+        events)
+    (unwind-protect
+        (cl-letf (((symbol-function 'codex--term-submit-command)
+                   (lambda (backend command)
+                     (push (list 'submit backend command
+                                 (eq (selected-window) window))
+                           events)))
+                  ((symbol-function 'get-buffer-window)
+                   (lambda (_buffer &optional _all-frames) window))
+                  ((symbol-function 'display-buffer)
+                   (lambda (&rest _args) (push 'display events))))
+          (with-current-buffer buf
+            (let ((codex-terminal-backend 'eat))
+              (should (eq (codex--send-command-to-buffer
+                          "$session-learning-capture" buf)
+                          buf))))
+          (should (equal (nreverse events)
+                         '((submit eat "$session-learning-capture" t)))))
       (kill-buffer buf))))
 
 (ert-deftest codex-test-agent-navigation-dispatches-to-terminal-backend ()
