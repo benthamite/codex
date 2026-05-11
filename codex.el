@@ -549,6 +549,9 @@ recompiled with a larger SB_MAX value."
 (defvar-local codex--remapped-output-end nil
   "Marker at the previous end of remapped terminal output.")
 
+(defvar-local codex--eat-pending-output nil
+  "Incomplete terminal output held until the next Eat output chunk.")
+
 (defvar-local codex--prompt-autosuggestion-overlay nil
   "Overlay used to style the active prompt autosuggestion.")
 
@@ -911,6 +914,9 @@ _BACKEND is the terminal backend type (should be \\='eat)."
   (when (bound-and-true-p eat-terminal)
     (eval '(setf (eat-term-parameter eat-terminal 'ring-bell-function) #'codex--notify))
     (codex--eat-apply-cursor-blink-setting))
+  (codex--acquire-managed-advice 'eat-term-process-output
+                                 :around
+                                 #'codex--eat-process-output-advice)
   (when codex-remap-light-backgrounds
     (codex--acquire-managed-advice 'eat--process-output-queue
                                    :after
@@ -1129,6 +1135,60 @@ SWITCHES is an optional list of command-line arguments."
   (let ((value (read-string prompt initial-input)))
     (unless (string-empty-p value)
       value)))
+
+(defun codex--eat-process-output-advice (orig-fun terminal output)
+  "Pass complete OUTPUT chunks to ORIG-FUN for Codex Eat TERMINAL."
+  (if (not (codex--current-eat-terminal-p terminal))
+      (funcall orig-fun terminal output)
+    (pcase-let ((`(,complete . ,pending)
+                 (codex--split-incomplete-terminal-output
+                  (concat codex--eat-pending-output output))))
+      (setq codex--eat-pending-output pending)
+      (unless (string-empty-p complete)
+        (funcall orig-fun terminal complete)))))
+
+(defun codex--current-eat-terminal-p (terminal)
+  "Return non-nil when TERMINAL belongs to the current Codex Eat buffer."
+  (and (codex--buffer-p (current-buffer))
+       (bound-and-true-p eat-terminal)
+       (eq terminal eat-terminal)))
+
+(defun codex--split-incomplete-terminal-output (output)
+  "Split OUTPUT into complete text and an incomplete trailing escape."
+  (if-let* ((tail-start (codex--incomplete-terminal-tail-start output)))
+      (cons (substring output 0 tail-start)
+            (substring output tail-start))
+    (cons output nil)))
+
+(defun codex--incomplete-terminal-tail-start (output)
+  "Return the start of OUTPUT's incomplete trailing escape sequence."
+  (let ((esc (codex--last-escape-position output)))
+    (when esc
+      (cond
+       ((= (1+ esc) (length output)) esc)
+       ((= (aref output (1+ esc)) ?\[)
+        (codex--incomplete-csi-tail-start output esc))))))
+
+(defun codex--last-escape-position (string)
+  "Return the position of the final ESC character in STRING."
+  (let ((index (1- (length string)))
+        position)
+    (while (and (not position) (>= index 0))
+      (when (= (aref string index) ?\e)
+        (setq position index))
+      (cl-decf index))
+    position))
+
+(defun codex--incomplete-csi-tail-start (output esc)
+  "Return ESC when OUTPUT ends inside a CSI sequence."
+  (let ((index (+ esc 2))
+        (length (length output))
+        complete)
+    (while (and (< index length) (not complete))
+      (if (<= ?@ (aref output index) ?~)
+          (setq complete t)
+        (cl-incf index)))
+    (unless complete esc)))
 
 (defun codex--acquire-managed-advice (target where function)
   "Register FUNCTION as WHERE advice on TARGET for the current buffer."

@@ -70,6 +70,8 @@ The user option ~codex-term-name~ overrides the terminal type reported to Codex.
 
 In =eat= buffers, codex.el disables Eat shell integration for the Codex subprocess.  Codex is itself a TUI that captures and re-renders tool output; if nested shell commands inherit ~EAT_SHELL_INTEGRATION_DIR~, their Eat-private OSC sequences can leak into captured tool output and corrupt the outer terminal display.
 
+In =eat= Codex buffers, codex.el also coalesces terminal output chunks that end in the middle of a CSI escape sequence.  This protects Codex sessions from a known failure mode where the CLI emits a cursor-shape sequence such as =ESC [ 0 SPC q= across two process-output chunks and Eat tries to parse the incomplete first half as a complete sequence.
+
 The user option ~codex-startup-delay~ is a number of seconds to wait after starting the Codex process before displaying the buffer.  The default is ~0.1~.  Increasing this value can help fix terminal layout issues that occur when the buffer is displayed before Codex has fully initialized.
 
 The user option ~codex-confirm-kill~ controls whether ~codex-kill~ and ~codex-kill-all~ ask for confirmation before killing instances.  The default is ~t~.  Set it to ~nil~ if you prefer to kill instances without a prompt.

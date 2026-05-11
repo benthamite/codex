@@ -746,6 +746,40 @@
       (kill-buffer buf1)
       (kill-buffer buf2))))
 
+(ert-deftest codex-test-eat-output-advice-buffers-incomplete-csi ()
+  "Incomplete CSI chunks are held until their final byte arrives."
+  (let (processed)
+    (with-temp-buffer
+      (rename-buffer "*codex:/tmp/eat-output/*" t)
+      (setq-local eat-terminal 'fake-terminal)
+      (codex--eat-process-output-advice
+       (lambda (_terminal output)
+         (push output processed))
+       'fake-terminal
+       "\e[0 ")
+      (should-not processed)
+      (should (equal codex--eat-pending-output "\e[0 "))
+      (codex--eat-process-output-advice
+       (lambda (_terminal output)
+         (push output processed))
+       'fake-terminal
+       "qrest")
+      (should (equal (nreverse processed) '("\e[0 qrest")))
+      (should-not codex--eat-pending-output))))
+
+(ert-deftest codex-test-eat-output-advice-ignores-noncodex-buffers ()
+  "Output advice passes through outside Codex buffers."
+  (let (processed)
+    (with-temp-buffer
+      (setq-local eat-terminal 'fake-terminal)
+      (codex--eat-process-output-advice
+       (lambda (_terminal output)
+         (push output processed))
+       'fake-terminal
+       "\e[0 ")
+      (should (equal processed '("\e[0 ")))
+      (should-not codex--eat-pending-output))))
+
 ;;;; Error formatting tests
 
 (ert-deftest codex-test-format-errors-no-errors ()
