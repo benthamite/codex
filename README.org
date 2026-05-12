@@ -68,7 +68,7 @@ The user option ~codex-use-alt-screen~ controls whether Codex runs in its defaul
 
 The user option ~codex-term-name~ overrides the terminal type reported to Codex.  The default is ~nil~, meaning codex.el chooses a backend-appropriate ~TERM~ value.  For =eat=, Codex buffers use Eat's bundled =eat-*= terminfo even if the global =eat-term-name= has been customized; for =vterm=, Codex buffers keep vterm's own default.  Set this to a string such as ~"xterm-256color"~ only when your terminal environment requires a specific ~TERM~ value.  The value is applied when the terminal subprocess starts, so changes affect new Codex buffers rather than already-running sessions.
 
-In =eat= buffers, codex.el disables Eat shell integration for the Codex subprocess.  Codex is itself a TUI that captures and re-renders tool output; if nested shell commands inherit ~EAT_SHELL_INTEGRATION_DIR~, their Eat-private OSC sequences can leak into captured tool output and corrupt the outer terminal display.
+In =eat= buffers, codex.el disables Eat shell integration for the Codex subprocess and ignores Eat's private UI-command channel in the outer terminal, including in existing Codex buffers after codex.el is reloaded.  Codex is itself a TUI that captures and re-renders tool output; if nested shell commands emit Eat-private OSC sequences, those sequences can leak into captured tool output and corrupt the outer terminal display.
 
 In =eat= Codex buffers, codex.el also coalesces terminal output chunks that end in the middle of a CSI escape sequence.  This protects Codex sessions from a known failure mode where the CLI emits a cursor-shape sequence such as =ESC [ 0 SPC q= across two process-output chunks and Eat tries to parse the incomplete first half as a complete sequence.
 

@@ -780,6 +780,18 @@
       (should (equal processed '("\e[0 ")))
       (should-not codex--eat-pending-output))))
 
+(ert-deftest codex-test-eat-ui-commands-are-ignored ()
+  "Codex Eat buffers ignore Eat-private UI command sequences."
+  (let (assigned)
+    (cl-letf (((symbol-function 'codex--set-eat-ui-command-function)
+               (lambda (function)
+                 (setq assigned function))))
+      (with-temp-buffer
+        (rename-buffer "*codex:/tmp/eat-output/*" t)
+        (setq-local eat-terminal 'fake-terminal)
+        (codex--eat-ignore-ui-commands)
+        (should (eq assigned #'ignore))))))
+
 ;;;; Error formatting tests
 
 (ert-deftest codex-test-format-errors-no-errors ()

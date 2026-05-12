@@ -940,6 +940,7 @@ _BACKEND is the terminal backend type (should be \\='eat)."
   (setq-local cursor-in-non-selected-windows nil)
   (when (bound-and-true-p eat-terminal)
     (eval '(setf (eat-term-parameter eat-terminal 'ring-bell-function) #'codex--notify))
+    (codex--eat-ignore-ui-commands)
     (codex--eat-apply-cursor-blink-setting))
   (codex--acquire-managed-advice 'eat-term-process-output
                                  :around
@@ -953,6 +954,16 @@ _BACKEND is the terminal backend type (should be \\='eat)."
                                    :after
                                    #'codex--update-prompt-autosuggestion-after-output))
   (sleep-for codex-startup-delay))
+
+(defun codex--eat-ignore-ui-commands ()
+  "Ignore Eat-private UI commands in the current Codex buffer."
+  (when (bound-and-true-p eat-terminal)
+    (codex--set-eat-ui-command-function #'ignore)))
+
+(defun codex--set-eat-ui-command-function (function)
+  "Set Eat's UI command handler to FUNCTION."
+  (eval `(setf (eat-term-parameter eat-terminal 'ui-command-function)
+               #',function)))
 
 (defun codex--eat-non-blinking-cursor-state (state)
   "Return non-blinking equivalent of Eat cursor STATE."
@@ -3190,16 +3201,17 @@ Only runs when `codex-enable-hooks' is non-nil."
   (when codex-mode
     (codex--ensure-hooks-config)))
 
-(defun codex--eat-apply-cursor-blink-setting-to-existing-buffers ()
-  "Apply Eat cursor blink behavior to existing Codex buffers."
+(defun codex--eat-refresh-existing-buffers ()
+  "Refresh Eat terminal parameters in existing Codex buffers."
   (dolist (buffer (codex--find-all-codex-buffers))
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
         (when (and (eq codex-terminal-backend 'eat)
                    (bound-and-true-p eat-terminal))
+          (codex--eat-ignore-ui-commands)
           (codex--eat-apply-cursor-blink-setting))))))
 
-(codex--eat-apply-cursor-blink-setting-to-existing-buffers)
+(codex--eat-refresh-existing-buffers)
 
 ;;;; Provide the feature
 (provide 'codex)
