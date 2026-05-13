@@ -85,6 +85,17 @@ with its default alt-screen TUI."
   :type 'boolean
   :group 'codex)
 
+(defcustom codex-disable-terminal-resize-reflow t
+  "Whether to disable Codex's experimental terminal resize reflow.
+The Codex CLI feature `terminal_resize_reflow' rebuilds terminal
+scrollback after width changes.  In Emacs terminal buffers, especially
+with `--no-alt-screen', the Emacs buffer is the retained session
+history, so CLI-side scrollback rebuilds can make the displayed buffer
+diverge from the JSONL transcript.  When non-nil, pass
+`--disable terminal_resize_reflow' to new Codex sessions."
+  :type 'boolean
+  :group 'codex)
+
 (defcustom codex-term-name nil
   "Terminal type override to use for Codex REPL.
 When nil, Codex uses a backend-appropriate TERM value.  This lets eat
@@ -246,6 +257,34 @@ When nil, the CLI default is used."
   "Path to the Codex hooks.json file."
   :type 'string
   :group 'codex)
+
+(defcustom codex-transcript-sessions-directory "~/.codex/sessions"
+  "Directory containing Codex JSONL session transcripts."
+  :type 'directory
+  :group 'codex)
+
+(defcustom codex-transcript-catch-up-on-stop nil
+  "Whether Stop hooks append missing final transcript messages.
+This repairs Codex terminal buffers when the terminal emulator misses
+or corrupts the final TUI output for a turn.  The JSONL transcript is
+treated as authoritative; catch-up text is appended only when the
+message is not already present in the buffer.
+
+This is disabled by default because injecting transcript text into a
+live terminal can place output after an active input area when the
+terminal emulator's screen model has diverged.  Use
+`codex-refresh-from-transcript' for explicit repair."
+  :type 'boolean
+  :group 'codex)
+
+(defun codex--migrate-transcript-catch-up-default ()
+  "Reset old implicit transcript catch-up default to nil."
+  (when (and codex-transcript-catch-up-on-stop
+             (not (get 'codex-transcript-catch-up-on-stop 'customized-value))
+             (not (get 'codex-transcript-catch-up-on-stop 'saved-value)))
+    (setq codex-transcript-catch-up-on-stop nil)))
+
+(codex--migrate-transcript-catch-up-default)
 
 (defcustom codex-emacsclient-program nil
   "Path to emacsclient for Codex hook dispatch.
@@ -499,6 +538,16 @@ output that should remain available in the Emacs terminal buffer."
   :type '(choice natnum (const :tag "Unlimited" nil))
   :group 'codex-eat)
 
+(defcustom codex-eat-preserve-scrollback t
+  "Whether Codex Eat buffers ignore erase-display terminal commands.
+Codex runs with `--no-alt-screen' by default, so users expect the
+buffer to retain session history.  Some TUI redraws still emit CSI J
+erase-display sequences; in Eat those delete ordinary buffer text,
+including scrollback.  When this option is non-nil, Codex strips those
+commands before Eat processes output."
+  :type 'boolean
+  :group 'codex-eat)
+
 ;;;;; Vterm terminal customizations
 (defcustom codex-vterm-buffer-multiline-output t
   "Whether to buffer vterm output to prevent flickering on multi-line input."
@@ -545,6 +594,15 @@ recompiled with a larger SB_MAX value."
 
 (defvar-local codex--buffer-instance-name nil
   "Instance name associated with the current Codex buffer.")
+
+(defvar-local codex--session-id nil
+  "Codex session id associated with the current buffer.")
+
+(defvar-local codex--session-transcript-file nil
+  "JSONL transcript file for the Codex session in the current buffer.")
+
+(defvar-local codex--transcript-last-catch-up-message nil
+  "Last transcript catch-up message appended to the current buffer.")
 
 (defvar-local codex--remapped-output-end nil
   "Marker at the previous end of remapped terminal output.")
@@ -806,6 +864,7 @@ Returns the buffer containing the terminal.")
 (declare-function eat-term-end "eat" (terminal))
 (declare-function eat-term-live-p "eat" (terminal))
 (declare-function eat-term-parameter "eat" (terminal parameter) t)
+(declare-function eat-term-process-output "eat" (terminal output))
 (declare-function eat-term-redisplay "eat" (terminal))
 (declare-function eat-term-reset "eat" (terminal))
 (declare-function eat-term-send-string "eat" (terminal string))
@@ -1186,10 +1245,21 @@ SWITCHES is an optional list of command-line arguments."
       (funcall orig-fun terminal output)
     (pcase-let ((`(,complete . ,pending)
                  (codex--split-incomplete-terminal-output
-                  (concat codex--eat-pending-output output))))
+                  (codex--sanitize-eat-output
+                   (concat codex--eat-pending-output output)))))
       (setq codex--eat-pending-output pending)
       (unless (string-empty-p complete)
         (funcall orig-fun terminal complete)))))
+
+(defun codex--sanitize-eat-output (output)
+  "Return OUTPUT with Codex-inappropriate terminal commands removed."
+  (if codex-eat-preserve-scrollback
+      (codex--strip-csi-erase-display output)
+    output))
+
+(defun codex--strip-csi-erase-display (output)
+  "Return OUTPUT without CSI erase-display commands."
+  (replace-regexp-in-string "\e\\[[0-9;?]*J" "" output t t))
 
 (defun codex--current-eat-terminal-p (terminal)
   "Return non-nil when TERMINAL belongs to the current Codex Eat buffer."
@@ -1575,6 +1645,9 @@ Returns a list of strings to pass as command-line arguments."
   (let (args)
     (unless codex-use-alt-screen
       (push "--no-alt-screen" args))
+    (when codex-disable-terminal-resize-reflow
+      (push "--disable" args)
+      (push "terminal_resize_reflow" args))
     (when codex-full-auto
       (push "--dangerously-bypass-approvals-and-sandbox" args))
     (when (and codex-sandbox-mode (not codex-full-auto))
@@ -2858,14 +2931,20 @@ name to match.")
 
 (defun codex-handle-hook (hook-type buffer-name &optional json-data &rest args)
   "Handle hook of HOOK-TYPE for BUFFER-NAME with JSON-DATA and ARGS."
-  (let* ((message (list :type hook-type
-                        :buffer-name buffer-name
-                        :json-data json-data
-                        :args args))
-         (hook-response (run-hook-with-args-until-success 'codex-event-hook message)))
-    (when (plist-get (codex--hook-spec hook-type) :notify)
-      (codex--notify nil))
-    hook-response))
+  (let ((message (list :type hook-type
+                       :buffer-name buffer-name
+                       :json-data json-data
+                       :args args)))
+    (condition-case err
+        (codex--handle-internal-hook message)
+      (error
+       (message "Codex internal hook handling failed: %s"
+                (error-message-string err))))
+    (let ((hook-response
+           (run-hook-with-args-until-success 'codex-event-hook message)))
+      (when (plist-get (codex--hook-spec hook-type) :notify)
+        (codex--notify nil))
+      hook-response)))
 
 (defun codex-handle-hook-from-emacsclient ()
   "Handle a Codex hook using `server-eval-args-left'."
@@ -2925,6 +3004,174 @@ as JSON."
                   response
                 (json-encode response)))))
   nil)
+
+;;;; Transcript catch-up
+
+;;;###autoload
+(defun codex-refresh-from-transcript (&optional session-id)
+  "Append missing final output from a Codex JSONL transcript.
+When SESSION-ID is nil, use the current buffer's known session id or
+transcript file.  Interactively, prompt only when neither is known."
+  (interactive
+   (list (unless (or codex--session-id codex--session-transcript-file)
+           (read-string "Codex session id: "))))
+  (unless (codex--buffer-p (current-buffer))
+    (user-error "Current buffer is not a Codex buffer"))
+  (when session-id
+    (setq-local codex--session-id session-id)
+    (setq-local codex--session-transcript-file
+                (codex--find-session-transcript session-id)))
+  (unless codex--session-transcript-file
+    (setq-local codex--session-transcript-file
+                (codex--find-session-transcript codex--session-id)))
+  (unless codex--session-transcript-file
+    (user-error "No Codex transcript found for this buffer"))
+  (if (codex--append-transcript-catch-up codex--session-transcript-file)
+      (message "Codex transcript catch-up appended")
+    (message "Codex transcript already reflected in buffer")))
+
+(defun codex--handle-internal-hook (message)
+  "Handle codex.el's internal side effects for hook MESSAGE."
+  (let* ((buffer-name (plist-get message :buffer-name))
+         (buffer (and (stringp buffer-name) (get-buffer buffer-name))))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (codex--update-transcript-metadata message)
+        (when (and codex-transcript-catch-up-on-stop
+                   (string= (plist-get message :type) "Stop"))
+          (condition-case err
+            (when-let* ((file (or codex--session-transcript-file
+                                  (codex--find-session-transcript
+                                   codex--session-id))))
+              (setq-local codex--session-transcript-file file)
+              (codex--append-transcript-catch-up file))
+            (error
+             (message "Codex transcript catch-up failed: %s"
+                      (error-message-string err)))))))))
+
+(defun codex--update-transcript-metadata (message)
+  "Update current buffer transcript metadata from hook MESSAGE."
+  (let* ((data (codex--hook-json-object (plist-get message :json-data)))
+         (session-id (codex--json-deep-find
+                      data '(session_id sessionId session-id conversation_id)))
+         (transcript-file (codex--json-deep-find
+                           data '(transcript_path transcriptPath
+                                                   transcript_file
+                                                   transcriptFile))))
+    (when (and (stringp session-id) (not (string-empty-p session-id)))
+      (setq-local codex--session-id session-id))
+    (when (and (stringp transcript-file)
+               (file-exists-p (expand-file-name transcript-file)))
+      (setq-local codex--session-transcript-file
+                  (expand-file-name transcript-file)))
+    (when (and codex--session-id (not codex--session-transcript-file))
+      (setq-local codex--session-transcript-file
+                  (codex--find-session-transcript codex--session-id)))))
+
+(defun codex--hook-json-object (json-data)
+  "Return JSON-DATA parsed as an alist, or nil when absent/unreadable."
+  (cond
+   ((not json-data) nil)
+   ((listp json-data) json-data)
+   ((stringp json-data)
+    (ignore-errors
+      (json-parse-string json-data :object-type 'alist :array-type 'list)))))
+
+(defun codex--json-deep-find (object keys)
+  "Return the first value in OBJECT whose key is a member of KEYS."
+  (cond
+   ((and (consp object) (symbolp (caar object)))
+    (or (seq-some (lambda (cell)
+                    (when (memq (car cell) keys)
+                      (cdr cell)))
+                  object)
+        (seq-some (lambda (cell)
+                    (codex--json-deep-find (cdr cell) keys))
+                  object)))
+   ((listp object)
+    (seq-some (lambda (item)
+                (codex--json-deep-find item keys))
+              object))))
+
+(defun codex--find-session-transcript (session-id)
+  "Return the JSONL transcript path for SESSION-ID, or nil."
+  (when (and (stringp session-id) (not (string-empty-p session-id)))
+    (let* ((root (expand-file-name codex-transcript-sessions-directory))
+           (regexp (concat (regexp-quote session-id) "\\.jsonl\\'")))
+      (when (file-directory-p root)
+        (car (directory-files-recursively root regexp))))))
+
+(defun codex--append-transcript-catch-up (file)
+  "Append missing final transcript output from FILE to current buffer.
+Return non-nil when text was inserted."
+  (when-let* ((message (codex--transcript-final-message file)))
+    (unless (or (equal message codex--transcript-last-catch-up-message)
+                (codex--buffer-contains-string-p message))
+      (codex--insert-transcript-catch-up file message)
+      (setq-local codex--transcript-last-catch-up-message message)
+      t)))
+
+(defun codex--insert-transcript-catch-up (file message)
+  "Insert transcript catch-up MESSAGE from FILE in the current buffer."
+  (let ((text (codex--transcript-catch-up-text file message)))
+    (if (codex--eat-output-insertion-available-p)
+        (codex--insert-transcript-catch-up-through-eat text)
+      (let ((inhibit-read-only t)
+            (inhibit-modification-hooks t))
+        (goto-char (point-max))
+        (unless (bolp)
+          (insert "\n"))
+        (insert text)))))
+
+(defun codex--transcript-catch-up-text (file message)
+  "Return catch-up text for transcript FILE and MESSAGE."
+  (concat "\nTranscript catch-up\n"
+          "Source: " (abbreviate-file-name file) "\n\n"
+          message
+          (unless (string-suffix-p "\n" message)
+            "\n")))
+
+(defun codex--eat-output-insertion-available-p ()
+  "Return non-nil when catch-up text can enter through Eat output."
+  (and (eq codex-terminal-backend 'eat)
+       (bound-and-true-p eat-terminal)
+       (fboundp 'eat-term-process-output)
+       (fboundp 'eat-term-redisplay)))
+
+(defun codex--insert-transcript-catch-up-through-eat (text)
+  "Insert TEXT through Eat's terminal output model."
+  (let ((inhibit-read-only t)
+        (inhibit-modification-hooks t))
+    (eat-term-process-output eat-terminal text)
+    (eat-term-redisplay eat-terminal)))
+
+(defun codex--buffer-contains-string-p (string)
+  "Return non-nil if current buffer contains STRING."
+  (save-excursion
+    (save-restriction
+      (widen)
+      (goto-char (point-min))
+      (search-forward string nil t))))
+
+(defun codex--transcript-final-message (file)
+  "Return the final agent message recorded in transcript FILE."
+  (let (message)
+    (with-temp-buffer
+      (insert-file-contents file)
+      (dolist (line (split-string (buffer-string) "\n" t))
+        (when-let* ((entry (ignore-errors
+                             (json-parse-string line
+                                                :object-type 'alist
+                                                :array-type 'list)))
+                    (payload (alist-get 'payload entry)))
+          (pcase (alist-get 'type payload)
+            ("agent_message"
+             (when-let* ((text (alist-get 'message payload)))
+               (setq message text)))
+            ("task_complete"
+             (when-let* ((text (alist-get 'last_agent_message payload)))
+               (setq message text)))))))
+    message))
 
 ;;;; Hooks auto-configuration
 

@@ -135,6 +135,7 @@ The development repository is on @uref{https://github.com/benthamite/codex, GitH
 @vindex codex-program-switches
 @vindex codex-terminal-backend
 @vindex codex-use-alt-screen
+@vindex codex-disable-terminal-resize-reflow
 @vindex codex-term-name
 @vindex codex-startup-delay
 @vindex codex-confirm-kill
@@ -151,6 +152,8 @@ The user option @code{codex-program-switches} is a list of extra CLI flags to pa
 The user option @code{codex-terminal-backend} selects which terminal emulator to use for the Codex REPL@.  The choices are @code{eat} (the default) and @code{vterm}.  The @samp{eat} backend is recommended as it integrates more cleanly with Emacs and does not require compiling a dynamic module.
 
 The user option @code{codex-use-alt-screen} controls whether Codex runs in its default alternate-screen TUI mode.  The default is @code{nil}, so codex.el starts Codex with @code{--no-alt-screen} for inline scrollback mode.  This avoids recurring stale-screen failures seen when Codex's alternate-screen TUI and Emacs terminal buffers lose synchronization after interrupts, prompt editing, or heavy redraws.  Set it to non-nil only if you explicitly want Codex's alt-screen TUI@.
+
+The user option @code{codex-disable-terminal-resize-reflow} controls whether codex.el passes @code{--disable terminal_resize_reflow} to new Codex sessions.  The default is @code{t} because Codex's experimental terminal reflow rebuilds scrollback after width changes, while Emacs terminal buffers use the buffer itself as retained session history.  Disable this option only if you prefer Codex's own terminal reflow behavior.
 
 The user option @code{codex-term-name} overrides the terminal type reported to Codex.  The default is @code{nil}, meaning codex.el chooses a backend-appropriate @code{TERM} value.  For @samp{eat}, Codex buffers use Eat's bundled @samp{eat-*} terminfo even if the global @samp{eat-term-name} has been customized; for @samp{vterm}, Codex buffers keep vterm's own default.  Set this to a string such as @code{"xterm-256color"} only when your terminal environment requires a specific @code{TERM} value.  The value is applied when the terminal subprocess starts, so changes affect new Codex buffers rather than already-running sessions.
 
@@ -285,6 +288,8 @@ The user option @code{codex-default-images} is a list of image file paths to att
 @vindex codex-start-hook
 @vindex codex-process-environment-functions
 @vindex codex-event-hook
+@vindex codex-transcript-catch-up-on-stop
+@vindex codex-transcript-sessions-directory
 
 The hook @code{codex-start-hook} runs after a Codex instance starts.  Use it to perform additional setup in the Codex buffer, such as enabling minor modes or customizing keybindings.
 
@@ -292,18 +297,23 @@ The abnormal hook @code{codex-process-environment-functions} lets you inject env
 
 The hook @code{codex-event-hook} runs when the Codex CLI triggers lifecycle events through the hooks system.  This is an abnormal hook: functions are called with a single plist argument containing @code{:type}, @code{:buffer-name}, @code{:json-data}, and @code{:args}, and dispatch stops at the first non-nil return value.  That value is returned to the Codex CLI hook process, which lets permission and tool hooks approve, deny, or block.
 
+The user option @code{codex-transcript-catch-up-on-stop} controls whether Stop hooks repair stale terminal output from Codex JSONL transcripts.  The default is @code{nil} because automatic repair can be visually disruptive in active terminal buffers; reloading from an older build also resets the old implicit default to @code{nil} unless you customized the option explicitly.  When enabled, @code{codex.el} tracks the session id from hook JSON, finds the transcript under @code{codex-transcript-sessions-directory}, and appends the final agent message if the terminal buffer does not already contain it.  Prefer calling @code{codex-refresh-from-transcript} explicitly when repairing a known stale buffer.
+
 @node Eat terminal settings
 @section Eat terminal settings
 
 @vindex codex-eat-read-only-mode-cursor-type
 @vindex codex-eat-disable-cursor-blink
 @vindex codex-eat-scrollback-size
+@vindex codex-eat-preserve-scrollback
 
 The user option @code{codex-eat-read-only-mode-cursor-type} specifies the cursor appearance when the eat terminal is in read-only mode.  The value is a list of the form @code{(CURSOR-ON BLINKING-FREQUENCY CURSOR-OFF)}.  The default is @code{(box nil nil)}, which shows a non-blinking filled box cursor.
 
 The user option @code{codex-eat-disable-cursor-blink} controls whether Codex @samp{eat} buffers map blinking terminal cursor states to non-blinking equivalents.  The default is @code{t}.  This keeps the terminal cursor visible while avoiding Eat's graphical cursor blink timer, which redraws the whole frame and can flicker on macOS@.  Set this to @code{nil} if you want Codex to honor blinking cursor states exactly as emitted by the CLI@.
 
 The user option @code{codex-eat-scrollback-size} controls how much scrollback eat keeps for Codex buffers.  The default is @code{nil}, meaning unlimited scrollback.  This avoids losing earlier Codex output in long sessions; set it to a number of characters if you want a bounded buffer.
+
+The user option @code{codex-eat-preserve-scrollback} controls whether Codex @samp{eat} buffers strip CSI erase-display commands before Eat processes output.  The default is @code{t}.  Codex runs with @code{--no-alt-screen} by default so the Emacs buffer can serve as session history, but TUI redraws can still emit erase-display sequences that make Eat delete retained buffer text.  Leave this enabled unless you explicitly prefer terminal-accurate clear-screen behavior over preserved scrollback.
 
 The package also defines faces for the eat terminal that inherit from the corresponding @samp{eat} faces: @code{codex-eat-prompt-annotation-running-face}, @code{codex-eat-prompt-annotation-success-face}, @code{codex-eat-prompt-annotation-failure-face}, @code{codex-eat-term-bold-face}, @code{codex-eat-term-faint-face}, @code{codex-eat-term-italic-face}, @code{codex-eat-term-slow-blink-face}, @code{codex-eat-term-fast-blink-face}, and font faces @code{codex-eat-term-font-0-face} through @code{codex-eat-term-font-9-face}.  Customize these faces if you want the Codex terminal to look different from other eat buffers.
 
@@ -487,10 +497,13 @@ The function @code{codex-display-buffer-below} displays the Codex buffer below t
 
 @findex codex-handle-hook
 @findex codex-handle-hook-from-emacsclient
+@findex codex-refresh-from-transcript
 
 The hook path has two stages.  The @samp{codex-hook-wrapper} shell script is the command recorded in @samp{hooks.json}; it reads the hook JSON on standard input, writes that JSON to a private temporary file, and calls @code{codex-handle-hook-from-emacsclient} via @samp{emacsclient} targeted at the Emacs server that configured the hooks.  The wrapper retries transient @samp{emacsclient} socket failures briefly; if dispatch still fails, gatekeeping hook types such as @samp{PreToolUse} and @samp{PermissionRequest} fail closed.  The argv protocol after the hook type and buffer name is @samp{json-file JSON-FILE response-file RESPONSE-FILE ...}, so large or sensitive hook JSON does not travel through argv and Emacs can write a hook response back to the wrapper.  Hook installation also replaces older @samp{notify-emacs-hook.sh} entries so stale wrappers cannot feed hook JSON back to Codex as terminal input.
 
 The function @code{codex-handle-hook-from-emacsclient} parses that protocol from @code{server-eval-args-left} and delegates to @code{codex-handle-hook}.  Direct Elisp callers can call @code{codex-handle-hook} with a hook type (e.g., @code{"Stop"}, @code{"PreToolUse"}), a buffer name, hook JSON data, and optional additional arguments.  It constructs a plist and runs @code{codex-event-hook} with it until the first handler returns non-nil.  Hooks marked for notification, currently @code{"Stop"}, also trigger a notification (@ref{Notifications}).
+
+Before user hook handlers run, @code{codex-handle-hook} also updates the target buffer's transcript metadata.  On Stop events it can call @code{codex-refresh-from-transcript} internally, so a stale terminal buffer still shows the final recorded agent message.
 
 @node Transient menus
 @chapter Transient menus

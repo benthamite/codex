@@ -130,8 +130,11 @@
         (codex-model nil)
         (codex-profile nil)
         (codex-reasoning-effort nil)
+        (codex-disable-terminal-resize-reflow t)
         (codex-default-images nil))
-    (should (equal (codex--build-cli-args) '("--no-alt-screen")))))
+    (should (equal (codex--build-cli-args)
+                   '("--no-alt-screen"
+                     "--disable" "terminal_resize_reflow")))))
 
 (ert-deftest codex-test-build-cli-args-alt-screen-enabled ()
   "Test CLI arg building when alt-screen mode is explicitly enabled."
@@ -142,6 +145,7 @@
         (codex-model nil)
         (codex-profile nil)
         (codex-reasoning-effort nil)
+        (codex-disable-terminal-resize-reflow nil)
         (codex-default-images nil))
     (should (equal (codex--build-cli-args) nil))))
 
@@ -154,8 +158,24 @@
         (codex-model nil)
         (codex-profile nil)
         (codex-reasoning-effort nil)
+        (codex-disable-terminal-resize-reflow nil)
         (codex-default-images nil))
     (should (equal (codex--build-cli-args) '("--no-alt-screen")))))
+
+(ert-deftest codex-test-build-cli-args-disable-terminal-resize-reflow ()
+  "Test disabling Codex terminal resize reflow by default."
+  (let ((codex-use-alt-screen nil)
+        (codex-full-auto nil)
+        (codex-sandbox-mode nil)
+        (codex-approval-policy nil)
+        (codex-model nil)
+        (codex-profile nil)
+        (codex-reasoning-effort nil)
+        (codex-disable-terminal-resize-reflow t)
+        (codex-default-images nil))
+    (should (equal (codex--build-cli-args)
+                   '("--no-alt-screen"
+                     "--disable" "terminal_resize_reflow")))))
 
 (ert-deftest codex-test-build-cli-args-full-auto ()
   "Test CLI arg building with full-auto mode."
@@ -166,6 +186,7 @@
         (codex-model nil)
         (codex-profile nil)
         (codex-reasoning-effort nil)
+        (codex-disable-terminal-resize-reflow nil)
         (codex-default-images nil))
     ;; full-auto should override sandbox and approval
     (should (equal (codex--build-cli-args)
@@ -180,6 +201,7 @@
         (codex-model nil)
         (codex-profile nil)
         (codex-reasoning-effort nil)
+        (codex-disable-terminal-resize-reflow nil)
         (codex-default-images nil))
     (should (equal (codex--build-cli-args)
                    '("--sandbox=workspace-write" "--ask-for-approval=on-request")))))
@@ -193,6 +215,7 @@
         (codex-model "gpt-5.4")
         (codex-profile "work")
         (codex-reasoning-effort "high")
+        (codex-disable-terminal-resize-reflow nil)
         (codex-default-images nil))
     (should (equal (codex--build-cli-args)
                    '("--model" "gpt-5.4"
@@ -208,6 +231,7 @@
         (codex-model nil)
         (codex-profile nil)
         (codex-reasoning-effort nil)
+        (codex-disable-terminal-resize-reflow nil)
         (codex-default-images '("/path/to/img1.png" "/path/to/img2.jpg")))
     (should (equal (codex--build-cli-args)
                    '("--image" "/path/to/img1.png" "--image" "/path/to/img2.jpg")))))
@@ -221,6 +245,7 @@
         (codex-model "o3")
         (codex-profile "testing")
         (codex-reasoning-effort "low")
+        (codex-disable-terminal-resize-reflow nil)
         (codex-default-images '("/img.png")))
     (should (equal (codex--build-cli-args)
                    '("--no-alt-screen"
@@ -656,6 +681,7 @@
         (codex-model nil)
         (codex-profile nil)
         (codex-reasoning-effort nil)
+        (codex-disable-terminal-resize-reflow nil)
         (codex-default-images nil))
     (let ((args (codex--build-cli-args)))
       (should (member "--dangerously-bypass-approvals-and-sandbox" args))
@@ -671,6 +697,7 @@
         (codex-model nil)
         (codex-profile nil)
         (codex-reasoning-effort nil)
+        (codex-disable-terminal-resize-reflow nil)
         (codex-default-images '("/a.png" "/b.png" "/c.png")))
     (let ((args (codex--build-cli-args)))
       (should (equal args '("--image" "/a.png" "--image" "/b.png" "--image" "/c.png"))))))
@@ -766,6 +793,34 @@
        "qrest")
       (should (equal (nreverse processed) '("\e[0 qrest")))
       (should-not codex--eat-pending-output))))
+
+(ert-deftest codex-test-eat-output-advice-strips-erase-display ()
+  "Eat Codex buffers strip erase-display commands to preserve scrollback."
+  (let (processed)
+    (with-temp-buffer
+      (rename-buffer "*codex:/tmp/eat-output/*" t)
+      (setq-local eat-terminal 'fake-terminal)
+      (let ((codex-eat-preserve-scrollback t))
+        (codex--eat-process-output-advice
+         (lambda (_terminal output)
+           (push output processed))
+         'fake-terminal
+         (concat "before" "\e[2J" "middle" "\e[3J" "after")))
+      (should (equal processed '("beforemiddleafter"))))))
+
+(ert-deftest codex-test-eat-output-advice-keeps-erase-display-when-disabled ()
+  "Erase-display commands pass through when scrollback preservation is off."
+  (let (processed)
+    (with-temp-buffer
+      (rename-buffer "*codex:/tmp/eat-output/*" t)
+      (setq-local eat-terminal 'fake-terminal)
+      (let ((codex-eat-preserve-scrollback nil))
+        (codex--eat-process-output-advice
+         (lambda (_terminal output)
+           (push output processed))
+         'fake-terminal
+         (concat "before" "\e[2J" "after")))
+      (should (equal processed (list (concat "before" "\e[2J" "after")))))))
 
 (ert-deftest codex-test-eat-output-advice-ignores-noncodex-buffers ()
   "Output advice passes through outside Codex buffers."
@@ -873,6 +928,88 @@
                          raw-response)))
       (delete-file json-file)
       (delete-file response-file))))
+
+(ert-deftest codex-test-transcript-final-message-prefers-task-complete ()
+  "Transcript rendering uses task_complete when it is available."
+  (let ((file (make-temp-file "codex-transcript" nil ".jsonl")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "{\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"message\":\"older\"}}\n")
+            (insert "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"last_agent_message\":\"final\"}}\n"))
+          (should (equal (codex--transcript-final-message file) "final")))
+      (delete-file file))))
+
+(ert-deftest codex-test-transcript-catch-up-appends-on-stop ()
+  "Stop hooks append missing transcript output to stale Codex buffers."
+  (let ((file (make-temp-file "codex-transcript" nil ".jsonl"))
+        (codex-transcript-catch-up-on-stop t)
+        (codex-event-hook nil))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"last_agent_message\":\"TANGODB_LOOP_RESULT: ok\"}}\n"))
+          (with-temp-buffer
+            (rename-buffer "*codex:/tmp/project/*" t)
+            (setq-local codex--session-transcript-file file)
+            (codex-handle-hook "Stop" (buffer-name) nil)
+            (should (string-match-p "Transcript catch-up" (buffer-string)))
+            (should (string-match-p "TANGODB_LOOP_RESULT: ok" (buffer-string)))
+            (let ((after-first (buffer-string)))
+              (codex-handle-hook "Stop" (buffer-name) nil)
+              (should (equal (buffer-string) after-first)))))
+      (delete-file file))))
+
+(ert-deftest codex-test-transcript-catch-up-uses-eat-output ()
+  "Catch-up text enters live Eat buffers through Eat's output model."
+  (let ((file (make-temp-file "codex-transcript" nil ".jsonl"))
+        output redisplayed)
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"last_agent_message\":\"final\"}}\n"))
+          (cl-letf (((symbol-function 'eat-term-process-output)
+                     (lambda (terminal text)
+                       (setq output (list terminal text))))
+                    ((symbol-function 'eat-term-redisplay)
+                     (lambda (terminal)
+                       (setq redisplayed terminal))))
+            (with-temp-buffer
+              (rename-buffer "*codex:/tmp/project/*" t)
+              (setq-local codex-terminal-backend 'eat)
+              (setq-local eat-terminal 'fake-terminal)
+              (should (codex--append-transcript-catch-up file))
+              (should (equal (car output) 'fake-terminal))
+              (should (string-match-p "Transcript catch-up" (cadr output)))
+              (should (string-match-p "final" (cadr output)))
+              (should (equal redisplayed 'fake-terminal))
+              (should (string-empty-p (buffer-string))))))
+      (delete-file file))))
+
+(ert-deftest codex-test-transcript-metadata-from-hook-json ()
+  "Hook JSON session metadata attaches buffers to transcript files."
+  (let* ((root (make-temp-file "codex-sessions" t))
+         (session-id "019e1ef0-ec8a-7f80-a105-c8f169cfc383")
+         (dir (expand-file-name "2026/05/12" root))
+         (file (expand-file-name
+                (format "rollout-2026-05-12T22-26-06-%s.jsonl" session-id)
+                dir))
+         (codex-transcript-sessions-directory root)
+         (codex-transcript-catch-up-on-stop nil)
+         (codex-event-hook nil))
+    (unwind-protect
+        (progn
+          (make-directory dir t)
+          (with-temp-file file
+            (insert "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"last_agent_message\":\"final\"}}\n"))
+          (with-temp-buffer
+            (rename-buffer "*codex:/tmp/project/*" t)
+            (codex-handle-hook
+             "SessionStart" (buffer-name)
+             (format "{\"session_id\":\"%s\"}" session-id))
+            (should (equal codex--session-id session-id))
+            (should (equal codex--session-transcript-file file))))
+      (delete-directory root t))))
 
 ;;;; hooks.json matcher values
 
@@ -1221,6 +1358,7 @@
         (codex-model "gpt-5.4")
         (codex-profile "work")
         (codex-reasoning-effort "high")
+        (codex-disable-terminal-resize-reflow nil)
         buffer
         captured-switches)
     (unwind-protect
