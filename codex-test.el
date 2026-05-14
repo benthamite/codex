@@ -794,8 +794,8 @@
       (should (equal (nreverse processed) '("\e[0 qrest")))
       (should-not codex--eat-pending-output))))
 
-(ert-deftest codex-test-eat-output-advice-strips-erase-display ()
-  "Eat Codex buffers strip erase-display commands to preserve scrollback."
+(ert-deftest codex-test-eat-output-advice-keeps-erase-below-display ()
+  "Eat Codex buffers keep erase-below commands for prompt redraws."
   (let (processed)
     (with-temp-buffer
       (rename-buffer "*codex:/tmp/eat-output/*" t)
@@ -805,8 +805,22 @@
          (lambda (_terminal output)
            (push output processed))
          'fake-terminal
-         (concat "before" "\e[2J" "middle" "\e[3J" "after")))
-      (should (equal processed '("beforemiddleafter"))))))
+         (concat "before" "\e[0J" "after")))
+      (should (equal processed (list (concat "before" "\e[0J" "after")))))))
+
+(ert-deftest codex-test-eat-output-advice-strips-scrollback-erase ()
+  "Eat Codex buffers strip scrollback erase commands."
+  (let (processed)
+    (with-temp-buffer
+      (rename-buffer "*codex:/tmp/eat-output/*" t)
+      (setq-local eat-terminal 'fake-terminal)
+      (let ((codex-eat-preserve-scrollback t))
+        (codex--eat-process-output-advice
+         (lambda (_terminal output)
+           (push output processed))
+         'fake-terminal
+         (concat "before" "\e[3J" "after")))
+      (should (equal processed '("beforeafter"))))))
 
 (ert-deftest codex-test-eat-output-advice-keeps-erase-display-when-disabled ()
   "Erase-display commands pass through when scrollback preservation is off."

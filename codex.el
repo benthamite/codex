@@ -539,12 +539,12 @@ output that should remain available in the Emacs terminal buffer."
   :group 'codex-eat)
 
 (defcustom codex-eat-preserve-scrollback t
-  "Whether Codex Eat buffers ignore erase-display terminal commands.
+  "Whether Codex Eat buffers ignore scrollback erase commands.
 Codex runs with `--no-alt-screen' by default, so users expect the
-buffer to retain session history.  Some TUI redraws still emit CSI J
-erase-display sequences; in Eat those delete ordinary buffer text,
-including scrollback.  When this option is non-nil, Codex strips those
-commands before Eat processes output."
+buffer to retain session history.  Some TUI redraws still emit CSI 3 J
+scrollback erase sequences; in Eat those delete ordinary buffer text,
+including retained history.  When this option is non-nil, Codex strips
+those commands before Eat processes output."
   :type 'boolean
   :group 'codex-eat)
 
@@ -1254,12 +1254,12 @@ SWITCHES is an optional list of command-line arguments."
 (defun codex--sanitize-eat-output (output)
   "Return OUTPUT with Codex-inappropriate terminal commands removed."
   (if codex-eat-preserve-scrollback
-      (codex--strip-csi-erase-display output)
+      (codex--strip-csi-scrollback-erase output)
     output))
 
-(defun codex--strip-csi-erase-display (output)
-  "Return OUTPUT without CSI erase-display commands."
-  (replace-regexp-in-string "\e\\[[0-9;?]*J" "" output t t))
+(defun codex--strip-csi-scrollback-erase (output)
+  "Return OUTPUT without CSI scrollback erase commands."
+  (replace-regexp-in-string "\e\\[3J" "" output t t))
 
 (defun codex--current-eat-terminal-p (terminal)
   "Return non-nil when TERMINAL belongs to the current Codex Eat buffer."
