@@ -836,6 +836,49 @@
          (concat "before" "\e[2J" "after")))
       (should (equal processed (list (concat "before" "\e[2J" "after")))))))
 
+(ert-deftest codex-test-eat-output-advice-strips-aborted-csi ()
+  "Aborted CSI fragments are removed before reaching Eat.
+A CSI terminated by ESC instead of a final byte misroutes through
+Eat\\='s parser as the CSI function bytes, then consumes the next
+byte as the final byte, desyncing cursor tracking and tripping the
+assertion in `eat--t-cur-left' on the following cursor move."
+  (let (processed)
+    (with-temp-buffer
+      (rename-buffer "*codex:/tmp/eat-output/*" t)
+      (setq-local eat-terminal 'fake-terminal)
+      (codex--eat-process-output-advice
+       (lambda (_terminal output)
+         (push output processed))
+       'fake-terminal
+       "\e[3J\e[4\e]0;title\7\e[7;2Hrest")
+      (should (equal processed '("\e]0;title\7\e[7;2Hrest"))))))
+
+(ert-deftest codex-test-eat-output-advice-keeps-complete-csi-before-esc ()
+  "Complete CSI sequences are preserved when immediately followed by ESC."
+  (let (processed)
+    (with-temp-buffer
+      (rename-buffer "*codex:/tmp/eat-output/*" t)
+      (setq-local eat-terminal 'fake-terminal)
+      (codex--eat-process-output-advice
+       (lambda (_terminal output)
+         (push output processed))
+       'fake-terminal
+       "\e[4m\e]0;title\7rest")
+      (should (equal processed '("\e[4m\e]0;title\7rest"))))))
+
+(ert-deftest codex-test-eat-output-advice-strips-chained-aborted-csi ()
+  "Multiple aborted CSI fragments in a row are removed in one pass."
+  (let (processed)
+    (with-temp-buffer
+      (rename-buffer "*codex:/tmp/eat-output/*" t)
+      (setq-local eat-terminal 'fake-terminal)
+      (codex--eat-process-output-advice
+       (lambda (_terminal output)
+         (push output processed))
+       'fake-terminal
+       "\e[4\e[5;\e[6H")
+      (should (equal processed '("\e[6H"))))))
+
 (ert-deftest codex-test-eat-output-advice-ignores-noncodex-buffers ()
   "Output advice passes through outside Codex buffers."
   (let (processed)

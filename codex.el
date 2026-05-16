@@ -1253,13 +1253,25 @@ SWITCHES is an optional list of command-line arguments."
 
 (defun codex--sanitize-eat-output (output)
   "Return OUTPUT with Codex-inappropriate terminal commands removed."
-  (if codex-eat-preserve-scrollback
-      (codex--strip-csi-scrollback-erase output)
-    output))
+  (codex--strip-aborted-csi
+   (if codex-eat-preserve-scrollback
+       (codex--strip-csi-scrollback-erase output)
+     output)))
 
 (defun codex--strip-csi-scrollback-erase (output)
   "Return OUTPUT without CSI scrollback erase commands."
   (replace-regexp-in-string "\e\\[3J" "" output t t))
+
+(defun codex--strip-aborted-csi (output)
+  "Return OUTPUT with aborted CSI sequences removed.
+A CSI is aborted when ESC appears before its final byte (0x40-0x7E).
+Eat\\='s parser misroutes the abort byte into the CSI function bytes
+and accepts the following byte as the final byte, desynchronising its
+cursor tracking from buffer position and tripping an assertion in
+`eat--t-cur-left' on the next cursor move."
+  (replace-regexp-in-string
+   "\\(?:\e\\[[0-?]*[ -/]*\\)+\e"
+   "\e" output t t))
 
 (defun codex--current-eat-terminal-p (terminal)
   "Return non-nil when TERMINAL belongs to the current Codex Eat buffer."
