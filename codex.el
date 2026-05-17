@@ -1249,7 +1249,41 @@ SWITCHES is an optional list of command-line arguments."
                    (concat codex--eat-pending-output output)))))
       (setq codex--eat-pending-output pending)
       (unless (string-empty-p complete)
-        (funcall orig-fun terminal complete)))))
+        (codex--process-eat-output-safely orig-fun terminal complete)))))
+
+(defun codex--process-eat-output-safely (orig-fun terminal output)
+  "Call ORIG-FUN for TERMINAL and recover readable OUTPUT on parser errors."
+  (condition-case err
+      (funcall orig-fun terminal output)
+    (error
+     (let ((fallback (codex--terminal-output-fallback-text output)))
+       (message "Codex Eat parser rejected output chunk: %s" err)
+       (unless (string-empty-p fallback)
+         (condition-case fallback-err
+             (funcall orig-fun terminal fallback)
+           (error
+            (message "Codex Eat fallback output failed: %s" fallback-err))))))))
+
+(defun codex--terminal-output-fallback-text (output)
+  "Return readable plain text from malformed terminal OUTPUT."
+  (replace-regexp-in-string
+   "[\0-\10\13\14\16-\37\177-\237]" ""
+   (codex--strip-terminal-control-sequences output)
+   t t))
+
+(defun codex--strip-terminal-control-sequences (output)
+  "Return OUTPUT without ANSI escape control sequences."
+  (let ((text output))
+    (setq text (replace-regexp-in-string
+                "\e\\][^\a\e]*\\(?:\a\\|\e\\\\\\)" "" text t t))
+    (setq text (replace-regexp-in-string
+                "\e[PX^_].*?\e\\\\" "" text t t))
+    (setq text (replace-regexp-in-string "\e\\].*\\'" "" text t t))
+    (setq text (replace-regexp-in-string "\e[PX^_].*\\'" "" text t t))
+    (setq text (replace-regexp-in-string
+                "\e\\[[0-?]*[ -/]*[@-~]" "" text t t))
+    (setq text (replace-regexp-in-string "\e\\[[0-?]*[ -/]*\\'" "" text t t))
+    (replace-regexp-in-string "\e[@-_]" "" text t t)))
 
 (defun codex--sanitize-eat-output (output)
   "Return OUTPUT with Codex-inappropriate terminal commands removed."

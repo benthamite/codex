@@ -879,6 +879,38 @@ assertion in `eat--t-cur-left' on the following cursor move."
        "\e[4\e[5;\e[6H")
       (should (equal processed '("\e[6H"))))))
 
+(ert-deftest codex-test-eat-output-advice-recovers-parser-errors ()
+  "Eat parser errors do not escape the Codex output advice."
+  (let (processed)
+    (with-temp-buffer
+      (rename-buffer "*codex:/tmp/eat-output/*" t)
+      (setq-local eat-terminal 'fake-terminal)
+      (codex--eat-process-output-advice
+       (lambda (_terminal output)
+         (if (string-match-p "\e\\]" output)
+             (error "bad OSC")
+           (push output processed)))
+       'fake-terminal
+       (concat "before" "\e]777;notify;ready\a" "after"))
+      (codex--eat-process-output-advice
+       (lambda (_terminal output)
+         (push output processed))
+       'fake-terminal
+       "later")
+      (should (equal (nreverse processed) '("beforeafter" "later"))))))
+
+(ert-deftest codex-test-terminal-output-fallback-text-strips-controls ()
+  "Fallback text strips terminal controls but keeps readable output."
+  (should (equal (codex--terminal-output-fallback-text
+                  (concat "a" "\e[31m" "b" "\e]0;title\a" "c" "\0" "\e[H" "d"))
+                 "abcd")))
+
+(ert-deftest codex-test-terminal-output-fallback-text-strips-open-controls ()
+  "Fallback text strips unterminated terminal controls at chunk end."
+  (should (equal (codex--terminal-output-fallback-text
+                  (concat "visible" "\e]777;notify;rea"))
+                 "visible")))
+
 (ert-deftest codex-test-eat-output-advice-ignores-noncodex-buffers ()
   "Output advice passes through outside Codex buffers."
   (let (processed)
