@@ -297,7 +297,7 @@ The abnormal hook @code{codex-process-environment-functions} lets you inject env
 
 The hook @code{codex-event-hook} runs when the Codex CLI triggers lifecycle events through the hooks system.  This is an abnormal hook: functions are called with a single plist argument containing @code{:type}, @code{:buffer-name}, @code{:json-data}, and @code{:args}, and dispatch stops at the first non-nil return value.  That value is returned to the Codex CLI hook process, which lets permission and tool hooks approve, deny, or block.
 
-The user option @code{codex-transcript-catch-up-on-stop} controls whether Stop hooks repair stale terminal output from Codex JSONL transcripts.  The default is @code{nil} because automatic repair can be visually disruptive in active terminal buffers; reloading from an older build also resets the old implicit default to @code{nil} unless you customized the option explicitly.  When enabled, @code{codex.el} tracks the session id from hook JSON, finds the transcript under @code{codex-transcript-sessions-directory}, and appends the final agent message if the terminal buffer does not already contain it.  Prefer calling @code{codex-refresh-from-transcript} explicitly when repairing a known stale buffer.
+The user option @code{codex-transcript-catch-up-on-stop} controls whether Stop hooks repair stale terminal output from Codex JSONL transcripts.  The default is @code{nil} because Stop hooks can run before the JSONL transcript has recorded the just-finished turn, and an automatic repair may otherwise append an older assistant message into the live buffer.  When enabled, @code{codex.el} tracks the session id from hook JSON, finds the transcript under @code{codex-transcript-sessions-directory}, and inserts only the missing suffix when the terminal buffer already shows the beginning of the answer.  Repair text is placed at the visible truncation point only when transcript lines match the buffer in order, or before the active prompt, so unrelated repeated lines earlier in scrollback do not suppress repair.  Prefer calling @code{codex-refresh-from-transcript} explicitly to repair a known stale buffer after the transcript has settled.
 
 @node Eat terminal settings
 @section Eat terminal settings
@@ -503,7 +503,7 @@ The hook path has two stages.  The @samp{codex-hook-wrapper} shell script is the
 
 The function @code{codex-handle-hook-from-emacsclient} parses that protocol from @code{server-eval-args-left} and delegates to @code{codex-handle-hook}.  Direct Elisp callers can call @code{codex-handle-hook} with a hook type (e.g., @code{"Stop"}, @code{"PreToolUse"}), a buffer name, hook JSON data, and optional additional arguments.  It constructs a plist and runs @code{codex-event-hook} with it until the first handler returns non-nil.  Hooks marked for notification, currently @code{"Stop"}, also trigger a notification (@ref{Notifications}).
 
-Before user hook handlers run, @code{codex-handle-hook} also updates the target buffer's transcript metadata.  On Stop events it can call @code{codex-refresh-from-transcript} internally, so a stale terminal buffer still shows the final recorded agent message.
+Before user hook handlers run, @code{codex-handle-hook} also updates the target buffer's transcript metadata.  If @code{codex-transcript-catch-up-on-stop} is enabled, Stop events can repair the final recorded agent message internally; by default this automatic repair is disabled to avoid racing the transcript writer.
 
 @node Transient menus
 @chapter Transient menus

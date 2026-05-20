@@ -1029,6 +1029,26 @@ assertion in `eat--t-cur-left' on the following cursor move."
           (should (equal (codex--transcript-final-message file) "final")))
       (delete-file file))))
 
+(ert-deftest codex-test-transcript-catch-up-migrates-old-unset-default-to-nil ()
+  "Reloading codex.el disables catch-up when the user has not customized it."
+  (let ((old-default (default-value 'codex-transcript-catch-up-on-stop))
+        (old-value codex-transcript-catch-up-on-stop)
+        (old-customized (get 'codex-transcript-catch-up-on-stop 'customized-value))
+        (old-saved (get 'codex-transcript-catch-up-on-stop 'saved-value)))
+    (unwind-protect
+        (progn
+          (put 'codex-transcript-catch-up-on-stop 'customized-value nil)
+          (put 'codex-transcript-catch-up-on-stop 'saved-value nil)
+          (setq-default codex-transcript-catch-up-on-stop t)
+          (setq codex-transcript-catch-up-on-stop t)
+          (codex--migrate-transcript-catch-up-default)
+          (should-not (default-value 'codex-transcript-catch-up-on-stop))
+          (should-not codex-transcript-catch-up-on-stop))
+      (setq-default codex-transcript-catch-up-on-stop old-default)
+      (setq codex-transcript-catch-up-on-stop old-value)
+      (put 'codex-transcript-catch-up-on-stop 'customized-value old-customized)
+      (put 'codex-transcript-catch-up-on-stop 'saved-value old-saved))))
+
 (ert-deftest codex-test-transcript-catch-up-appends-on-stop ()
   "Stop hooks append missing transcript output to stale Codex buffers."
   (let ((file (make-temp-file "codex-transcript" nil ".jsonl"))
@@ -1042,38 +1062,59 @@ assertion in `eat--t-cur-left' on the following cursor move."
             (rename-buffer "*codex:/tmp/project/*" t)
             (setq-local codex--session-transcript-file file)
             (codex-handle-hook "Stop" (buffer-name) nil)
-            (should (string-match-p "Transcript catch-up" (buffer-string)))
             (should (string-match-p "TANGODB_LOOP_RESULT: ok" (buffer-string)))
             (let ((after-first (buffer-string)))
               (codex-handle-hook "Stop" (buffer-name) nil)
               (should (equal (buffer-string) after-first)))))
       (delete-file file))))
 
-(ert-deftest codex-test-transcript-catch-up-uses-eat-output ()
-  "Catch-up text enters live Eat buffers through Eat's output model."
+(ert-deftest codex-test-transcript-catch-up-inserts-before-active-prompt ()
+  "Catch-up text does not appear after the active Codex prompt."
   (let ((file (make-temp-file "codex-transcript" nil ".jsonl"))
-        output redisplayed)
+        (codex-transcript-catch-up-on-stop t))
     (unwind-protect
         (progn
           (with-temp-file file
             (insert "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"last_agent_message\":\"final\"}}\n"))
-          (cl-letf (((symbol-function 'eat-term-process-output)
-                     (lambda (terminal text)
-                       (setq output (list terminal text))))
-                    ((symbol-function 'eat-term-redisplay)
-                     (lambda (terminal)
-                       (setq redisplayed terminal))))
-            (with-temp-buffer
-              (rename-buffer "*codex:/tmp/project/*" t)
-              (setq-local codex-terminal-backend 'eat)
-              (setq-local eat-terminal 'fake-terminal)
-              (should (codex--append-transcript-catch-up file))
-              (should (equal (car output) 'fake-terminal))
-              (should (string-match-p "Transcript catch-up" (cadr output)))
-              (should (string-match-p "final" (cadr output)))
-              (should (equal redisplayed 'fake-terminal))
-              (should (string-empty-p (buffer-string))))))
+          (with-temp-buffer
+            (rename-buffer "*codex:/tmp/project/*" t)
+            (insert "previous output\n› typed prompt\n")
+            (setq-local codex--session-transcript-file file)
+            (codex-handle-hook "Stop" (buffer-name) nil)
+            (should (string-match-p "previous output\nfinal\n› typed prompt\n"
+                                    (buffer-string)))))
       (delete-file file))))
+
+(ert-deftest codex-test-transcript-catch-up-appends-missing-markdown-table-suffix ()
+  "Catch-up inserts table output omitted after a rendered Markdown prefix."
+  (let ((file (make-temp-file "codex-transcript" nil ".jsonl"))
+        (codex-transcript-catch-up-on-stop t))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"last_agent_message\":\"I would **not urgently roll**.\\n\\nUsing BE at **$284**:\\n\\n| Contract | Mid approx |\\n|---|---:|\\n| Jan 2028 **140C** | ~$193 |\\n\\nMy concrete recommendation: **roll to 120C**.\"}}\n"))
+          (with-temp-buffer
+            (rename-buffer "*codex:/tmp/project/*" t)
+            (insert "• I would not urgently roll.\n\n  Using BE at $284:\n\n› next prompt\n")
+            (setq-local codex--session-transcript-file file)
+            (codex-handle-hook "Stop" (buffer-name) nil)
+            (should (string-match-p "| Contract | Mid approx |" (buffer-string)))
+            (should (string-match-p "My concrete recommendation" (buffer-string)))
+            (should (string-match-p "Using BE at \\$284:\n\n| Contract" (buffer-string)))
+            (should (< (string-match-p "roll to 120C" (buffer-string))
+                       (string-match-p "› next prompt" (buffer-string))))))
+      (delete-file file))))
+
+(ert-deftest codex-test-transcript-catch-up-ignores-stale-last-line-before-prefix ()
+  "A repeated final line before the visible prefix does not suppress repair."
+  (let ((message "Here’s the target-sized version.\n\n| Ticker | Total |\n|---|---:|\n| CRWV | 3 |\n\nVerification: recheck actual delta."))
+    (with-temp-buffer
+      (insert "Verification: recheck actual delta.\n\n")
+      (insert "• Here’s the target-sized version.\n\n")
+      (insert "› next prompt\n")
+      (let ((repair (codex--transcript-missing-repair message)))
+        (should repair)
+        (should (string-match-p "| Ticker | Total |" (car repair)))))))
 
 (ert-deftest codex-test-transcript-metadata-from-hook-json ()
   "Hook JSON session metadata attaches buffers to transcript files."

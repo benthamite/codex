@@ -270,18 +270,17 @@ or corrupts the final TUI output for a turn.  The JSONL transcript is
 treated as authoritative; catch-up text is appended only when the
 message is not already present in the buffer.
 
-This is disabled by default because injecting transcript text into a
-live terminal can place output after an active input area when the
-terminal emulator's screen model has diverged.  Use
-`codex-refresh-from-transcript' for explicit repair."
+When the terminal already shows the start of the message, only the
+missing suffix is inserted.  Repair text is placed before the active
+prompt when one is visible, so it does not appear after typed input."
   :type 'boolean
   :group 'codex)
 
 (defun codex--migrate-transcript-catch-up-default ()
   "Reset old implicit transcript catch-up default to nil."
-  (when (and codex-transcript-catch-up-on-stop
-             (not (get 'codex-transcript-catch-up-on-stop 'customized-value))
-             (not (get 'codex-transcript-catch-up-on-stop 'saved-value)))
+  (unless (or (get 'codex-transcript-catch-up-on-stop 'customized-value)
+              (get 'codex-transcript-catch-up-on-stop 'saved-value))
+    (setq-default codex-transcript-catch-up-on-stop nil)
     (setq codex-transcript-catch-up-on-stop nil)))
 
 (codex--migrate-transcript-catch-up-default)
@@ -3055,7 +3054,7 @@ as JSON."
 
 ;;;###autoload
 (defun codex-refresh-from-transcript (&optional session-id)
-  "Append missing final output from a Codex JSONL transcript.
+  "Append missing output from a Codex JSONL transcript.
 When SESSION-ID is nil, use the current buffer's known session id or
 transcript file.  Interactively, prompt only when neither is known."
   (interactive
@@ -3151,45 +3150,131 @@ transcript file.  Interactively, prompt only when neither is known."
   "Append missing final transcript output from FILE to current buffer.
 Return non-nil when text was inserted."
   (when-let* ((message (codex--transcript-final-message file)))
-    (unless (or (equal message codex--transcript-last-catch-up-message)
-                (codex--buffer-contains-string-p message))
-      (codex--insert-transcript-catch-up file message)
-      (setq-local codex--transcript-last-catch-up-message message)
-      t)))
+    (unless (equal message codex--transcript-last-catch-up-message)
+      (when-let* ((repair (codex--transcript-missing-repair message)))
+        (codex--insert-transcript-catch-up file (car repair) (cdr repair))
+        (setq-local codex--transcript-last-catch-up-message message)
+        t))))
 
-(defun codex--insert-transcript-catch-up (file message)
+(defun codex--transcript-missing-repair (message)
+  "Return (MISSING-TEXT . INSERTION-POINT) for transcript MESSAGE."
+  (if (codex--buffer-reflects-transcript-message-p message)
+      nil
+    (if-let* ((prefix (codex--transcript-visible-prefix message))
+              (suffix (codex--transcript-suffix-from-line
+                       message
+                       (1+ (car prefix)))))
+        (cons suffix (cdr prefix))
+      (cons message nil))))
+
+(defun codex--buffer-reflects-transcript-message-p (message)
+  "Return non-nil when current buffer already shows transcript MESSAGE."
+  (or (codex--buffer-contains-string-p message)
+      (when-let* ((prefix (codex--transcript-visible-prefix message))
+                  (last-line (codex--transcript-last-significant-line message))
+                  (last-position (codex--buffer-display-line-position
+                                  last-line
+                                  (cdr prefix))))
+        (> last-position (cdr prefix)))))
+
+(defun codex--transcript-visible-prefix (message)
+  "Return (LINE-INDEX . POSITION) for the last visible MESSAGE prefix line."
+  (let ((lines (split-string message "\n"))
+        last
+        last-position)
+    (cl-loop for line in lines
+             for index from 0
+             for text = (codex--transcript-display-line line)
+             unless (string-blank-p text)
+             do (let ((position (codex--buffer-display-line-position
+                                 line
+                                 last-position)))
+                  (if position
+                      (setq last (cons index position)
+                            last-position position)
+                    (cl-return))))
+    last))
+
+(defun codex--transcript-suffix-from-line (message line-index)
+  "Return MESSAGE suffix beginning at LINE-INDEX, preserving newlines."
+  (let* ((lines (split-string message "\n"))
+         (suffix (string-trim-left
+                  (mapconcat #'identity (nthcdr line-index lines) "\n")
+                  "\n+")))
+    (unless (string-blank-p suffix)
+      (concat "\n" suffix))))
+
+(defun codex--transcript-last-significant-line (message)
+  "Return MESSAGE's last nonblank line."
+  (car (last (seq-filter
+              (lambda (line)
+                (not (string-blank-p
+                      (codex--transcript-display-line line))))
+              (split-string message "\n")))))
+
+(defun codex--buffer-contains-display-line-p (line)
+  "Return non-nil when current buffer contains rendered transcript LINE."
+  (and (codex--buffer-display-line-position line) t))
+
+(defun codex--buffer-display-line-position (line &optional after)
+  "Return end position of rendered transcript LINE in the buffer.
+When AFTER is non-nil, return the first occurrence after AFTER.
+Otherwise return the last occurrence in the buffer."
+  (let ((needle (codex--transcript-display-line line)))
+    (and (not (string-blank-p needle))
+         (save-excursion
+           (save-restriction
+             (widen)
+             (goto-char (or after (point-min)))
+             (let ((query (if (> (length needle) 60)
+                              (substring needle 0 60)
+                            needle))
+                   position)
+               (if after
+                   (when (search-forward query nil t)
+                     (setq position (line-end-position)))
+                 (while (search-forward query nil t)
+                   (setq position (line-end-position))))
+               position))))))
+
+(defun codex--transcript-display-line (line)
+  "Return LINE normalized toward Codex TUI display text."
+  (let ((text (string-trim line)))
+    (setq text (replace-regexp-in-string "\\*\\*\\([^*\n]+\\)\\*\\*" "\\1" text t))
+    (setq text (replace-regexp-in-string "`\\([^`\n]+\\)`" "\\1" text t))
+    (setq text (replace-regexp-in-string "[ \t]+" " " text t))
+    text))
+
+(defun codex--insert-transcript-catch-up (file message &optional position)
   "Insert transcript catch-up MESSAGE from FILE in the current buffer."
-  (let ((text (codex--transcript-catch-up-text file message)))
-    (if (codex--eat-output-insertion-available-p)
-        (codex--insert-transcript-catch-up-through-eat text)
-      (let ((inhibit-read-only t)
-            (inhibit-modification-hooks t))
-        (goto-char (point-max))
-        (unless (bolp)
-          (insert "\n"))
-        (insert text)))))
+  (codex--insert-transcript-text
+   (codex--transcript-catch-up-text file message)
+   position))
 
-(defun codex--transcript-catch-up-text (file message)
+(defun codex--insert-transcript-text (text &optional position)
+  "Insert transcript repair TEXT before the active prompt when possible."
+  (let ((inhibit-read-only t)
+        (inhibit-modification-hooks t))
+    (save-excursion
+      (goto-char (or position (codex--active-prompt-start) (point-max)))
+      (unless (bolp)
+        (insert "\n"))
+      (insert text)
+      (unless (bolp)
+        (insert "\n")))))
+
+(defun codex--transcript-catch-up-text (_file message)
   "Return catch-up text for transcript FILE and MESSAGE."
-  (concat "\nTranscript catch-up\n"
-          "Source: " (abbreviate-file-name file) "\n\n"
-          message
+  (concat message
           (unless (string-suffix-p "\n" message)
             "\n")))
 
-(defun codex--eat-output-insertion-available-p ()
-  "Return non-nil when catch-up text can enter through Eat output."
-  (and (eq codex-terminal-backend 'eat)
-       (bound-and-true-p eat-terminal)
-       (fboundp 'eat-term-process-output)
-       (fboundp 'eat-term-redisplay)))
-
-(defun codex--insert-transcript-catch-up-through-eat (text)
-  "Insert TEXT through Eat's terminal output model."
-  (let ((inhibit-read-only t)
-        (inhibit-modification-hooks t))
-    (eat-term-process-output eat-terminal text)
-    (eat-term-redisplay eat-terminal)))
+(defun codex--active-prompt-start ()
+  "Return the start of the visible active Codex prompt, or nil."
+  (save-excursion
+    (goto-char (point-max))
+    (when (re-search-backward "^› " nil t)
+      (line-beginning-position))))
 
 (defun codex--buffer-contains-string-p (string)
   "Return non-nil if current buffer contains STRING."
@@ -3201,7 +3286,11 @@ Return non-nil when text was inserted."
 
 (defun codex--transcript-final-message (file)
   "Return the final agent message recorded in transcript FILE."
-  (let (message)
+  (car (last (codex--transcript-agent-messages file))))
+
+(defun codex--transcript-agent-messages (file)
+  "Return agent messages recorded in transcript FILE, in order."
+  (let (messages fallback)
     (with-temp-buffer
       (insert-file-contents file)
       (dolist (line (split-string (buffer-string) "\n" t))
@@ -3213,11 +3302,12 @@ Return non-nil when text was inserted."
           (pcase (alist-get 'type payload)
             ("agent_message"
              (when-let* ((text (alist-get 'message payload)))
-               (setq message text)))
+               (setq fallback text)))
             ("task_complete"
              (when-let* ((text (alist-get 'last_agent_message payload)))
-               (setq message text)))))))
-    message))
+               (push text messages)))))))
+    (or (nreverse messages)
+        (and fallback (list fallback)))))
 
 ;;;; Hooks auto-configuration
 
