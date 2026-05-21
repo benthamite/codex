@@ -1029,8 +1029,49 @@ assertion in `eat--t-cur-left' on the following cursor move."
           (should (equal (codex--transcript-final-message file) "final")))
       (delete-file file))))
 
-(ert-deftest codex-test-transcript-catch-up-migrates-old-unset-default-to-nil ()
-  "Reloading codex.el disables catch-up when the user has not customized it."
+(ert-deftest codex-test-transcript-final-message-uses-newer-agent-message ()
+  "Transcript rendering handles the Stop-hook race before task_complete lands."
+  (let ((file (make-temp-file "codex-transcript" nil ".jsonl")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"last_agent_message\":\"previous\"}}\n")
+            (insert "{\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"message\":\"current\"}}\n"))
+          (should (equal (codex--transcript-final-message file) "current")))
+      (delete-file file))))
+
+(ert-deftest codex-test-transcript-catch-up-schedules-stop-repair ()
+  "Stop hooks schedule transcript repair after the transcript settles."
+  (let ((file (make-temp-file "codex-transcript" nil ".jsonl"))
+        (codex-transcript-catch-up-on-stop t)
+        (codex-enable-notifications nil)
+        (codex-event-hook nil)
+        scheduled-delay
+        scheduled-function
+        scheduled-args)
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"last_agent_message\":\"delayed final\"}}\n"))
+          (with-temp-buffer
+            (rename-buffer "*codex:/tmp/project/*" t)
+            (setq-local codex--session-transcript-file file)
+            (cl-letf (((symbol-function 'run-at-time)
+                       (lambda (time repeat function &rest args)
+                         (setq scheduled-delay time
+                               scheduled-function function
+                               scheduled-args args)
+                         'fake-timer)))
+              (codex-handle-hook "Stop" (buffer-name) nil))
+            (should scheduled-function)
+            (should scheduled-delay)
+            (should-not (string-match-p "delayed final" (buffer-string)))
+            (apply scheduled-function scheduled-args)
+            (should (string-match-p "delayed final" (buffer-string)))))
+      (delete-file file))))
+
+(ert-deftest codex-test-transcript-catch-up-migrates-old-unset-default-to-t ()
+  "Reloading codex.el enables catch-up when the user has not customized it."
   (let ((old-default (default-value 'codex-transcript-catch-up-on-stop))
         (old-value codex-transcript-catch-up-on-stop)
         (old-customized (get 'codex-transcript-catch-up-on-stop 'customized-value))
@@ -1039,11 +1080,11 @@ assertion in `eat--t-cur-left' on the following cursor move."
         (progn
           (put 'codex-transcript-catch-up-on-stop 'customized-value nil)
           (put 'codex-transcript-catch-up-on-stop 'saved-value nil)
-          (setq-default codex-transcript-catch-up-on-stop t)
-          (setq codex-transcript-catch-up-on-stop t)
+          (setq-default codex-transcript-catch-up-on-stop nil)
+          (setq codex-transcript-catch-up-on-stop nil)
           (codex--migrate-transcript-catch-up-default)
-          (should-not (default-value 'codex-transcript-catch-up-on-stop))
-          (should-not codex-transcript-catch-up-on-stop))
+          (should (default-value 'codex-transcript-catch-up-on-stop))
+          (should codex-transcript-catch-up-on-stop))
       (setq-default codex-transcript-catch-up-on-stop old-default)
       (setq codex-transcript-catch-up-on-stop old-value)
       (put 'codex-transcript-catch-up-on-stop 'customized-value old-customized)
@@ -1053,6 +1094,8 @@ assertion in `eat--t-cur-left' on the following cursor move."
   "Stop hooks append missing transcript output to stale Codex buffers."
   (let ((file (make-temp-file "codex-transcript" nil ".jsonl"))
         (codex-transcript-catch-up-on-stop t)
+        (codex-transcript-catch-up-delay 0)
+        (codex-enable-notifications nil)
         (codex-event-hook nil))
     (unwind-protect
         (progn
@@ -1071,7 +1114,9 @@ assertion in `eat--t-cur-left' on the following cursor move."
 (ert-deftest codex-test-transcript-catch-up-inserts-before-active-prompt ()
   "Catch-up text does not appear after the active Codex prompt."
   (let ((file (make-temp-file "codex-transcript" nil ".jsonl"))
-        (codex-transcript-catch-up-on-stop t))
+        (codex-transcript-catch-up-on-stop t)
+        (codex-transcript-catch-up-delay 0)
+        (codex-enable-notifications nil))
     (unwind-protect
         (progn
           (with-temp-file file
@@ -1088,7 +1133,9 @@ assertion in `eat--t-cur-left' on the following cursor move."
 (ert-deftest codex-test-transcript-catch-up-appends-missing-markdown-table-suffix ()
   "Catch-up inserts table output omitted after a rendered Markdown prefix."
   (let ((file (make-temp-file "codex-transcript" nil ".jsonl"))
-        (codex-transcript-catch-up-on-stop t))
+        (codex-transcript-catch-up-on-stop t)
+        (codex-transcript-catch-up-delay 0)
+        (codex-enable-notifications nil))
     (unwind-protect
         (progn
           (with-temp-file file
@@ -1105,6 +1152,31 @@ assertion in `eat--t-cur-left' on the following cursor move."
                        (string-match-p "› next prompt" (buffer-string))))))
       (delete-file file))))
 
+(ert-deftest codex-test-transcript-catch-up-normalizes-markdown-suffix ()
+  "Catch-up inserts display text, not raw transcript Markdown."
+  (let ((file (make-temp-file "codex-transcript" nil ".jsonl"))
+        (codex-transcript-catch-up-on-stop t)
+        (codex-transcript-catch-up-delay 0)
+        (codex-enable-notifications nil))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"last_agent_message\":\"**Config Audit**\\n\\nI did not change files. Main findings:\\n\\n| Source | Rule / issue |\\n|---|---|\\n| [codex/AGENTS.md](</Users/pablo/My Drive/dotfiles/codex/AGENTS.md:5>) | `truthfulness` and **verification** |\\n\\n**Cut List**\\n\\n```markdown\\n# dotfiles conventions\\n```\"}}\n"))
+          (with-temp-buffer
+            (rename-buffer "*codex:/tmp/project/*" t)
+            (insert "• Config Audit\n\n  I did not change files. Main findings:\n\n› next prompt\n")
+            (setq-local codex--session-transcript-file file)
+            (codex-handle-hook "Stop" (buffer-name) nil)
+            (let ((text (buffer-string)))
+              (should (string-match-p "| codex/AGENTS.md | truthfulness and verification |"
+                                      text))
+              (should (string-match-p "\nCut List\n" text))
+              (should (string-match-p "# dotfiles conventions" text))
+              (should-not (string-match-p "\\[codex/AGENTS\\.md\\]" text))
+              (should-not (string-match-p "\\*\\*Cut List\\*\\*" text))
+              (should-not (string-match-p "```" text)))))
+      (delete-file file))))
+
 (ert-deftest codex-test-transcript-catch-up-ignores-stale-last-line-before-prefix ()
   "A repeated final line before the visible prefix does not suppress repair."
   (let ((message "Here’s the target-sized version.\n\n| Ticker | Total |\n|---|---:|\n| CRWV | 3 |\n\nVerification: recheck actual delta."))
@@ -1115,6 +1187,19 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (let ((repair (codex--transcript-missing-repair message)))
         (should repair)
         (should (string-match-p "| Ticker | Total |" (car repair)))))))
+
+(ert-deftest codex-test-transcript-catch-up-skips-fully-visible-formatted-output ()
+  "Catch-up does not append raw Markdown when formatted output is complete."
+  (let ((message "The cost of dropping **all** deterministic rules is mostly recall.\n\nI’d separate three categories:\n\n1. **Pre-classification auto-ignores**\n   These skip the model entirely.\n\nThe biggest practical cost is that some previously fixed false negatives may come back. But given that the bot is a suggestion system and visible false positives ping people, I think that tradeoff is reasonable."))
+    (with-temp-buffer
+      (insert "• The cost of dropping all deterministic rules is mostly recall.\n\n")
+      (insert "  I’d separate three categories:\n\n")
+      (insert "  1. Pre-classification auto-ignores\n")
+      (insert "  These skip the model entirely.\n\n")
+      (insert "  The biggest practical cost is that some previously fixed false negatives may come back. But given that the bot is a suggestion system and\n")
+      (insert "  visible false positives ping people, I think that tradeoff is reasonable.\n")
+      (should (codex--buffer-reflects-transcript-message-p message))
+      (should-not (codex--transcript-missing-repair message)))))
 
 (ert-deftest codex-test-transcript-metadata-from-hook-json ()
   "Hook JSON session metadata attaches buffers to transcript files."
