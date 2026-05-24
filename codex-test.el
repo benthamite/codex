@@ -822,6 +822,20 @@
          (concat "before" "\e[3J" "after")))
       (should (equal processed '("beforeafter"))))))
 
+(ert-deftest codex-test-eat-output-advice-strips-history-deleting-erase-display ()
+  "Eat Codex buffers strip erase-display commands that delete history."
+  (let (processed)
+    (with-temp-buffer
+      (rename-buffer "*codex:/tmp/eat-output/*" t)
+      (setq-local eat-terminal 'fake-terminal)
+      (let ((codex-eat-preserve-scrollback t))
+        (codex--eat-process-output-advice
+         (lambda (_terminal output)
+           (push output processed))
+         'fake-terminal
+         (concat "before" "\e[1J" "middle" "\e[2J" "after")))
+      (should (equal processed '("beforemiddleafter"))))))
+
 (ert-deftest codex-test-eat-output-advice-keeps-erase-display-when-disabled ()
   "Erase-display commands pass through when scrollback preservation is off."
   (let (processed)
