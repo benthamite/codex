@@ -380,12 +380,13 @@ The command @code{codex-kill-all} kills all Codex instances across all directori
 The command @code{codex-send-command} reads a command from the minibuffer and sends it to the Codex instance for the current project.  Input history is maintained in @code{codex-command-history}.  With a prefix argument, the cursor switches to the Codex buffer after sending.
 
 Programmatic callers that already know the target session can use the same
-terminal ordering through @code{codex--send-command-to-buffer}.  It types the
-command into that specific Codex buffer, selects the buffer's window, then
-submits it by calling @code{codex--terminal-send-return} interactively.  Dollar
-commands trigger Codex's skill completion UI, so they receive the additional
-Return events needed to accept the skill completion and submit the resulting
-prompt.
+terminal ordering through @code{codex--send-command-to-buffer}.  It sends the
+command text literally to that specific Codex buffer, selects the buffer's
+window, then submits it by calling @code{codex--terminal-send-return}
+interactively.  Literal sending preserves tabs and other text that would
+otherwise be interpreted as Emacs or Codex key bindings.  Dollar commands
+trigger Codex's skill completion UI, so they receive the additional Return
+events needed to accept the skill completion and submit the resulting prompt.
 
 The command @code{codex-send-command-with-context} works like @code{codex-send-command} but appends a file reference (in @code{@@file:line} format) to the command.  If a region is active, it includes the line range of the region.  This is particularly useful when you want to direct Codex's attention to a specific location in your code.
 
@@ -443,9 +444,9 @@ The commands @code{codex-send-1}, @code{codex-send-2}, and @code{codex-send-3} s
 
 The command @code{codex-toggle} shows or hides the Codex window.  If the Codex buffer is currently visible and another window exists, it deletes the Codex window; if the Codex window is the only window, it buries the buffer instead.  If the buffer is hidden, it displays it using @code{codex-display-window-fn}.  The @code{codex-no-delete-other-windows} parameter is applied to the window.  If @code{codex-toggle-auto-select} is non-nil, focus moves to the Codex window when it is shown (@ref{Window management}).
 
-The command @code{codex-switch-to-buffer} switches to the Codex buffer for the current project.  If multiple instances are running, you are prompted to select one.  With a prefix argument, it shows all Codex instances across all directories.
+The command @code{codex-switch-to-buffer} switches to the Codex buffer for the current project.  If multiple instances are running, you are prompted to select one.  With a prefix argument, it shows all live Codex instances across all directories.  Buffers whose terminal process has exited are ignored even if their names still match the Codex buffer pattern.
 
-The command @code{codex-select-buffer} prompts you to select from all running Codex instances across all directories and switches to the selected one.
+The command @code{codex-select-buffer} prompts you to select from all live Codex instances across all directories and switches to the selected one.
 
 The command @code{codex-toggle-read-only-mode} toggles the terminal between read-only mode and interactive mode.  In read-only mode (eat's Emacs mode or vterm's copy mode), you can navigate and copy text using normal Emacs keybindings.  In interactive mode, keystrokes are sent to the terminal.
 
@@ -503,7 +504,7 @@ The hook path has two stages.  The @samp{codex-hook-wrapper} shell script is the
 
 The function @code{codex-handle-hook-from-emacsclient} parses that protocol from @code{server-eval-args-left} and delegates to @code{codex-handle-hook}.  Direct Elisp callers can call @code{codex-handle-hook} with a hook type (e.g., @code{"Stop"}, @code{"PreToolUse"}), a buffer name, hook JSON data, and optional additional arguments.  It constructs a plist and runs @code{codex-event-hook} with it until the first handler returns non-nil.  Hooks marked for notification, currently @code{"Stop"}, also trigger a notification (@ref{Notifications}).
 
-Before user hook handlers run, @code{codex-handle-hook} also updates the target buffer's transcript metadata.  If @code{codex-transcript-catch-up-on-stop} is enabled, Stop events can repair the final recorded agent message internally; by default this automatic repair is disabled to avoid racing the transcript writer.
+Before user hook handlers run, @code{codex-handle-hook} also updates the target buffer's transcript metadata.  When hook JSON includes an explicit transcript path, that path is recorded directly.  When only a session id is available, codex.el looks up the matching JSONL file under @code{codex-transcript-sessions-directory} and caches successful lookups so later hooks for the same session do not rescan the whole sessions tree.  If @code{codex-transcript-catch-up-on-stop} is enabled, Stop events can repair the final recorded agent message internally; by default this automatic repair is disabled to avoid racing the transcript writer.
 
 @node Transient menus
 @chapter Transient menus

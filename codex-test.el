@@ -1155,6 +1155,26 @@ assertion in `eat--t-cur-left' on the following cursor move."
             (should (equal codex--session-transcript-file file))))
       (delete-directory root t))))
 
+(ert-deftest codex-test-find-session-transcript-caches-results ()
+  "Transcript lookup does not rescan sessions for repeated session ids."
+  (let ((codex--transcript-file-cache (make-hash-table :test 'equal))
+        (root (make-temp-file "codex-sessions" t))
+        (file (make-temp-file "codex-session" nil ".jsonl"))
+        (calls 0))
+    (unwind-protect
+        (let ((codex-transcript-sessions-directory root))
+          (cl-letf (((symbol-function 'directory-files-recursively)
+                     (lambda (&rest _)
+                       (setq calls (1+ calls))
+                       (list file))))
+            (should (equal (codex--find-session-transcript "session")
+                           file))
+            (should (equal (codex--find-session-transcript "session")
+                           file))
+            (should (= calls 1))))
+      (delete-directory root t)
+      (delete-file file))))
+
 ;;;; hooks.json matcher values
 
 (ert-deftest codex-test-hooks-json-user-prompt-submit-matcher ()
@@ -1172,27 +1192,35 @@ assertion in `eat--t-cur-left' on the following cursor move."
 ;;;; Find codex buffers tests
 
 (ert-deftest codex-test-find-all-codex-buffers ()
-  "Test finding all codex buffers from buffer-list."
+  "Test finding active Codex buffers from `buffer-list'."
   (let ((buf1 (generate-new-buffer "*codex:/path/a/*"))
         (buf2 (generate-new-buffer "*codex:/path/b/:test*"))
+        (stale (generate-new-buffer "*codex:/path/stale/*"))
         (buf3 (generate-new-buffer "*not-codex*")))
     (unwind-protect
-        (let ((found (codex--find-all-codex-buffers)))
-          (should (memq buf1 found))
-          (should (memq buf2 found))
-          (should-not (memq buf3 found)))
+        (cl-letf (((symbol-function 'codex--buffer-process-live-p)
+                   (lambda (buffer)
+                     (memq buffer (list buf1 buf2)))))
+          (let ((found (codex--find-all-codex-buffers)))
+            (should (memq buf1 found))
+            (should (memq buf2 found))
+            (should-not (memq stale found))
+            (should-not (memq buf3 found))))
       (kill-buffer buf1)
       (kill-buffer buf2)
+      (kill-buffer stale)
       (kill-buffer buf3))))
 
 (ert-deftest codex-test-get-or-prompt-prefers-current-codex-buffer ()
-  "Test selecting the current Codex buffer before prompting."
+  "Test selecting the current active Codex buffer before prompting."
   (let ((buf (generate-new-buffer "*codex:/tmp/current/*"))
         (prompted nil))
     (unwind-protect
         (with-current-buffer buf
           (cl-letf (((symbol-function 'codex--directory)
                      (lambda () (error "should not inspect directory")))
+                    ((symbol-function 'codex--buffer-process-live-p)
+                     (lambda (buffer) (eq buffer buf)))
                     ((symbol-function 'codex--select-buffer-from-choices)
                      (lambda (&rest _)
                        (setq prompted t)
@@ -1431,18 +1459,23 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (codex--term-send-action 'eat :escape)
       (should (equal sent (list 1 'escape))))))
 
-(ert-deftest codex-test-eat-submit-command-executes-keyboard-macro ()
-  "Programmatic Eat submission routes through the buffer keymap."
-  (let (macro timers)
-    (cl-letf (((symbol-function 'execute-kbd-macro)
+(ert-deftest codex-test-eat-submit-command-sends-literal-text ()
+  "Programmatic Eat submission sends text without invoking key bindings."
+  (let (sent macro timers)
+    (cl-letf (((symbol-function 'eat-term-send-string)
+               (lambda (terminal string)
+                 (setq sent (list terminal string))))
+              ((symbol-function 'execute-kbd-macro)
                (lambda (keys &optional _count _loopfunc)
                  (setq macro keys)))
               ((symbol-function 'run-at-time)
                (lambda (secs repeat function &rest args)
                  (when (eq function #'codex--submit-return-in-buffer)
                    (push (list secs repeat function args) timers)))))
-      (codex--term-submit-command 'eat "$x")
-      (should (equal macro (string-to-vector "$x")))
+      (setq-local eat-terminal 'terminal)
+      (codex--term-submit-command 'eat "$x\tliteral")
+      (should (equal sent '(terminal "$x\tliteral")))
+      (should-not macro)
       (should (equal (nreverse timers)
                      (list
                       (list 0.05 nil #'codex--submit-return-in-buffer
@@ -1455,11 +1488,12 @@ assertion in `eat--t-cur-left' on the following cursor move."
 (ert-deftest codex-test-eat-submit-command-sends-one-return-for-nonskill ()
   "Programmatic Eat submission uses one Return for ordinary commands."
   (let (timers)
-    (cl-letf (((symbol-function 'execute-kbd-macro) #'ignore)
+    (cl-letf (((symbol-function 'eat-term-send-string) #'ignore)
               ((symbol-function 'run-at-time)
                (lambda (secs repeat function &rest args)
                  (when (eq function #'codex--submit-return-in-buffer)
                    (push (list secs repeat function args) timers)))))
+      (setq-local eat-terminal 'terminal)
       (codex--term-submit-command 'eat "/status")
       (should (equal (nreverse timers)
                      (list

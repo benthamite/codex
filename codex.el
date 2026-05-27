@@ -605,6 +605,9 @@ recompiled with a larger SB_MAX value."
 (defvar-local codex--transcript-last-catch-up-message nil
   "Last transcript catch-up message appended to the current buffer.")
 
+(defvar codex--transcript-file-cache (make-hash-table :test 'equal)
+  "Cache mapping transcript roots and session ids to JSONL transcript files.")
+
 (defvar-local codex--remapped-output-end nil
   "Marker at the previous end of remapped terminal output.")
 
@@ -917,9 +920,8 @@ _BACKEND is the terminal backend type (should be \\='eat)."
     (_ (error "Unknown eat terminal action: %S" action))))
 
 (cl-defmethod codex--term-submit-command ((_backend (eql eat)) command)
-  "Type COMMAND into eat through the buffer keymap and submit it."
-  (execute-kbd-macro
-   (string-to-vector command))
+  "Send COMMAND to eat as literal terminal input and submit it."
+  (eat-term-send-string eat-terminal command)
   (codex--schedule-submit-returns command (current-buffer)
                                   (selected-window)))
 
@@ -1444,7 +1446,18 @@ If not in a project and no buffer file, return `default-directory'."
 
 (defun codex--find-all-codex-buffers ()
   "Find all active Codex buffers across all directories."
-  (cl-remove-if-not #'codex--buffer-p (buffer-list)))
+  (cl-remove-if-not #'codex--active-buffer-p (buffer-list)))
+
+(defun codex--active-buffer-p (buffer)
+  "Return non-nil if BUFFER is an active Codex terminal buffer."
+  (and (codex--buffer-p buffer)
+       (codex--buffer-process-live-p buffer)))
+
+(defun codex--buffer-process-live-p (buffer)
+  "Return non-nil if BUFFER has a live terminal process."
+  (when (buffer-live-p buffer)
+    (when-let* ((process (get-buffer-process buffer)))
+      (process-live-p process))))
 
 (defun codex--buffer-directory-for (buffer)
   "Return the directory associated with Codex BUFFER."
@@ -3110,7 +3123,10 @@ transcript file.  Interactively, prompt only when neither is known."
     (when (and (stringp transcript-file)
                (file-exists-p (expand-file-name transcript-file)))
       (setq-local codex--session-transcript-file
-                  (expand-file-name transcript-file)))
+                  (expand-file-name transcript-file))
+      (when codex--session-id
+        (codex--cache-session-transcript codex--session-id
+                                         codex--session-transcript-file)))
     (when (and codex--session-id (not codex--session-transcript-file))
       (setq-local codex--session-transcript-file
                   (codex--find-session-transcript codex--session-id)))))
@@ -3144,9 +3160,31 @@ transcript file.  Interactively, prompt only when neither is known."
   "Return the JSONL transcript path for SESSION-ID, or nil."
   (when (and (stringp session-id) (not (string-empty-p session-id)))
     (let* ((root (expand-file-name codex-transcript-sessions-directory))
-           (regexp (concat (regexp-quote session-id) "\\.jsonl\\'")))
-      (when (file-directory-p root)
-        (car (directory-files-recursively root regexp))))))
+           (key (list root session-id)))
+      (or (codex--cached-session-transcript key)
+          (when (file-directory-p root)
+            (when-let* ((file (car (directory-files-recursively
+                                    root
+                                    (concat (regexp-quote session-id)
+                                            "\\.jsonl\\'")))))
+              (puthash key file codex--transcript-file-cache)
+              file))))))
+
+(defun codex--cached-session-transcript (key)
+  "Return cached transcript file for KEY when it still exists."
+  (let ((file (gethash key codex--transcript-file-cache)))
+    (cond
+     ((and file (file-exists-p file)) file)
+     (file
+      (remhash key codex--transcript-file-cache)
+      nil))))
+
+(defun codex--cache-session-transcript (session-id file)
+  "Cache FILE as the transcript for SESSION-ID."
+  (puthash (list (expand-file-name codex-transcript-sessions-directory)
+                 session-id)
+           file
+           codex--transcript-file-cache))
 
 (defun codex--append-transcript-catch-up (file)
   "Append missing final transcript output from FILE to current buffer.
