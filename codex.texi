@@ -602,15 +602,15 @@ The default bindings are:
 
 @findex codex-mode
 
-The global minor mode @code{codex-mode} enables the Codex integration.  When activated, it auto-configures the Codex CLI hooks system by ensuring that @code{config.toml} and @code{hooks.json} are set up correctly (@ref{Hooks integration}).  The mode adds a @samp{Codex} lighter to the mode line.
+The global minor mode @code{codex-mode} auto-configures the Codex CLI hooks system by ensuring that @code{config.toml} and @code{hooks.json} are set up correctly (@ref{Hooks integration}).  The mode also adds a @samp{Codex} lighter to the mode line.
 
-Activate it with:
+Activate the mode with:
 
 @lisp
 (codex-mode 1)
 @end lisp
 
-Or add it to your init file to enable it on startup.
+Or add it to your init file to configure hooks on startup.
 
 @node Hooks system
 @chapter Hooks system

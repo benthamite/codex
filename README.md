@@ -50,15 +50,11 @@ Requires Emacs 28.1 or later.
 
 ## Quick start
 
-Enabling `codex-mode` writes or repairs `~/.codex/config.toml` and
-`~/.codex/hooks.json` so Codex CLI hooks reach Emacs; existing user hooks are
-preserved.
+After installing the package and the Codex CLI, you can start a session with
+`M-x codex`.
 
 ```emacs-lisp
-;; Enable the minor mode (auto-configures CLI hooks)
-(codex-mode 1)
-
-;; Bind the command map to a prefix of your choice
+;; Optional: bind the command map to a prefix of your choice.
 (global-set-key (kbd "C-c x") codex-command-map)
 
 ;; Start Codex in the current project

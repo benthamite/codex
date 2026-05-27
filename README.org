@@ -508,15 +508,15 @@ The default bindings are:
 
 #+findex: codex-mode
 
-The global minor mode ~codex-mode~ enables the Codex integration.  When activated, it auto-configures the Codex CLI hooks system by ensuring that ~config.toml~ and ~hooks.json~ are set up correctly ([[#h:hooks-integration][Hooks integration]]).  The mode adds a =Codex= lighter to the mode line.
+The global minor mode ~codex-mode~ auto-configures the Codex CLI hooks system by ensuring that ~config.toml~ and ~hooks.json~ are set up correctly ([[#h:hooks-integration][Hooks integration]]).  The mode also adds a =Codex= lighter to the mode line.
 
-Activate it with:
+Activate the mode with:
 
 #+begin_src emacs-lisp
 (codex-mode 1)
 #+end_src
 
-Or add it to your init file to enable it on startup.
+Or add it to your init file to configure hooks on startup.
 
 * Hooks system
 :PROPERTIES:
