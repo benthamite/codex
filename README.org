@@ -534,6 +534,22 @@ Each hook entry points to the =codex-hook-wrapper= script, which reads JSON from
 
 You can respond to these events by adding functions to ~codex-event-hook~ ([[#h:emacs-hooks][Emacs hooks]]).
 
+* Release history
+:PROPERTIES:
+:CUSTOM_ID: h:release-history
+:END:
+
+** 0.3.0
+:PROPERTIES:
+:CUSTOM_ID: h:release-0-3-0
+:END:
+
+This release improves Codex terminal robustness in Emacs.  Programmatic =eat=
+submissions now send prompt text literally, live-instance selection ignores
+stale Codex-named buffers whose terminal process has exited, transcript lookup
+results are cached by session id, and retained terminal output is protected
+across redraw and escape-sequence edge cases.
+
 * Indices
 :PROPERTIES:
 :CUSTOM_ID: h:indices

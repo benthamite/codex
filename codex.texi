@@ -36,6 +36,7 @@ This manual describes the features and customization options for the Emacs Lisp 
 * Keymap::
 * Minor mode::
 * Hooks system::
+* Release history::
 * Indices::
 
 @detailmenu
@@ -72,6 +73,10 @@ Functions
 
 * Notification functions::
 * Hook handling::
+
+Release history
+
+* 0.3.0: 030. 
 
 Indices
 
@@ -624,6 +629,22 @@ Ensures that @code{hooks.json} has entries for all six supported hook types: @co
 Each hook entry points to the @samp{codex-hook-wrapper} script, which reads JSON from stdin into a private temporary file and asks @samp{emacsclient} to pass that file to @code{codex-handle-hook}.  Existing user-defined hooks in @code{hooks.json} are preserved; @samp{codex.el} appends its own entries if they are absent and repairs them if their matcher, command, type, or timeout drifts.
 
 You can respond to these events by adding functions to @code{codex-event-hook} (@ref{Emacs hooks}).
+
+@node Release history
+@chapter Release history
+
+@menu
+* 0.3.0: 030. 
+@end menu
+
+@node 030
+@section 0.3.0
+
+This release improves Codex terminal robustness in Emacs.  Programmatic @samp{eat}
+submissions now send prompt text literally, live-instance selection ignores
+stale Codex-named buffers whose terminal process has exited, transcript lookup
+results are cached by session id, and retained terminal output is protected
+across redraw and escape-sequence edge cases.
 
 @node Indices
 @chapter Indices
