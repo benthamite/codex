@@ -213,7 +213,7 @@ The user option @code{codex-reasoning-effort} overrides the reasoning effort lev
 @vindex codex-hooks-json-path
 @vindex codex-emacsclient-program
 
-The user option @code{codex-enable-hooks} controls whether @samp{codex.el} automatically configures the Codex CLI hooks system.  The default is @code{t}.  When enabled, activating @code{codex-mode} ensures that @code{config.toml} has @code{codex_hooks = true} under @code{[features]} and that @code{hooks.json} contains entries for all supported hook types.
+The user option @code{codex-enable-hooks} controls whether @samp{codex.el} automatically configures the Codex CLI hooks system.  The default is @code{t}.  When enabled, activating @code{codex-mode} ensures that @code{config.toml} has @code{hooks = true} under @code{[features]} and that @code{hooks.json} contains entries for all supported hook types.
 
 The user option @code{codex-hooks-config-path} is the path to the Codex @code{config.toml} file.  The default is @code{"~/.codex/config.toml"}.
 
@@ -621,9 +621,9 @@ When @code{codex-enable-hooks} is non-nil and @code{codex-mode} is activated, @s
 
 @enumerate
 @item
-Ensures that @code{config.toml} has @code{codex_hooks = true} under the @code{[features]} section.
+Ensures that @code{config.toml} has @code{hooks = true} under the @code{[features]} section.
 @item
-Ensures that @code{hooks.json} has entries for all six supported hook types: @code{Stop}, @code{SessionStart}, @code{PreToolUse}, @code{PermissionRequest}, @code{PostToolUse}, and @code{UserPromptSubmit}.
+Ensures that @code{hooks.json} has entries for all eight supported hook types: @code{Stop}, @code{SessionStart}, @code{PreToolUse}, @code{PermissionRequest}, @code{PostToolUse}, @code{UserPromptSubmit}, @code{PreCompact}, and @code{PostCompact}.
 @end enumerate
 
 Each hook entry points to the @samp{codex-hook-wrapper} script, which reads JSON from stdin into a private temporary file and asks @samp{emacsclient} to pass that file to @code{codex-handle-hook}.  Existing user-defined hooks in @code{hooks.json} are preserved; @samp{codex.el} appends its own entries if they are absent and repairs them if their matcher, command, type, or timeout drifts.

@@ -269,7 +269,8 @@
                            (insert-file-contents temp-file)
                            (buffer-string))))
             (should (string-match-p "\\[features\\]" content))
-            (should (string-match-p "codex_hooks = true" content))))
+            (should (string-match-p "^hooks = true$" content))
+            (should-not (string-match-p "codex_hooks" content))))
       (delete-file temp-file))))
 
 (ert-deftest codex-test-config-toml-hooks-existing-features ()
@@ -284,20 +285,21 @@
           (let ((content (with-temp-buffer
                            (insert-file-contents temp-file)
                            (buffer-string))))
-            (should (string-match-p "codex_hooks = true" content))
+            (should (string-match-p "^hooks = true$" content))
+            (should-not (string-match-p "codex_hooks" content))
             ;; Should not duplicate [features] section
             (should (= 1 (cl-count-if (lambda (_) t)
                                        (split-string content "\\[features\\]" t))))))
       (delete-file temp-file))))
 
 (ert-deftest codex-test-config-toml-hooks-already-present ()
-  "Test that existing codex_hooks = true is not duplicated."
+  "Test that existing hooks = true is not duplicated."
   (let* ((temp-file (make-temp-file "codex-test-config" nil ".toml"))
          (codex-hooks-config-path temp-file))
     (unwind-protect
         (progn
           (with-temp-file temp-file
-            (insert "[features]\ncodex_hooks = true\n"))
+            (insert "[features]\nhooks = true\n"))
           (codex--ensure-config-toml-hooks)
           (let ((content (with-temp-buffer
                            (insert-file-contents temp-file)
@@ -305,34 +307,41 @@
             ;; Should appear exactly once
             (let ((count 0)
                   (start 0))
-              (while (string-match "codex_hooks = true" content start)
+              (while (string-match "^hooks = true$" content start)
                 (setq count (1+ count)
                       start (match-end 0)))
-              (should (= 1 count)))))
+              (should (= 1 count)))
+            (should-not (string-match-p "codex_hooks" content))))
       (delete-file temp-file))))
 
 (ert-deftest codex-test-config-toml-hooks-replaces-false ()
   "Test that an existing false hooks setting is replaced in [features]."
   (should (equal (codex--config-toml-with-hooks-enabled
-                  "[features]\ncodex_hooks = false\n")
-                 "[features]\ncodex_hooks = true\n")))
+                  "[features]\nhooks = false\n")
+                 "[features]\nhooks = true\n")))
+
+(ert-deftest codex-test-config-toml-hooks-migrates-legacy-key ()
+  "Test that legacy codex_hooks is migrated to hooks."
+  (should (equal (codex--config-toml-with-hooks-enabled
+                  "[features]\ncodex_hooks = true\n")
+                 "[features]\nhooks = true\n")))
 
 (ert-deftest codex-test-config-toml-hooks-ignores-comments ()
   "Test that commented hook settings do not count as enabled."
   (should (equal (codex--config-toml-with-hooks-enabled
-                  "[features]\n# codex_hooks = true\n")
-                 "[features]\ncodex_hooks = true\n# codex_hooks = true\n")))
+                  "[features]\n# hooks = true\n")
+                 "[features]\nhooks = true\n# hooks = true\n")))
 
 (ert-deftest codex-test-config-toml-hooks-scopes-to-features ()
   "Test that hook settings in other tables do not satisfy [features]."
   (should (equal (codex--config-toml-with-hooks-enabled
-                  "[other]\ncodex_hooks = true\n")
-                 "[other]\ncodex_hooks = true\n\n[features]\ncodex_hooks = true\n")))
+                  "[other]\nhooks = true\n")
+                 "[other]\nhooks = true\n\n[features]\nhooks = true\n")))
 
 (ert-deftest codex-test-config-toml-hooks-header-at-eof ()
   "Test enabling hooks when [features] has no trailing newline."
   (should (equal (codex--config-toml-with-hooks-enabled "[features]")
-                 "[features]\ncodex_hooks = true\n")))
+                 "[features]\nhooks = true\n")))
 
 ;;;; hooks.json merging tests
 
@@ -345,6 +354,14 @@
       (should hooks)
       (dolist (spec codex--hook-specs)
         (should (alist-get (intern (plist-get spec :type)) hooks))))))
+
+(ert-deftest codex-test-hooks-json-installs-compact-hooks ()
+  "Test that hooks.json includes compact lifecycle hooks."
+  (codex-test--with-temp-hooks-json temp-file
+    (let* ((content (codex-test--ensure-hooks-json))
+           (hooks (alist-get 'hooks content)))
+      (should (alist-get 'PreCompact hooks))
+      (should (alist-get 'PostCompact hooks)))))
 
 (ert-deftest codex-test-hooks-json-preserves-existing ()
   "Test that existing hooks.json entries are preserved."
@@ -588,6 +605,29 @@
         (should (equal (aref stop-hooks 0)
                        (codex--hook-entry "Stop" command)))))))
 
+(ert-deftest codex-test-hooks-json-replaces-old-profile-wrapper-entry ()
+  "Test that generated hook entries from an old profile are replaced."
+  (codex-test--with-temp-hooks-json temp-file
+    (let* ((codex-emacsclient-program "/mock/emacsclient")
+           (server-name "mock-server")
+           (server-use-tcp nil)
+           (old-wrapper "/old/profile/codex/bin/codex-hook-wrapper")
+           (wrapper "/new/profile/codex/bin/codex-hook-wrapper")
+           (old-command (codex--hook-command old-wrapper "Stop"))
+           (command (codex--hook-command wrapper "Stop")))
+      (with-temp-file temp-file
+        (insert (json-encode
+                 `((hooks . ((Stop . [((matcher . "*")
+                                        (hooks . [((type . "command")
+                                                   (command . ,old-command)
+                                                   (timeout . 30))]))])))))))
+      (let* ((content (codex-test--ensure-hooks-json wrapper))
+             (hooks (alist-get 'hooks content))
+             (stop-hooks (alist-get 'Stop hooks)))
+        (should (= 1 (length stop-hooks)))
+        (should (equal (aref stop-hooks 0)
+                       (codex--hook-entry "Stop" command)))))))
+
 (ert-deftest codex-test-hooks-json-replaces-legacy-owned-entry ()
   "Test that pre-server-arg generated hook entries are replaced."
   (codex-test--with-temp-hooks-json temp-file
@@ -650,7 +690,8 @@
                            (insert-file-contents config-path)
                            (buffer-string))))
             (should (string-match-p "\\[features\\]" content))
-            (should (string-match-p "codex_hooks = true" content))))
+            (should (string-match-p "^hooks = true$" content))
+            (should-not (string-match-p "codex_hooks" content))))
       (delete-directory temp-dir t))))
 
 (ert-deftest codex-test-config-toml-hooks-preserves-other-content ()
@@ -667,8 +708,29 @@
                            (buffer-string))))
             (should (string-match-p "default = \"gpt-4\"" content))
             (should (string-match-p "other_feature = true" content))
-            (should (string-match-p "codex_hooks = true" content))))
+            (should (string-match-p "^hooks = true$" content))
+            (should-not (string-match-p "codex_hooks" content))))
       (delete-file temp-file))))
+
+(ert-deftest codex-test-config-toml-hooks-preserves-symlink ()
+  "Test that ensuring hooks preserves a symlinked config.toml."
+  (let* ((temp-dir (make-temp-file "codex-test-dir" t))
+         (target-file (expand-file-name "target.toml" temp-dir))
+         (link-file (expand-file-name "config.toml" temp-dir))
+         (codex-hooks-config-path link-file))
+    (unwind-protect
+        (progn
+          (with-temp-file target-file
+            (insert "[features]\n"))
+          (make-symbolic-link target-file link-file)
+          (codex--ensure-config-toml-hooks)
+          (should (file-symlink-p link-file))
+          (let ((content (with-temp-buffer
+                           (insert-file-contents target-file)
+                           (buffer-string))))
+            (should (string-match-p "^hooks = true$" content))
+            (should-not (string-match-p "codex_hooks" content))))
+      (delete-directory temp-dir t))))
 
 ;;;; CLI args edge cases
 

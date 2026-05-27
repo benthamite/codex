@@ -128,7 +128,7 @@ The user option ~codex-reasoning-effort~ overrides the reasoning effort level.  
 #+vindex: codex-hooks-json-path
 #+vindex: codex-emacsclient-program
 
-The user option ~codex-enable-hooks~ controls whether =codex.el= automatically configures the Codex CLI hooks system.  The default is ~t~.  When enabled, activating ~codex-mode~ ensures that ~config.toml~ has ~codex_hooks = true~ under ~[features]~ and that ~hooks.json~ contains entries for all supported hook types.
+The user option ~codex-enable-hooks~ controls whether =codex.el= automatically configures the Codex CLI hooks system.  The default is ~t~.  When enabled, activating ~codex-mode~ ensures that ~config.toml~ has ~hooks = true~ under ~[features]~ and that ~hooks.json~ contains entries for all supported hook types.
 
 The user option ~codex-hooks-config-path~ is the path to the Codex ~config.toml~ file.  The default is ~"~/.codex/config.toml"~.
 
@@ -527,8 +527,8 @@ The Codex CLI supports a hooks mechanism that notifies external programs of life
 
 When ~codex-enable-hooks~ is non-nil and ~codex-mode~ is activated, =codex.el= automatically:
 
-1. Ensures that ~config.toml~ has ~codex_hooks = true~ under the ~[features]~ section.
-2. Ensures that ~hooks.json~ has entries for all six supported hook types: ~Stop~, ~SessionStart~, ~PreToolUse~, ~PermissionRequest~, ~PostToolUse~, and ~UserPromptSubmit~.
+1. Ensures that ~config.toml~ has ~hooks = true~ under the ~[features]~ section.
+2. Ensures that ~hooks.json~ has entries for all eight supported hook types: ~Stop~, ~SessionStart~, ~PreToolUse~, ~PermissionRequest~, ~PostToolUse~, ~UserPromptSubmit~, ~PreCompact~, and ~PostCompact~.
 
 Each hook entry points to the =codex-hook-wrapper= script, which reads JSON from stdin into a private temporary file and asks =emacsclient= to pass that file to ~codex-handle-hook~.  Existing user-defined hooks in ~hooks.json~ are preserved; =codex.el= appends its own entries if they are absent and repairs them if their matcher, command, type, or timeout drifts.
 

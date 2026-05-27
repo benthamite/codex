@@ -2983,6 +2983,10 @@ With prefix ARG, show all Codex instances across all directories."
     (:type "PostToolUse" :matcher ,codex--hook-all-events-matcher
            :timeout ,codex--hook-default-timeout)
     (:type "UserPromptSubmit" :matcher ,codex--hook-no-tool-matcher
+           :timeout ,codex--hook-default-timeout)
+    (:type "PreCompact" :matcher ,codex--hook-all-events-matcher
+           :timeout ,codex--hook-default-timeout)
+    (:type "PostCompact" :matcher ,codex--hook-all-events-matcher
            :timeout ,codex--hook-default-timeout))
   "Supported Codex hook metadata used to generate hooks.json.
 `matcher' follows Codex hook semantics: `*' receives all lifecycle and tool
@@ -3433,7 +3437,7 @@ Only runs when `codex-enable-hooks' is non-nil."
           (funcall write-fn path updated))))))
 
 (defun codex--ensure-config-toml-hooks ()
-  "Ensure `features.codex_hooks = true' exists in config.toml."
+  "Ensure `features.hooks = true' exists in config.toml."
   (codex--ensure-managed-file codex-hooks-config-path
                               #'codex--read-file-string
                               #'codex--config-toml-with-hooks-enabled
@@ -3448,7 +3452,7 @@ Only runs when `codex-enable-hooks' is non-nil."
     ""))
 
 (defun codex--config-toml-with-hooks-enabled (content)
-  "Return CONTENT with `[features].codex_hooks' set to true."
+  "Return CONTENT with `[features].hooks' set to true."
   (with-temp-buffer
     (insert content)
     (if (codex--goto-features-table)
@@ -3472,9 +3476,23 @@ Only runs when `codex-enable-hooks' is non-nil."
     (unless (bolp)
       (insert "\n")
       (setq table-end (1+ table-end)))
-    (if (re-search-forward "^[ \t]*codex_hooks[ \t]*=[^\n]*" table-end t)
-        (replace-match "codex_hooks = true" t t)
-      (insert "codex_hooks = true\n"))))
+    (if (re-search-forward "^[ \t]*\\(?:codex_\\)?hooks[ \t]*=[^\n]*" table-end t)
+        (replace-match "hooks = true" t t)
+      (insert "hooks = true\n"))
+    (codex--remove-legacy-hooks-key)))
+
+(defun codex--remove-legacy-hooks-key ()
+  "Remove legacy codex_hooks lines from the current features table."
+  (save-excursion
+    (when (codex--goto-features-table)
+      (let ((table-end (save-excursion
+                         (forward-line 1)
+                         (if (re-search-forward "^[ \t]*\\[[^]\n]+\\][ \t]*\\(?:#.*\\)?$" nil t)
+                             (line-beginning-position)
+                           (point-max)))))
+        (forward-line 1)
+        (while (re-search-forward "^[ \t]*codex_hooks[ \t]*=[^\n]*\n?" table-end t)
+          (replace-match "" t t))))))
 
 (defun codex--append-features-table ()
   "Append a `[features]' table with Codex hooks enabled."
@@ -3483,21 +3501,28 @@ Only runs when `codex-enable-hooks' is non-nil."
     (unless (bolp)
       (insert "\n"))
     (insert "\n"))
-  (insert "[features]\ncodex_hooks = true\n"))
+  (insert "[features]\nhooks = true\n"))
 
 (defun codex--write-file-atomically (file content)
   "Write CONTENT to FILE by renaming a temporary file in the same directory."
-  (let* ((dir (file-name-directory file))
+  (let* ((target (codex--writable-target-file file))
+         (dir (file-name-directory target))
          (temp-file (make-temp-file (expand-file-name ".codex-write-" dir))))
     (unwind-protect
         (progn
           (with-temp-file temp-file
             (insert content))
-          (when (file-exists-p file)
-            (set-file-modes temp-file (file-modes file)))
-          (rename-file temp-file file t))
+          (when (file-exists-p target)
+            (set-file-modes temp-file (file-modes target)))
+          (rename-file temp-file target t))
       (when (file-exists-p temp-file)
         (delete-file temp-file)))))
+
+(defun codex--writable-target-file (file)
+  "Return the regular file that should receive writes for FILE."
+  (if (file-symlink-p file)
+      (file-truename file)
+    file))
 
 (defun codex--ensure-hooks-json ()
   "Ensure hooks.json has entries pointing to the hook wrapper."
@@ -3571,6 +3596,7 @@ Only runs when `codex-enable-hooks' is non-nil."
   (or (seq-some (lambda (command)
                   (codex--hook-entry-command-p entry command))
                 (codex--owned-hook-commands wrapper-path hook-type))
+      (codex--hook-wrapper-entry-p entry hook-type)
       (codex--legacy-notify-hook-entry-p entry hook-type)))
 
 (defun codex--owned-hook-commands (wrapper-path hook-type)
@@ -3586,6 +3612,18 @@ Only runs when `codex-enable-hooks' is non-nil."
        (when-let* ((command (alist-get 'command hook)))
          (string-match-p
           (format "\\(?:^\\|/\\)notify-emacs-hook\\.sh[[:space:]]+%s\\(?:[[:space:]]\\|\\'\\)"
+                  (regexp-quote hook-type))
+          command)))
+     hooks)))
+
+(defun codex--hook-wrapper-entry-p (entry hook-type)
+  "Return non-nil if ENTRY runs codex-hook-wrapper for HOOK-TYPE."
+  (when-let* ((hooks (alist-get 'hooks entry)))
+    (seq-some
+     (lambda (hook)
+       (when-let* ((command (alist-get 'command hook)))
+         (string-match-p
+          (format "\\(?:^\\|/\\)codex-hook-wrapper['\"]?[[:space:]]+%s\\(?:[[:space:]]\\|\\'\\)"
                   (regexp-quote hook-type))
           command)))
      hooks)))
