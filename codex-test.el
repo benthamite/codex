@@ -975,6 +975,22 @@ assertion in `eat--t-cur-left' on the following cursor move."
        "later")
       (should (equal (nreverse processed) '("beforeafter" "later"))))))
 
+(ert-deftest codex-test-output-maintenance-inhibits-debug-step ()
+  "Codex output maintenance does not enter debugger while stepping."
+  (let (called)
+    (codex--with-output-maintenance-safely
+      (setq debug-on-next-call t)
+      (funcall (lambda ()
+                 (setq called t))))
+    (should called)
+    (should-not debug-on-next-call)))
+
+(ert-deftest codex-test-output-maintenance-errors-do-not-escape ()
+  "Codex output maintenance errors do not abort Eat output queues."
+  (should-not
+   (codex--with-output-maintenance-safely
+     (error "maintenance exploded"))))
+
 (ert-deftest codex-test-terminal-output-fallback-text-strips-controls ()
   "Fallback text strips terminal controls but keeps readable output."
   (should (equal (codex--terminal-output-fallback-text

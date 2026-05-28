@@ -577,6 +577,9 @@ recompiled with a larger SB_MAX value."
 (defvar server-eval-args-left nil
   "Arguments passed to the current `emacsclient --eval' request.")
 
+;;;; Forward declarations for debug
+(defvar debug-on-next-call)
+
 ;;;; Internal state variables
 (defvar codex--directory-buffer-map (make-hash-table :test 'equal)
   "Hash table mapping directories to user-selected Codex buffers.")
@@ -1242,17 +1245,36 @@ SWITCHES is an optional list of command-line arguments."
     (unless (string-empty-p value)
       value)))
 
+(defmacro codex--with-debug-stepping-inhibited (&rest body)
+  "Run BODY without entering debugger for single-step requests."
+  (declare (indent 0) (debug t))
+  `(let ((debugger #'ignore)
+         (debug-on-next-call nil))
+     ,@body))
+
+(defmacro codex--with-output-maintenance-safely (&rest body)
+  "Run BODY without letting Codex maintenance abort Eat output."
+  (declare (indent 0) (debug t))
+  `(codex--with-debug-stepping-inhibited
+     (condition-case err
+         (progn ,@body)
+       (error
+        (message "Codex output maintenance failed: %s"
+                 (error-message-string err))
+        nil))))
+
 (defun codex--eat-process-output-advice (orig-fun terminal output)
   "Pass complete OUTPUT chunks to ORIG-FUN for Codex Eat TERMINAL."
   (if (not (codex--current-eat-terminal-p terminal))
       (funcall orig-fun terminal output)
-    (pcase-let ((`(,complete . ,pending)
-                 (codex--split-incomplete-terminal-output
-                  (codex--sanitize-eat-output
-                   (concat codex--eat-pending-output output)))))
-      (setq codex--eat-pending-output pending)
-      (unless (string-empty-p complete)
-        (codex--process-eat-output-safely orig-fun terminal complete)))))
+    (codex--with-debug-stepping-inhibited
+      (pcase-let ((`(,complete . ,pending)
+                   (codex--split-incomplete-terminal-output
+                    (codex--sanitize-eat-output
+                     (concat codex--eat-pending-output output)))))
+        (setq codex--eat-pending-output pending)
+        (unless (string-empty-p complete)
+          (codex--process-eat-output-safely orig-fun terminal complete))))))
 
 (defun codex--process-eat-output-safely (orig-fun terminal output)
   "Call ORIG-FUN for TERMINAL and recover readable OUTPUT on parser errors."
@@ -1943,8 +1965,9 @@ U+00A0.")
   "Update prompt autosuggestion styling in BUFFER after terminal output."
   (when (and (buffer-live-p buffer)
              (codex--buffer-p buffer))
-    (with-current-buffer buffer
-      (codex--update-prompt-autosuggestion))))
+    (codex--with-output-maintenance-safely
+      (with-current-buffer buffer
+        (codex--update-prompt-autosuggestion)))))
 
 (defun codex--update-prompt-autosuggestion ()
   "Style the active Codex prompt autosuggestion, if one is visible."
@@ -2276,23 +2299,24 @@ Intended as :after advice on `eat--process-output-queue'.
 BUFFER is the eat buffer whose output was just processed."
   (when (and codex-remap-light-backgrounds
              (buffer-live-p buffer))
-    (with-current-buffer buffer
-      (when (and (codex--buffer-p buffer)
-                 (bound-and-true-p eat-terminal))
-        (let* ((end (eat-term-end eat-terminal))
-               (beg (codex--remap-output-beginning end))
-               (inhibit-read-only t)
-               (inhibit-modification-hooks t))
-          (when (and beg end (< beg end))
-            (codex--remap-light-backgrounds-in-region
-             beg end
-             codex-card-background
-             codex-background-contrast-threshold)
-            (when codex-minimum-contrast-ratio
-              (codex--remap-low-contrast-fg-in-region
-               beg end codex-minimum-contrast-ratio)))
-          (when end
-            (codex--record-remapped-output-end end)))))))
+    (codex--with-output-maintenance-safely
+      (with-current-buffer buffer
+        (when (and (codex--buffer-p buffer)
+                   (bound-and-true-p eat-terminal))
+          (let* ((end (eat-term-end eat-terminal))
+                 (beg (codex--remap-output-beginning end))
+                 (inhibit-read-only t)
+                 (inhibit-modification-hooks t))
+            (when (and beg end (< beg end))
+              (codex--remap-light-backgrounds-in-region
+               beg end
+               codex-card-background
+               codex-background-contrast-threshold)
+              (when codex-minimum-contrast-ratio
+                (codex--remap-low-contrast-fg-in-region
+                 beg end codex-minimum-contrast-ratio)))
+            (when end
+              (codex--record-remapped-output-end end))))))))
 
 (defun codex--remap-output-beginning (end)
   "Return the beginning of the region to remap before terminal END."
