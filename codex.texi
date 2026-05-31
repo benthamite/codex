@@ -213,7 +213,7 @@ The user option @code{codex-reasoning-effort} overrides the reasoning effort lev
 @vindex codex-hooks-json-path
 @vindex codex-emacsclient-program
 
-The user option @code{codex-enable-hooks} controls whether @samp{codex.el} automatically configures the Codex CLI hooks system.  The default is @code{t}.  When enabled, activating @code{codex-mode} ensures that @code{config.toml} has @code{hooks = true} under @code{[features]} and that @code{hooks.json} contains entries for all supported hook types.
+The user option @code{codex-enable-hooks} controls whether @samp{codex.el} automatically configures the Codex CLI hooks system.  The default is @code{t}.  When enabled, activating @code{codex-mode} ensures that @code{config.toml} has @code{hooks = true} under @code{[features]} and that @code{hooks.json} contains entries for all supported hook types.  The installed hook wrapper forwards only sessions that @samp{codex.el} launched with @code{CODEX_BUFFER_NAME} set; other Codex sessions consume the hook input and continue without contacting Emacs.
 
 The user option @code{codex-hooks-config-path} is the path to the Codex @code{config.toml} file.  The default is @code{"~/.codex/config.toml"}.
 
@@ -505,7 +505,7 @@ The function @code{codex-display-buffer-below} displays the Codex buffer below t
 @findex codex-handle-hook-from-emacsclient
 @findex codex-refresh-from-transcript
 
-The hook path has two stages.  The @samp{codex-hook-wrapper} shell script is the command recorded in @samp{hooks.json}; it reads the hook JSON on standard input, writes that JSON to a private temporary file, and calls @code{codex-handle-hook-from-emacsclient} via @samp{emacsclient} targeted at the Emacs server that configured the hooks.  The wrapper retries transient @samp{emacsclient} socket failures briefly; if dispatch still fails, gatekeeping hook types such as @samp{PreToolUse} and @samp{PermissionRequest} fail closed.  The argv protocol after the hook type and buffer name is @samp{json-file JSON-FILE response-file RESPONSE-FILE ...}, so large or sensitive hook JSON does not travel through argv and Emacs can write a hook response back to the wrapper.  Hook installation also replaces older @samp{notify-emacs-hook.sh} entries so stale wrappers cannot feed hook JSON back to Codex as terminal input.
+The hook path has two stages.  The @samp{codex-hook-wrapper} shell script is the command recorded in @samp{hooks.json}.  When the hook did not come from a @samp{codex.el}-launched session, indicated by a missing @code{CODEX_BUFFER_NAME}, the wrapper consumes standard input and exits successfully without calling @samp{emacsclient}.  For Emacs-owned sessions, it reads the hook JSON on standard input, writes that JSON to a private temporary file, and calls @code{codex-handle-hook-from-emacsclient} via @samp{emacsclient} targeted at the Emacs server that configured the hooks.  The wrapper retries transient @samp{emacsclient} socket failures briefly; if dispatch still fails for an Emacs-owned session, gatekeeping hook types such as @samp{PreToolUse} and @samp{PermissionRequest} fail closed.  The argv protocol after the hook type and buffer name is @samp{json-file JSON-FILE response-file RESPONSE-FILE ...}, so large or sensitive hook JSON does not travel through argv and Emacs can write a hook response back to the wrapper.  Hook installation also replaces older @samp{notify-emacs-hook.sh} entries so stale wrappers cannot feed hook JSON back to Codex as terminal input.
 
 The function @code{codex-handle-hook-from-emacsclient} parses that protocol from @code{server-eval-args-left} and delegates to @code{codex-handle-hook}.  Direct Elisp callers can call @code{codex-handle-hook} with a hook type (e.g., @code{"Stop"}, @code{"PreToolUse"}), a buffer name, hook JSON data, and optional additional arguments.  It constructs a plist and runs @code{codex-event-hook} with it until the first handler returns non-nil.  Hooks marked for notification, currently @code{"Stop"}, also trigger a notification (@ref{Notifications}).
 
@@ -615,7 +615,7 @@ Or add it to your init file to configure hooks on startup.
 @node Hooks system
 @chapter Hooks system
 
-The Codex CLI supports a hooks mechanism that notifies external programs of lifecycle events.  @samp{codex.el} takes advantage of this by shipping a @samp{bin/codex-hook-wrapper} shell script that calls @samp{emacsclient} to relay events back to the Emacs server that enabled @code{codex-mode}.
+The Codex CLI supports a hooks mechanism that notifies external programs of lifecycle events.  @samp{codex.el} takes advantage of this by shipping a @samp{bin/codex-hook-wrapper} shell script that calls @samp{emacsclient} to relay events from Emacs-owned Codex sessions back to the Emacs server that enabled @code{codex-mode}.
 
 When @code{codex-enable-hooks} is non-nil and @code{codex-mode} is activated, @samp{codex.el} automatically:
 
@@ -626,7 +626,7 @@ Ensures that @code{config.toml} has @code{hooks = true} under the @code{[feature
 Ensures that @code{hooks.json} has entries for all eight supported hook types: @code{Stop}, @code{SessionStart}, @code{PreToolUse}, @code{PermissionRequest}, @code{PostToolUse}, @code{UserPromptSubmit}, @code{PreCompact}, and @code{PostCompact}.
 @end enumerate
 
-Each hook entry points to the @samp{codex-hook-wrapper} script, which reads JSON from stdin into a private temporary file and asks @samp{emacsclient} to pass that file to @code{codex-handle-hook}.  Existing user-defined hooks in @code{hooks.json} are preserved; @samp{codex.el} appends its own entries if they are absent and repairs them if their matcher, command, type, or timeout drifts.
+Each hook entry points to the @samp{codex-hook-wrapper} script, which ignores sessions without @code{CODEX_BUFFER_NAME} and otherwise reads JSON from stdin into a private temporary file before asking @samp{emacsclient} to pass that file to @code{codex-handle-hook}.  Existing user-defined hooks in @code{hooks.json} are preserved; @samp{codex.el} appends its own entries if they are absent and repairs them if their matcher, command, type, or timeout drifts.
 
 You can respond to these events by adding functions to @code{codex-event-hook} (@ref{Emacs hooks}).
 

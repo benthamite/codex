@@ -11,7 +11,7 @@ Key capabilities include:
 - **TUI interaction** — send return, escape, digits, Tab (follow-up), agent navigation, and other key sequences to the Codex TUI from any buffer; prompt autosuggestions are shown with a distinct face in eat buffers.
 - **Stable Emacs terminal behavior** — starts Codex with `--no-alt-screen` by default to avoid alternate-screen desynchronization in Emacs terminal buffers, preserves long scrollback in Codex terminal buffers, maps Eat blinking cursor states to non-blinking equivalents, and provides `M-x codex-redraw` for explicitly opted-in alt-screen sessions.
 - **Window and buffer management** — toggle the Codex window, switch between instances, read-only mode for navigating output.
-- **Hooks and notifications** — auto-configures the Codex CLI hooks system so Emacs receives lifecycle events; desktop notifications when Codex awaits input.
+- **Hooks and notifications** — auto-configures the Codex CLI hooks system so Emacs receives lifecycle events for Emacs-owned sessions; desktop notifications when Codex awaits input.
 - **Transient menus** — a main command menu and a slash commands menu for quick keyboard access.
 - **Live configuration** — change model, reasoning effort, sandbox mode, approval policy, and profile on the fly via transient infixes.
 

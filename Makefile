@@ -16,6 +16,7 @@ test:
 	  -l codex.el \
 	  -l codex-test.el \
 	  -f ert-run-tests-batch-and-exit
+	bash codex-hook-wrapper-test.sh
 
 compile:
 	$(EMACS) -Q --batch $(LOAD_PATH) \

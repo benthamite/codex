@@ -58,6 +58,11 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
+if [ -z "${CODEX_BUFFER_NAME:-}" ]; then
+    cat >/dev/null || true
+    exit 0
+fi
+
 json_file=
 response_file=
 stderr_file=
@@ -87,14 +92,7 @@ response_file=$(mktemp "${TMPDIR:-/tmp}/codex-hook-response.XXXXXX") || exit 1
 stderr_file=$(mktemp "${TMPDIR:-/tmp}/codex-hook-stderr.XXXXXX") || exit 1
 chmod 600 "$json_file" "$response_file" "$stderr_file" || exit 1
 
-# An empty positional argument terminates emacsclient's eval-arg batch and
-# causes the server to treat subsequent args as separate commands ("Unknown
-# command: ..." errors).  Substitute a sentinel that elisp consumers (which
-# pass the value to `get-buffer') treat as "no buffer".
-buffer_name=${CODEX_BUFFER_NAME:-:none:}
-if [ -z "$buffer_name" ]; then
-    buffer_name=:none:
-fi
+buffer_name=$CODEX_BUFFER_NAME
 
 cat > "$json_file" || exit 1
 
