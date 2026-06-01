@@ -101,7 +101,7 @@ The main capabilities of @samp{codex.el} can be grouped thematically:
 @item
 @strong{Sending commands and context} --- send freeform commands, send commands annotated with file and line context, send the active region or entire buffer, send file paths and images, and ask Codex to fix errors at point.
 @item
-@strong{TUI interaction} --- send return, escape, and numeric responses to the Codex TUI; queue follow-up prompts; edit previous messages; inject mid-turn instructions; open the header search overlay; and display prompt autosuggestions with a distinct face.
+@strong{Native rendering and TUI fallback} --- render new Codex sessions from app-server protocol events so assistant messages, Markdown tables, and post-table text are not dependent on terminal screen history; keep the Eat and vterm terminal TUI backends available when needed.
 @item
 @strong{Window and buffer management} --- toggle the Codex window, switch between instances, select from all running instances, and toggle read-only mode.
 @item
@@ -112,7 +112,7 @@ The main capabilities of @samp{codex.el} can be grouped thematically:
 @strong{Model and configuration} --- change the model, reasoning effort, sandbox mode, approval policy, and profile on the fly through transient infixes.
 @end itemize
 
-The package requires Emacs 28.1 or later, @samp{transient} 0.9.3 or later, @samp{inheritenv}, and @samp{eat}.  The default terminal backend is @samp{eat}.  You can alternatively use @samp{vterm} by installing it separately and setting @code{codex-terminal-backend} to @code{vterm}.
+The package requires Emacs 28.1 or later, @samp{transient} 0.9.3 or later, @samp{inheritenv}, and @samp{eat}.  The default backend is @samp{app-server}, which talks to the Codex app-server protocol and renders conversation events directly in Emacs.  You can still use the terminal TUI through @samp{eat}, or through @samp{vterm} by installing it separately and setting @code{codex-terminal-backend} to @code{vterm}.
 
 The development repository is on @uref{https://github.com/benthamite/codex, GitHub}.
 
@@ -139,6 +139,8 @@ The development repository is on @uref{https://github.com/benthamite/codex, GitH
 @vindex codex-program
 @vindex codex-program-switches
 @vindex codex-terminal-backend
+@vindex codex-app-server-listen-url
+@vindex codex-app-server-program-switches
 @vindex codex-use-alt-screen
 @vindex codex-disable-terminal-resize-reflow
 @vindex codex-term-name
@@ -152,15 +154,19 @@ The development repository is on @uref{https://github.com/benthamite/codex, GitH
 
 The user option @code{codex-program} specifies the path to the Codex binary.  The default value is @code{"codex"}, which relies on the binary being in your @code{PATH}.  Change this if you have installed Codex to a non-standard location.
 
-The user option @code{codex-program-switches} is a list of extra CLI flags to pass to Codex on every invocation.  The default value is @code{nil}.  Use this for flags that you always want applied but that are not covered by the dedicated user options below.
+The user option @code{codex-program-switches} is a list of extra CLI flags to pass to terminal Codex sessions.  The default value is @code{nil}.  Use this for terminal-backend flags that you always want applied but that are not covered by the dedicated user options below.
 
-The user option @code{codex-terminal-backend} selects which terminal emulator to use for the Codex REPL@.  The choices are @code{eat} (the default) and @code{vterm}.  The @samp{eat} backend is recommended as it integrates more cleanly with Emacs and does not require compiling a dynamic module.
+The user option @code{codex-terminal-backend} selects the Codex backend.  The choices are @code{app-server} (the default), @code{eat}, and @code{vterm}.  The @samp{app-server} backend starts @code{codex app-server --listen stdio://}, parses its newline-delimited JSON-RPC event stream, and renders assistant messages directly in the Emacs buffer.  This avoids terminal redraw and scrollback loss for wide Markdown tables.  The @samp{eat} and @samp{vterm} choices keep the Codex terminal TUI available as fallback backends.  Until Codex app-server exposes a native resume/fork picker, @code{codex-resume} and @code{codex-fork} use the Eat terminal fallback even when @samp{app-server} is the default for new sessions.
 
-The user option @code{codex-use-alt-screen} controls whether Codex runs in its default alternate-screen TUI mode.  The default is @code{nil}, so codex.el starts Codex with @code{--no-alt-screen} for inline scrollback mode.  This avoids recurring stale-screen failures seen when Codex's alternate-screen TUI and Emacs terminal buffers lose synchronization after interrupts, prompt editing, or heavy redraws.  Set it to non-nil only if you explicitly want Codex's alt-screen TUI@.
+The user option @code{codex-app-server-listen-url} controls the transport passed to @code{codex app-server --listen}.  The default is @code{"stdio://"}, which keeps the server private to the Emacs process.
 
-The user option @code{codex-disable-terminal-resize-reflow} controls whether codex.el passes @code{--disable terminal_resize_reflow} to new Codex sessions.  The default is @code{t} because Codex's experimental terminal reflow rebuilds scrollback after width changes, while Emacs terminal buffers use the buffer itself as retained session history.  Disable this option only if you prefer Codex's own terminal reflow behavior.
+The user option @code{codex-app-server-program-switches} is a list of extra CLI flags to pass to @code{codex app-server}.  The default value is @code{nil}.
 
-The user option @code{codex-term-name} overrides the terminal type reported to Codex.  The default is @code{nil}, meaning codex.el chooses a backend-appropriate @code{TERM} value.  For @samp{eat}, Codex buffers use Eat's bundled @samp{eat-*} terminfo even if the global @samp{eat-term-name} has been customized; for @samp{vterm}, Codex buffers keep vterm's own default.  Set this to a string such as @code{"xterm-256color"} only when your terminal environment requires a specific @code{TERM} value.  The value is applied when the terminal subprocess starts, so changes affect new Codex buffers rather than already-running sessions.
+The user option @code{codex-use-alt-screen} controls whether terminal backends run Codex in its default alternate-screen TUI mode.  The default is @code{nil}, so codex.el starts terminal sessions with @code{--no-alt-screen} for inline scrollback mode.  This avoids recurring stale-screen failures seen when Codex's alternate-screen TUI and Emacs terminal buffers lose synchronization after interrupts, prompt editing, or heavy redraws.  Set it to non-nil only if you explicitly want Codex's alt-screen TUI@.
+
+The user option @code{codex-disable-terminal-resize-reflow} controls whether codex.el passes @code{--disable terminal_resize_reflow} to new terminal-backend Codex sessions.  The default is @code{t} because Codex's experimental terminal reflow rebuilds scrollback after width changes, while Emacs terminal buffers use the buffer itself as retained session history.  Disable this option only if you prefer Codex's own terminal reflow behavior.
+
+The user option @code{codex-term-name} overrides the terminal type reported to Codex by terminal backends.  The default is @code{nil}, meaning codex.el chooses a backend-appropriate @code{TERM} value.  For @samp{eat}, Codex buffers use Eat's bundled @samp{eat-*} terminfo even if the global @samp{eat-term-name} has been customized; for @samp{vterm}, Codex buffers keep vterm's own default.  Set this to a string such as @code{"xterm-256color"} only when your terminal environment requires a specific @code{TERM} value.  The value is applied when the terminal subprocess starts, so changes affect new Codex buffers rather than already-running sessions.
 
 In @samp{eat} buffers, codex.el disables Eat shell integration for the Codex subprocess and ignores Eat's private UI-command channel in the outer terminal, including in existing Codex buffers after codex.el is reloaded.  Codex is itself a TUI that captures and re-renders tool output; if nested shell commands emit Eat-private OSC sequences, those sequences can leak into captured tool output and corrupt the outer terminal display.
 

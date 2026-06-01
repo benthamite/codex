@@ -975,6 +975,48 @@ assertion in `eat--t-cur-left' on the following cursor move."
        "later")
       (should (equal (nreverse processed) '("beforeafter" "later"))))))
 
+(ert-deftest codex-test-app-server-renders-table-delta-with-sentinel ()
+  "App-server deltas render Markdown tables without terminal history loss."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server/*" t)
+    (setq-local codex--app-server-agent-items
+                (make-hash-table :test 'equal))
+    (codex--app-server-handle-message
+     '((method . "item/agentMessage/delta")
+       (params
+        (threadId . "thread")
+        (turnId . "turn")
+        (itemId . "item")
+        (delta . "| Name | Value |\n| --- | --- |\n| Alpha | 1 |\nSENTINEL-AFTER-TABLE\n"))))
+    (let ((text (buffer-string)))
+      (should (string-match-p "| Name | Value |" text))
+      (should (string-match-p "| Alpha | 1 |" text))
+      (should (string-match-p "SENTINEL-AFTER-TABLE" text))
+      (should (= 1 (how-many "SENTINEL-AFTER-TABLE"
+                             (point-min)
+                             (point-max)))))))
+
+(ert-deftest codex-test-app-server-process-filter-handles-json-lines ()
+  "App-server filter parses newline-delimited JSON messages."
+  (let ((buffer (generate-new-buffer "*codex:/tmp/app-server-filter/*")))
+    (unwind-protect
+        (let ((process (start-process "codex-test-cat" buffer "cat")))
+          (with-current-buffer buffer
+            (setq-local codex--app-server-agent-items
+                        (make-hash-table :test 'equal))
+            (codex--app-server-process-filter
+             process
+             (concat "{\"method\":\"item/agentMessage/delta\","
+                     "\"params\":{\"threadId\":\"thread\","
+                     "\"turnId\":\"turn\","
+                     "\"itemId\":\"item\","
+                     "\"delta\":\"| A | B |\\n| --- | --- |\\nDONE\\n\"}}\n"))
+            (should (string-match-p "| A | B |" (buffer-string)))
+            (should (string-match-p "DONE" (buffer-string)))))
+      (when (process-live-p (get-buffer-process buffer))
+        (delete-process (get-buffer-process buffer)))
+      (kill-buffer buffer))))
+
 (ert-deftest codex-test-output-maintenance-inhibits-debug-step ()
   "Codex output maintenance does not enter debugger while stepping."
   (let (called)
@@ -1647,6 +1689,52 @@ assertion in `eat--t-cur-left' on the following cursor move."
                            "--model" "gpt-5.4"
                            "--profile" "work"
                            "-c" "model_reasoning_effort=\"high\""
+                           "resume"
+                           "--last"))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest codex-test-app-server-subcommands-use-eat-fallback ()
+  "Resume and fork keep using the terminal backend while app-server is default."
+  (let ((codex-terminal-backend 'app-server)
+        (codex-optimize-window-resize nil)
+        (codex-display-window-fn (lambda (_buffer) nil))
+        (codex-program "codex")
+        (codex-use-alt-screen nil)
+        (codex-disable-terminal-resize-reflow t)
+        buffer
+        captured-backend
+        captured-switches)
+    (unwind-protect
+        (cl-letf (((symbol-function 'executable-find)
+                   (lambda (_program) t))
+                  ((symbol-function 'codex--directory)
+                   (lambda () "/tmp/"))
+                  ((symbol-function 'codex--find-codex-buffers-for-directory)
+                   (lambda (_dir) nil))
+                  ((symbol-function 'codex--prompt-for-instance-name)
+                   (lambda (&rest _) "resume-copy"))
+                  ((symbol-function 'codex--term-make)
+                   (lambda (backend _buffer-name _program switches)
+                     (setq captured-backend backend)
+                     (setq captured-switches switches)
+                     (setq buffer (generate-new-buffer
+                                   "*codex-test-subcommand-app-server*"))))
+                  ((symbol-function 'codex--term-configure)
+                   (lambda (&rest _args) nil))
+                  ((symbol-function 'codex--term-setup-keymap)
+                   (lambda (&rest _args) nil))
+                  ((symbol-function 'codex--term-customize-faces)
+                   (lambda (&rest _args) nil))
+                  ((symbol-function 'codex--propagate-font-to-eat-faces)
+                   (lambda () nil))
+                  ((symbol-function 'pop-to-buffer)
+                   (lambda (&rest _) nil)))
+          (codex--start-subcommand "resume" t)
+          (should (eq captured-backend 'eat))
+          (should (equal captured-switches
+                         '("--no-alt-screen"
+                           "--disable" "terminal_resize_reflow"
                            "resume"
                            "--last"))))
       (when (buffer-live-p buffer)

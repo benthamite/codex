@@ -32,6 +32,10 @@
   "Eat terminal backend specific settings for Codex."
   :group 'codex)
 
+(defgroup codex-app-server nil
+  "Codex app-server backend specific settings."
+  :group 'codex)
+
 (defgroup codex-vterm nil
   "Vterm terminal backend specific settings for Codex."
   :group 'codex)
@@ -51,6 +55,16 @@
   "Face for Codex prompt autosuggestions."
   :group 'codex)
 
+(defface codex-app-server-role-face
+  '((t :inherit font-lock-keyword-face :weight bold))
+  "Face for role labels in app-server Codex buffers."
+  :group 'codex-app-server)
+
+(defface codex-app-server-status-face
+  '((t :inherit shadow))
+  "Face for status lines in app-server Codex buffers."
+  :group 'codex-app-server)
+
 ;; Reapply the default spec on reload so older sessions drop the previous
 ;; italic slant; custom face specs still take precedence.
 (face-spec-set 'codex-prompt-autosuggestion-face
@@ -64,16 +78,28 @@
   :group 'codex)
 
 (defcustom codex-program-switches nil
-  "List of extra CLI flags to pass to Codex."
+  "List of extra CLI flags to pass to terminal Codex sessions."
   :type '(repeat string)
   :group 'codex)
 
-(defcustom codex-terminal-backend 'eat
-  "Terminal backend to use for Codex.
-Choose between \\='eat (default) and \\='vterm terminal emulators."
-  :type '(radio (const :tag "Eat terminal emulator" eat)
+(defcustom codex-terminal-backend 'app-server
+  "Backend to use for Codex.
+The \\='app-server backend renders Codex protocol events directly in
+Emacs.  The \\='eat and \\='vterm backends run the terminal TUI."
+  :type '(radio (const :tag "Native app-server renderer" app-server)
+                (const :tag "Eat terminal emulator" eat)
                 (const :tag "Vterm terminal emulator" vterm))
   :group 'codex)
+
+(defcustom codex-app-server-listen-url "stdio://"
+  "Transport URL passed to `codex app-server --listen'."
+  :type 'string
+  :group 'codex-app-server)
+
+(defcustom codex-app-server-program-switches nil
+  "List of extra CLI flags to pass to `codex app-server'."
+  :type '(repeat string)
+  :group 'codex-app-server)
 
 (defcustom codex-use-alt-screen nil
   "Whether to use Codex's alt-screen TUI.
@@ -605,6 +631,36 @@ recompiled with a larger SB_MAX value."
 (defvar-local codex--session-transcript-file nil
   "JSONL transcript file for the Codex session in the current buffer.")
 
+(defvar-local codex--app-server-process nil
+  "App-server process associated with the current Codex buffer.")
+
+(defvar-local codex--app-server-pending-output ""
+  "Incomplete newline-delimited JSON output from app-server.")
+
+(defvar-local codex--app-server-next-request-id 0
+  "Next JSON-RPC request id for the current app-server buffer.")
+
+(defvar-local codex--app-server-pending-requests nil
+  "Hash table mapping app-server request ids to callbacks.")
+
+(defvar-local codex--app-server-thread-id nil
+  "Current app-server thread id.")
+
+(defvar-local codex--app-server-current-turn-id nil
+  "Current app-server turn id.")
+
+(defvar-local codex--app-server-turn-active-p nil
+  "Whether the current app-server thread has an active turn.")
+
+(defvar-local codex--app-server-agent-items nil
+  "Hash table of rendered app-server agent message items.")
+
+(defvar-local codex--app-server-command-items nil
+  "Hash table of rendered app-server command output items.")
+
+(defvar-local codex--app-server-queued-commands nil
+  "Commands waiting for app-server thread startup.")
+
 (defvar-local codex--transcript-last-catch-up-message nil
   "Last transcript catch-up message appended to the current buffer.")
 
@@ -842,6 +898,459 @@ Returns the buffer containing the terminal.")
 
 (cl-defgeneric codex--term-post-start (backend)
   "Run BACKEND specific post-start setup in the current Codex buffer.")
+
+;;;;; app-server backend implementation
+
+(cl-defmethod codex--term-make ((_backend (eql app-server)) buffer-name
+                                program &optional switches)
+  "Create an app-server Codex buffer named BUFFER-NAME.
+PROGRAM is the Codex executable.  SWITCHES are app-server CLI
+arguments."
+  (let* ((buffer (get-buffer-create buffer-name))
+         (command (append (list program "app-server"
+                                "--listen" codex-app-server-listen-url)
+                          switches)))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer))
+      (setq-local codex--app-server-pending-output "")
+      (setq-local codex--app-server-next-request-id 0)
+      (setq-local codex--app-server-pending-requests
+                  (make-hash-table :test 'equal))
+      (setq-local codex--app-server-agent-items
+                  (make-hash-table :test 'equal))
+      (setq-local codex--app-server-command-items
+                  (make-hash-table :test 'equal)))
+    (let ((process
+           (make-process :name (string-trim buffer-name "\\*")
+                         :buffer buffer
+                         :command command
+                         :connection-type 'pipe
+                         :coding 'utf-8-emacs
+                         :filter #'codex--app-server-process-filter
+                         :sentinel #'codex--app-server-process-sentinel)))
+      (with-current-buffer buffer
+        (setq-local codex--app-server-process process))
+      buffer)))
+
+(cl-defmethod codex--term-send-string ((_backend (eql app-server)) string)
+  "Send STRING to the app-server Codex backend."
+  (codex--app-server-submit-command string))
+
+(cl-defmethod codex--term-send-action ((_backend (eql app-server)) action
+                                       &optional payload)
+  "Send ACTION with optional PAYLOAD to the app-server backend."
+  (pcase action
+    (:string (codex--app-server-submit-command payload))
+    (:return (call-interactively #'codex-send-command))
+    (:escape (codex--app-server-interrupt-turn))
+    (:newline (newline))
+    (:redraw (recenter -1))
+    (_ (message "Codex app-server backend does not use TUI action %S"
+                action))))
+
+(cl-defmethod codex--term-submit-command ((_backend (eql app-server)) command)
+  "Submit COMMAND through the app-server Codex backend."
+  (codex--app-server-submit-command command))
+
+(cl-defmethod codex--term-kill-process ((_backend (eql app-server)) buffer)
+  "Kill the app-server process in BUFFER."
+  (with-current-buffer buffer
+    (when (process-live-p codex--app-server-process)
+      (delete-process codex--app-server-process))
+    (kill-buffer buffer)))
+
+(cl-defmethod codex--term-read-only-mode ((_backend (eql app-server)))
+  "Switch the app-server buffer to read-only mode."
+  (read-only-mode 1))
+
+(cl-defmethod codex--term-interactive-mode ((_backend (eql app-server)))
+  "Switch the app-server buffer out of read-only mode."
+  (read-only-mode -1))
+
+(cl-defmethod codex--term-in-read-only-p ((_backend (eql app-server)))
+  "Return non-nil when the app-server buffer is read-only."
+  buffer-read-only)
+
+(cl-defmethod codex--term-configure ((_backend (eql app-server)))
+  "Configure the app-server backend in the current buffer."
+  (setq-local truncate-lines nil)
+  (setq-local word-wrap t)
+  (codex--app-server-send-initialize))
+
+(cl-defmethod codex--term-customize-faces ((_backend (eql app-server)))
+  "Apply face customizations for the app-server backend.")
+
+(cl-defmethod codex--term-get-adjust-process-window-size-fn
+  ((_backend (eql app-server)))
+  "Return nil because app-server buffers do not resize a terminal."
+  nil)
+
+(cl-defmethod codex--term-post-start ((_backend (eql app-server)))
+  "Run app-server specific post-start setup.")
+
+(defun codex--app-server-process-filter (process output)
+  "Handle newline-delimited app-server OUTPUT from PROCESS."
+  (when-let* ((buffer (process-buffer process)))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (setq codex--app-server-pending-output
+              (concat codex--app-server-pending-output output))
+        (codex--app-server-drain-lines)))))
+
+(defun codex--app-server-drain-lines ()
+  "Process complete app-server JSON lines in the current buffer."
+  (let (line)
+    (while (string-match "\n" codex--app-server-pending-output)
+      (setq line (substring codex--app-server-pending-output
+                            0 (match-beginning 0)))
+      (setq codex--app-server-pending-output
+            (substring codex--app-server-pending-output (match-end 0)))
+      (unless (string-empty-p line)
+        (codex--app-server-handle-line line)))))
+
+(defun codex--app-server-handle-line (line)
+  "Parse and handle one app-server JSON LINE."
+  (condition-case err
+      (codex--app-server-handle-message
+       (json-parse-string line :object-type 'alist :array-type 'list))
+    (error
+     (codex--app-server-insert-status
+      (format "Malformed app-server message: %s" (error-message-string err))))))
+
+(defun codex--app-server-handle-message (message)
+  "Handle one decoded app-server MESSAGE."
+  (cond
+   ((alist-get 'method message)
+    (if (alist-get 'id message)
+        (codex--app-server-handle-server-request message)
+      (codex--app-server-handle-notification message)))
+   ((alist-get 'id message)
+    (codex--app-server-handle-response message))))
+
+(defun codex--app-server-handle-response (message)
+  "Dispatch an app-server response MESSAGE to its callback."
+  (let* ((id (alist-get 'id message))
+         (callback (gethash id codex--app-server-pending-requests)))
+    (when callback
+      (remhash id codex--app-server-pending-requests)
+      (funcall callback
+               (alist-get 'result message)
+               (alist-get 'error message)))))
+
+(defun codex--app-server-handle-notification (message)
+  "Handle app-server notification MESSAGE."
+  (let ((method (alist-get 'method message nil nil #'equal))
+        (params (alist-get 'params message)))
+    (pcase method
+      ("thread/started" (codex--app-server-thread-started params))
+      ("turn/started" (codex--app-server-turn-started params))
+      ("turn/completed" (codex--app-server-turn-completed params))
+      ("item/agentMessage/delta"
+       (codex--app-server-render-agent-delta params))
+      ("item/commandExecution/outputDelta"
+       (codex--app-server-render-command-delta params))
+      ("item/completed" (codex--app-server-render-completed-item params))
+      ("error" (codex--app-server-insert-status
+                (or (alist-get 'message params) "Codex app-server error")))
+      ("warning" (codex--app-server-insert-status
+                  (or (alist-get 'message params) "Codex app-server warning")))
+      (_ nil))))
+
+(defun codex--app-server-thread-started (params)
+  "Record app-server thread startup PARAMS."
+  (let ((thread-id (alist-get 'id (alist-get 'thread params))))
+    (unless (equal codex--app-server-thread-id thread-id)
+      (setq codex--app-server-thread-id thread-id)
+      (codex--app-server-insert-status
+       (format "Connected to Codex thread %s" codex--app-server-thread-id))
+      (codex--app-server-flush-queued-commands))))
+
+(defun codex--app-server-turn-started (params)
+  "Record app-server turn startup PARAMS."
+  (let ((turn (alist-get 'turn params)))
+    (setq codex--app-server-current-turn-id (alist-get 'id turn))
+    (setq codex--app-server-turn-active-p t)))
+
+(defun codex--app-server-turn-completed (_params)
+  "Record that the active app-server turn completed."
+  (setq codex--app-server-turn-active-p nil)
+  (setq codex--app-server-current-turn-id nil)
+  (codex--app-server-ensure-trailing-newline))
+
+(defun codex--app-server-render-agent-delta (params)
+  "Render an agent message delta from PARAMS."
+  (let ((item-id (alist-get 'itemId params))
+        (delta (alist-get 'delta params)))
+    (when (and item-id delta)
+      (unless (gethash item-id codex--app-server-agent-items)
+        (puthash item-id t codex--app-server-agent-items)
+        (codex--app-server-insert-role "Assistant"))
+      (codex--app-server-insert delta))))
+
+(defun codex--app-server-render-command-delta (params)
+  "Render a command output delta from PARAMS."
+  (let ((item-id (alist-get 'itemId params))
+        (delta (alist-get 'delta params)))
+    (when (and item-id delta)
+      (unless (gethash item-id codex--app-server-command-items)
+        (puthash item-id t codex--app-server-command-items)
+        (codex--app-server-insert-role "Command"))
+      (codex--app-server-insert delta))))
+
+(defun codex--app-server-render-completed-item (params)
+  "Render completed app-server item details from PARAMS when needed."
+  (let ((item (alist-get 'item params)))
+    (when (and (equal (alist-get 'type item) "commandExecution")
+               (not (gethash (alist-get 'id item)
+                             codex--app-server-command-items)))
+      (when-let* ((output (alist-get 'aggregatedOutput item)))
+        (codex--app-server-insert-role "Command")
+        (codex--app-server-insert output)))))
+
+(defun codex--app-server-handle-server-request (message)
+  "Prompt for and answer an app-server request MESSAGE."
+  (let ((buffer (current-buffer)))
+    (run-at-time 0 nil #'codex--app-server-answer-server-request
+                 buffer message)))
+
+(defun codex--app-server-answer-server-request (buffer message)
+  "Answer app-server MESSAGE in BUFFER."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (pcase-let ((`(,prompt . ,result)
+                   (codex--app-server-approval-prompt-and-result message)))
+        (if prompt
+            (codex--app-server-send-response
+             (alist-get 'id message)
+             (if (yes-or-no-p prompt)
+                 (car result)
+               (cdr result)))
+          (codex--app-server-send-error
+           (alist-get 'id message)
+           -32601
+           (format "Unsupported app-server request: %s"
+                   (alist-get 'method message))))))))
+
+(defun codex--app-server-approval-prompt-and-result (message)
+  "Return approval prompt and response pair for server MESSAGE."
+  (let ((method (alist-get 'method message nil nil #'equal))
+        (params (alist-get 'params message)))
+    (pcase method
+      ("item/commandExecution/requestApproval"
+       (cons (format "Allow Codex command %s? "
+                     (or (alist-get 'command params) "execution"))
+             (cons '((decision . "accept"))
+                   '((decision . "decline")))))
+      ("item/fileChange/requestApproval"
+       (cons "Allow Codex file change? "
+             (cons '((decision . "accept"))
+                   '((decision . "decline")))))
+      ("execCommandApproval"
+       (cons (format "Allow Codex command %s? "
+                     (or (alist-get 'command params) "execution"))
+             (cons '((decision . "approved"))
+                   '((decision . "denied")))))
+      ("applyPatchApproval"
+       (cons "Allow Codex file change? "
+             (cons '((decision . "approved"))
+                   '((decision . "denied")))))
+      (_ nil))))
+
+(defun codex--app-server-send-initialize ()
+  "Send the app-server initialize request."
+  (codex--app-server-send-request
+   "initialize"
+   '((clientInfo
+      (name . "codex.el")
+      (title . "codex.el")
+      (version . "0.3.0"))
+     (capabilities
+      (experimentalApi . t)
+      (requestAttestation . :json-false)))
+   (lambda (_result error)
+     (if error
+         (codex--app-server-insert-status
+          (format "Codex app-server initialize failed: %S" error))
+       (codex--app-server-send-thread-start)))))
+
+(defun codex--app-server-send-thread-start ()
+  "Send the app-server thread/start request."
+  (codex--app-server-send-request
+   "thread/start"
+   (codex--app-server-thread-start-params)
+   (lambda (result error)
+     (if error
+         (codex--app-server-insert-status
+          (format "Codex thread startup failed: %S" error))
+       (codex--app-server-thread-started result)))))
+
+(defun codex--app-server-thread-start-params ()
+  "Return thread/start params for the current Codex buffer."
+  `((cwd . ,codex--buffer-directory)
+    (model . ,codex-model)
+    (approvalPolicy . ,(codex--app-server-approval-policy))
+    (sandbox . ,(codex--app-server-sandbox-mode))
+    (config . ,(codex--app-server-config))))
+
+(defun codex--app-server-approval-policy ()
+  "Return the app-server approval policy for the current settings."
+  (cond
+   (codex-full-auto "never")
+   (codex-approval-policy (symbol-name codex-approval-policy))
+   (t nil)))
+
+(defun codex--app-server-sandbox-mode ()
+  "Return the app-server sandbox mode for the current settings."
+  (cond
+   (codex-full-auto "danger-full-access")
+   (codex-sandbox-mode (symbol-name codex-sandbox-mode))
+   (t nil)))
+
+(defun codex--app-server-config ()
+  "Return app-server config overrides for the current settings."
+  (when codex-reasoning-effort
+    `((model_reasoning_effort . ,codex-reasoning-effort))))
+
+(defun codex--app-server-submit-command (command)
+  "Submit COMMAND to the current app-server thread."
+  (codex--app-server-insert-role "User")
+  (codex--app-server-insert command)
+  (codex--app-server-ensure-trailing-newline)
+  (if codex--app-server-thread-id
+      (codex--app-server-send-turn-input command)
+    (push command codex--app-server-queued-commands)))
+
+(defun codex--app-server-send-turn-input (command)
+  "Send COMMAND to the app-server as a turn input."
+  (if codex--app-server-turn-active-p
+      (codex--app-server-send-turn-steer command)
+    (codex--app-server-send-turn-start command)))
+
+(defun codex--app-server-send-turn-start (command)
+  "Send COMMAND as a new app-server turn."
+  (codex--app-server-send-request
+   "turn/start"
+   `((threadId . ,codex--app-server-thread-id)
+     (input . ,(codex--app-server-user-input-vector command))
+     (cwd . ,codex--buffer-directory)
+     (approvalPolicy . ,(codex--app-server-approval-policy))
+     (effort . ,codex-reasoning-effort))
+   (lambda (result error)
+     (if error
+         (codex--app-server-insert-status
+          (format "Codex turn failed to start: %S" error))
+       (codex--app-server-turn-started
+        `((threadId . ,codex--app-server-thread-id)
+          (turn . ,(alist-get 'turn result))))))))
+
+(defun codex--app-server-send-turn-steer (command)
+  "Send COMMAND as app-server same-turn steering."
+  (codex--app-server-send-request
+   "turn/steer"
+   `((threadId . ,codex--app-server-thread-id)
+     (input . ,(codex--app-server-user-input-vector command))
+     (expectedTurnId . ,codex--app-server-current-turn-id))
+   (lambda (_result error)
+     (when error
+       (codex--app-server-insert-status
+        (format "Codex turn steering failed: %S" error))))))
+
+(defun codex--app-server-user-input-vector (text)
+  "Return app-server user input vector for TEXT."
+  (vector `((type . "text")
+            (text . ,text)
+            (text_elements . []))))
+
+(defun codex--app-server-flush-queued-commands ()
+  "Submit commands queued before app-server thread startup."
+  (let ((commands (nreverse codex--app-server-queued-commands)))
+    (setq codex--app-server-queued-commands nil)
+    (dolist (command commands)
+      (codex--app-server-send-turn-input command))))
+
+(defun codex--app-server-interrupt-turn ()
+  "Interrupt the active app-server turn."
+  (if (and codex--app-server-thread-id codex--app-server-current-turn-id)
+      (codex--app-server-send-request
+       "turn/interrupt"
+       `((threadId . ,codex--app-server-thread-id)
+         (turnId . ,codex--app-server-current-turn-id))
+       (lambda (_result error)
+         (when error
+           (codex--app-server-insert-status
+            (format "Codex interrupt failed: %S" error)))))
+    (message "No active Codex turn to interrupt")))
+
+(defun codex--app-server-send-request (method params callback)
+  "Send app-server METHOD with PARAMS and CALLBACK."
+  (let ((id (cl-incf codex--app-server-next-request-id)))
+    (puthash id callback codex--app-server-pending-requests)
+    (codex--app-server-send-json
+     `((id . ,id) (method . ,method) (params . ,params)))
+    id))
+
+(defun codex--app-server-send-response (id result)
+  "Send an app-server response for ID with RESULT."
+  (codex--app-server-send-json `((id . ,id) (result . ,result))))
+
+(defun codex--app-server-send-error (id code message)
+  "Send an app-server error response for ID with CODE and MESSAGE."
+  (codex--app-server-send-json
+   `((id . ,id) (error (code . ,code) (message . ,message)))))
+
+(defun codex--app-server-send-json (message)
+  "Send JSON-RPC MESSAGE to the app-server process."
+  (unless (process-live-p codex--app-server-process)
+    (error "Codex app-server process is not running"))
+  (let ((json-encoding-pretty-print nil))
+    (process-send-string codex--app-server-process
+                         (concat (json-encode message) "\n"))))
+
+(defun codex--app-server-insert-role (role)
+  "Insert ROLE label in the current app-server buffer."
+  (codex--app-server-ensure-section-break)
+  (codex--app-server-insert (concat role "\n")
+                            'codex-app-server-role-face))
+
+(defun codex--app-server-insert-status (text)
+  "Insert app-server status TEXT."
+  (codex--app-server-ensure-section-break)
+  (codex--app-server-insert (concat text "\n")
+                            'codex-app-server-status-face))
+
+(defun codex--app-server-insert (text &optional face)
+  "Insert TEXT with optional FACE in the current app-server buffer."
+  (let ((inhibit-read-only t)
+        (start (point-max)))
+    (goto-char (point-max))
+    (insert text)
+    (when face
+      (put-text-property start (point) 'face face))
+    (goto-char (point-max))))
+
+(defun codex--app-server-ensure-section-break ()
+  "Ensure the current app-server buffer is ready for a new section."
+  (unless (bobp)
+    (codex--app-server-ensure-trailing-newline)
+    (codex--app-server-ensure-trailing-newline)))
+
+(defun codex--app-server-ensure-trailing-newline ()
+  "Ensure the current app-server buffer ends in a newline."
+  (unless (or (bobp)
+              (save-excursion
+                (goto-char (point-max))
+                (= (char-before) ?\n)))
+    (codex--app-server-insert "\n")))
+
+(defun codex--app-server-process-sentinel (process event)
+  "Report PROCESS lifecycle EVENT in its app-server buffer."
+  (when-let* ((buffer (process-buffer process)))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (unless (process-live-p process)
+          (codex--app-server-insert-status
+           (format "Codex app-server %s" (string-trim event))))))))
 
 ;;;;; eat backend implementations
 
@@ -1790,9 +2299,9 @@ If FORCE-SWITCH-TO-BUFFER is non-nil, always switch to the Codex buffer."
          (switch-after (or (equal arg '(4)) force-switch-to-buffer))
          (instance-name (codex--session-instance-name dir force-prompt))
          (buffer-name (codex--buffer-name-for-directory dir instance-name))
-         (switches (append codex-program-switches
-                           (codex--build-cli-args)
-                           extra-switches)))
+         (switches (codex--build-backend-switches
+                    codex-terminal-backend
+                    extra-switches)))
     (codex--launch-session dir codex-terminal-backend buffer-name
                            instance-name switches switch-after)))
 
@@ -1804,7 +2313,8 @@ EXTRA-ARGS is an optional list of additional arguments appended
 after the subcommand and its flags.  When INSTANCE-NAME is
 non-nil, use it directly instead of prompting.
 Codex subcommands run as separate processes."
-  (let* ((dir (codex--directory))
+  (let* ((backend (codex--subcommand-backend codex-terminal-backend))
+         (dir (codex--directory))
          (instance-name (or instance-name
                             (codex--session-instance-name dir)))
          (buffer-name (codex--buffer-name-for-directory dir instance-name))
@@ -1813,8 +2323,21 @@ Codex subcommands run as separate processes."
                            (list subcommand)
                            (when last-flag '("--last"))
                            extra-args)))
-    (codex--launch-session dir codex-terminal-backend buffer-name
-                           instance-name switches t)))
+    (codex--launch-session dir backend buffer-name instance-name switches t)))
+
+(defun codex--subcommand-backend (backend)
+  "Return the terminal BACKEND to use for Codex subcommands."
+  (if (eq backend 'app-server)
+      'eat
+    backend))
+
+(defun codex--build-backend-switches (backend extra-switches)
+  "Return Codex CLI switches for BACKEND and EXTRA-SWITCHES."
+  (if (eq backend 'app-server)
+      (append codex-app-server-program-switches extra-switches)
+    (append codex-program-switches
+            (codex--build-cli-args)
+            extra-switches)))
 
 (defun codex--session-instance-name (dir &optional force-prompt)
   "Return the instance name for a new Codex session in DIR."
@@ -1882,11 +2405,12 @@ Codex subcommands run as separate processes."
 
 (defun codex--maybe-install-window-resize-advice (backend)
   "Install resize optimization advice for BACKEND when enabled."
-  (when codex-optimize-window-resize
-    (codex--acquire-managed-advice
-     (codex--term-get-adjust-process-window-size-fn backend)
-     :around
-     #'codex--adjust-window-size-advice)))
+  (when-let* ((function (and codex-optimize-window-resize
+                             (codex--term-get-adjust-process-window-size-fn
+                              backend))))
+    (codex--acquire-managed-advice function
+                                   :around
+                                   #'codex--adjust-window-size-advice)))
 
 (defun codex--apply-terminal-buffer-ui ()
   "Apply common Codex terminal buffer UI settings."
