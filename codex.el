@@ -1187,11 +1187,27 @@ arguments."
       ("hook/started" (codex--app-server-render-hook-event params ""))
       ("hook/completed" (codex--app-server-render-hook-event params " Completed"))
       ("item/completed" (codex--app-server-render-completed-item params))
-      ("error" (codex--app-server-insert-status
-                (or (alist-get 'message params) "Codex app-server error")))
-      ("warning" (codex--app-server-insert-status
-                  (or (alist-get 'message params) "Codex app-server warning")))
+      ("thread/compacted"
+       (codex--app-server-insert-status "Conversation compacted"))
+      ("model/rerouted"
+       (codex--app-server-insert-status
+        (format "Model rerouted%s"
+                (if-let* ((to (alist-get 'model params))) (format " to %s" to) ""))))
+      ("mcpServer/startupStatus/updated"
+       (codex--app-server-render-mcp-status params))
+      ((or "error" "configWarning" "deprecationNotice" "guardianWarning"
+           "warning" "windows/worldWritableWarning")
+       (codex--app-server-insert-status
+        (or (alist-get 'message params)
+            (format "Codex %s" (string-replace "/" " " method)))))
       (_ nil))))
+
+(defun codex--app-server-render-mcp-status (params)
+  "Render an MCP server startup status line from PARAMS."
+  (when-let* ((name (alist-get 'name params))
+              (status (alist-get 'status params)))
+    (when (member status '("ready" "failed" "error"))
+      (codex--app-server-insert-status (format "MCP %s: %s" name status)))))
 
 (defun codex--app-server-thread-started (params)
   "Record app-server thread startup PARAMS and render the session header."

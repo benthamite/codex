@@ -1158,6 +1158,22 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (codex--app-server-dispatch-slash "/raw")
     (should codex-app-server-render-markdown)))
 
+(ert-deftest codex-test-app-server-renders-warnings-and-status-events ()
+  "Warning, compaction, and MCP status notifications render as status lines."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-warn/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (codex--app-server-handle-message
+     '((method . "deprecationNotice") (params (message . "X is deprecated"))))
+    (should (string-match-p "X is deprecated" (buffer-string)))
+    (codex--app-server-handle-message '((method . "thread/compacted") (params)))
+    (should (string-match-p "compacted" (buffer-string)))
+    (codex--app-server-handle-message
+     '((method . "mcpServer/startupStatus/updated")
+       (params (name . "node_repl") (status . "ready"))))
+    (should (string-match-p "MCP node_repl: ready" (buffer-string)))))
+
 (ert-deftest codex-test-app-server-renders-hook-and-rate-limit ()
   "Hook events render when enabled and rate-limit usage is recorded."
   (with-temp-buffer
