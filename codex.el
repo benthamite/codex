@@ -122,6 +122,14 @@ The string marks where typed input begins; output renders above it."
   :type 'string
   :group 'codex-app-server)
 
+(defcustom codex-app-server-render-markdown t
+  "Whether to render Markdown in app-server assistant messages.
+When non-nil and `markdown-mode' is available, completed assistant
+messages are rendered with Markdown faces and hidden markup.  Otherwise
+a lightweight built-in highlighter is used."
+  :type 'boolean
+  :group 'codex-app-server)
+
 (defcustom codex-use-alt-screen nil
   "Whether to use Codex's alt-screen TUI.
 When nil (default), pass `--no-alt-screen' for inline/scrollback mode.
@@ -931,6 +939,9 @@ Returns the buffer containing the terminal.")
 
 ;;;;; app-server backend implementation
 
+(declare-function gfm-mode "markdown-mode")
+(defvar markdown-hide-markup)
+
 (cl-defmethod codex--term-make ((_backend (eql app-server)) buffer-name
                                 program &optional switches)
   "Create an app-server Codex buffer named BUFFER-NAME.
@@ -1226,6 +1237,46 @@ arguments."
      (marker-position start) (codex--app-server-output-point))))
 
 (defun codex--app-server-fontify-markdown (start end)
+  "Render Markdown over the region between START and END.
+Uses `gfm-mode' when available, falling back to a built-in highlighter."
+  (if (and codex-app-server-render-markdown (codex--app-server-markdown-available-p))
+      (codex--app-server-render-markdown-region start end)
+    (codex--app-server-fontify-markdown-basic start end)))
+
+(defun codex--app-server-markdown-available-p ()
+  "Return non-nil when `gfm-mode' can render Markdown."
+  (or (fboundp 'gfm-mode)
+      (require 'markdown-mode nil t)))
+
+(defun codex--app-server-render-markdown-region (start end)
+  "Render the Markdown region between START and END with `gfm-mode'."
+  (let ((inhibit-read-only t)
+        (rendered (codex--app-server-markdown-rendered-string
+                   (buffer-substring-no-properties start end))))
+    (add-to-invisibility-spec 'markdown-markup)
+    (codex--app-server-transplant-markdown rendered start)))
+
+(defun codex--app-server-markdown-rendered-string (text)
+  "Return TEXT fontified through `gfm-mode' with markup hidden."
+  (with-temp-buffer
+    (insert text)
+    (delay-mode-hooks (gfm-mode))
+    (setq-local markdown-hide-markup t)
+    (font-lock-ensure)
+    (buffer-string)))
+
+(defun codex--app-server-transplant-markdown (rendered start)
+  "Copy display properties from RENDERED onto the buffer from START."
+  (let ((pos 0)
+        (len (length rendered)))
+    (while (< pos len)
+      (let ((next (or (next-property-change pos rendered) len)))
+        (dolist (prop '(face invisible display composition))
+          (when-let* ((value (get-text-property pos prop rendered)))
+            (put-text-property (+ start pos) (+ start next) prop value)))
+        (setq pos next)))))
+
+(defun codex--app-server-fontify-markdown-basic (start end)
   "Apply lightweight Markdown faces to the region between START and END."
   (let ((inhibit-read-only t))
     (codex--app-server-fontify-matches

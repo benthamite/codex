@@ -1071,19 +1071,20 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (should-error (insert "X") :type 'text-read-only)))
 
 (ert-deftest codex-test-app-server-fontifies-completed-message ()
-  "Completed agent messages receive lightweight Markdown faces."
+  "The built-in highlighter applies Markdown faces to completed messages."
   (with-temp-buffer
     (rename-buffer "*codex:/tmp/app-server-md/*" t)
     (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
     (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
     (codex--app-server-setup-input-region)
-    (codex--app-server-handle-message
-     '((method . "item/agentMessage/delta")
-       (params (itemId . "m1")
-               (delta . "# Title\nsome **bold** and `code` here\n"))))
-    (codex--app-server-handle-message
-     '((method . "item/completed")
-       (params (item (type . "agentMessage") (id . "m1")))))
+    (let ((codex-app-server-render-markdown nil))
+      (codex--app-server-handle-message
+       '((method . "item/agentMessage/delta")
+         (params (itemId . "m1")
+                 (delta . "# Title\nsome **bold** and `code` here\n"))))
+      (codex--app-server-handle-message
+       '((method . "item/completed")
+         (params (item (type . "agentMessage") (id . "m1"))))))
     (goto-char (point-min))
     (search-forward "Title")
     (should (eq (get-text-property (1- (point)) 'face)
@@ -1095,6 +1096,30 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (search-forward "code")
     (should (eq (get-text-property (1- (point)) 'face)
                 'codex-app-server-code-face))))
+
+(ert-deftest codex-test-app-server-renders-markdown-hides-markup ()
+  "Completed messages render through `gfm-mode' with markup hidden."
+  (skip-unless (require 'markdown-mode nil t))
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-md2/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (let ((codex-app-server-render-markdown t))
+      (codex--app-server-handle-message
+       '((method . "item/agentMessage/delta")
+         (params (itemId . "m1") (delta . "## Head\n\n**bold** text\n"))))
+      (codex--app-server-handle-message
+       '((method . "item/completed")
+         (params (item (type . "agentMessage") (id . "m1"))))))
+    (goto-char (point-min))
+    (search-forward "bold")
+    (should (get-text-property (1- (point)) 'face))
+    (goto-char (point-min))
+    (search-forward "**")
+    (let ((marker-pos (- (point) 1)))
+      (should (or (get-text-property marker-pos 'invisible)
+                  (equal (get-text-property marker-pos 'display) ""))))))
 
 (ert-deftest codex-test-app-server-process-filter-handles-json-lines ()
   "App-server filter parses newline-delimited JSON messages."
