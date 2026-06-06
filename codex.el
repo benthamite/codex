@@ -148,6 +148,14 @@ printing the full output."
   :type 'integer
   :group 'codex-app-server)
 
+(defcustom codex-app-server-show-hooks nil
+  "Whether to render lifecycle hook events in app-server buffers.
+When non-nil, `hook/started' and `hook/completed' events are shown as
+dimmed status lines, like the Codex CLI hook log.  Off by default
+because per-tool hooks can be frequent."
+  :type 'boolean
+  :group 'codex-app-server)
+
 (defcustom codex-use-alt-screen nil
   "Whether to use Codex's alt-screen TUI.
 When nil (default), pass `--no-alt-screen' for inline/scrollback mode.
@@ -723,6 +731,9 @@ recompiled with a larger SB_MAX value."
 (defvar-local codex--app-server-pending-images nil
   "Image file paths to attach to the next app-server turn input.")
 
+(defvar-local codex--app-server-pending-mentions nil
+  "Alist of (NAME . PATH) file mentions to attach to the next turn input.")
+
 (defvar-local codex--app-server-queued-commands nil
   "Commands waiting for app-server thread startup.")
 
@@ -740,6 +751,9 @@ recompiled with a larger SB_MAX value."
 
 (defvar-local codex--app-server-token-usage nil
   "Total token count reported for the current app-server thread.")
+
+(defvar-local codex--app-server-rate-limit nil
+  "Primary rate-limit usage percent reported for the current thread.")
 
 (defvar-local codex--app-server-status-timer nil
   "Repeating timer that refreshes the app-server status while working.")
@@ -994,6 +1008,8 @@ Returns the buffer containing the terminal.")
 ;;;;; app-server backend implementation
 
 (declare-function gfm-mode "markdown-mode")
+(declare-function evil-local-mode "evil-core")
+(declare-function viper-mode "viper")
 (defvar markdown-hide-markup)
 
 (cl-defmethod codex--term-make ((_backend (eql app-server)) buffer-name
@@ -1086,6 +1102,7 @@ arguments."
               codex--app-server-pending-startup-action)
   (setq-local codex--app-server-pending-images
               (mapcar #'expand-file-name codex-default-images))
+  (setq-local codex--app-server-pending-mentions nil)
   (codex--app-server-send-initialize))
 
 (cl-defmethod codex--term-customize-faces ((_backend (eql app-server)))
@@ -1165,6 +1182,10 @@ arguments."
       ("turn/plan/updated" (codex--app-server-render-plan params))
       ("thread/tokenUsage/updated"
        (codex--app-server-token-usage-updated params))
+      ("account/rateLimits/updated"
+       (codex--app-server-rate-limits-updated params))
+      ("hook/started" (codex--app-server-render-hook-event params ""))
+      ("hook/completed" (codex--app-server-render-hook-event params " Completed"))
       ("item/completed" (codex--app-server-render-completed-item params))
       ("error" (codex--app-server-insert-status
                 (or (alist-get 'message params) "Codex app-server error")))
@@ -1221,11 +1242,51 @@ arguments."
       ("/fork" (codex-fork nil))
       ("/permissions" (codex-cycle-permissions))
       ("/model" (codex--app-server-change-model))
+      ("/mention" (codex-app-server-attach-mention))
+      ("/agent" (codex-select-buffer))
+      ("/side" (codex-new-instance))
+      ("/skills" (codex--app-server-insert-status
+                  "Skills are managed by Codex configuration (~/.codex)"))
+      ("/apps" (codex--app-server-insert-status
+                "Apps are managed by Codex configuration (~/.codex)"))
+      ("/theme" (call-interactively #'load-theme))
+      ("/vim" (codex--app-server-toggle-vim))
+      ("/keymap" (describe-keymap (current-local-map)))
+      ("/raw" (codex--app-server-toggle-raw))
+      ("/statusline" (codex--app-server-insert-status
+                      "Status line is the Emacs mode line; customize `mode-line-format'"))
       ((or "/quit" "/exit") (codex--term-kill-process 'app-server (current-buffer)))
       ((or "/init" "/review")
        (codex--app-server-submit-command (codex--app-server-slash-prompt command argument)))
       (_ (codex--app-server-insert-status
           (format "Unsupported command: %s" command))))))
+
+(defun codex-app-server-attach-mention ()
+  "Attach a file mention to the next app-server turn input."
+  (interactive)
+  (let ((path (expand-file-name (read-file-name "Mention file: "))))
+    (push (cons (file-name-nondirectory path) path)
+          codex--app-server-pending-mentions)
+    (message "File mentioned for next Codex turn: %s" path)))
+
+(defun codex--app-server-toggle-vim ()
+  "Toggle a Vim editing mode in the buffer when one is available."
+  (cond ((fboundp 'evil-local-mode)
+         (call-interactively #'evil-local-mode)
+         (codex--app-server-insert-status "Toggled evil-local-mode"))
+        ((fboundp 'viper-mode)
+         (viper-mode)
+         (codex--app-server-insert-status "Enabled viper-mode"))
+        (t (codex--app-server-insert-status
+            "No Vim mode available (install evil or viper)"))))
+
+(defun codex--app-server-toggle-raw ()
+  "Toggle raw (unrendered) Markdown display for new messages."
+  (setq-local codex-app-server-render-markdown
+              (not codex-app-server-render-markdown))
+  (codex--app-server-insert-status
+   (format "Markdown rendering %s"
+           (if codex-app-server-render-markdown "enabled" "disabled (raw)"))))
 
 (defun codex--app-server-slash-prompt (command argument)
   "Return a prompt for a slash COMMAND that maps to a turn, with ARGUMENT."
@@ -1263,11 +1324,14 @@ arguments."
   (codex--app-server-setup-input-region))
 
 (defun codex--app-server-show-status ()
-  "Insert a session status line with model, tokens, and directory."
+  "Insert a session status line with model, tokens, rate limit, and directory."
   (codex--app-server-insert-status
-   (format "model %s · %s tokens · %s"
+   (format "model %s · %s tokens%s · %s"
            (or codex-model "default")
            (or codex--app-server-token-usage 0)
+           (if codex--app-server-rate-limit
+               (format " · %s%% rate limit" codex--app-server-rate-limit)
+             "")
            (abbreviate-file-name (or codex--buffer-directory default-directory)))))
 
 (defun codex--app-server-show-diff ()
@@ -1429,6 +1493,19 @@ arguments."
   (when-let* ((total (alist-get 'total (alist-get 'tokenUsage params))))
     (setq codex--app-server-token-usage (alist-get 'totalTokens total))
     (force-mode-line-update)))
+
+(defun codex--app-server-rate-limits-updated (params)
+  "Record primary rate-limit usage percent from PARAMS."
+  (when-let* ((limits (alist-get 'rateLimits params))
+              (primary (alist-get 'primary limits)))
+    (setq codex--app-server-rate-limit (alist-get 'usedPercent primary))))
+
+(defun codex--app-server-render-hook-event (params suffix)
+  "Render hook lifecycle event from PARAMS with SUFFIX when enabled."
+  (when codex-app-server-show-hooks
+    (when-let* ((run (alist-get 'run params))
+                (name (alist-get 'eventName run)))
+      (codex--app-server-insert-status (format "hook: %s%s" name suffix)))))
 
 (defun codex--app-server-start-status-timer ()
   "Start the repeating timer that refreshes the working status."
@@ -2014,13 +2091,19 @@ Slash commands are dispatched locally rather than sent to the model."
         (format "Codex turn steering failed: %S" error))))))
 
 (defun codex--app-server-user-input-vector (text)
-  "Return app-server user input vector for TEXT and any pending images."
+  "Return app-server user input vector for TEXT and pending images/mentions."
   (let ((images (mapcar (lambda (path)
                           `((type . "localImage") (path . ,path)))
-                        codex--app-server-pending-images)))
-    (setq codex--app-server-pending-images nil)
+                        codex--app-server-pending-images))
+        (mentions (mapcar (lambda (mention)
+                            `((type . "mention")
+                              (name . ,(car mention))
+                              (path . ,(cdr mention))))
+                          codex--app-server-pending-mentions)))
+    (setq codex--app-server-pending-images nil
+          codex--app-server-pending-mentions nil)
     (apply #'vector
-           (append images
+           (append images mentions
                    (list `((type . "text")
                            (text . ,text)
                            (text_elements . [])))))))

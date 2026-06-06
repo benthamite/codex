@@ -1134,6 +1134,45 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (should (= 1 (length vec)))
       (should (equal (alist-get 'type (aref vec 0)) "text")))))
 
+(ert-deftest codex-test-app-server-input-vector-includes-mentions ()
+  "Pending file mentions attach as mention input items, then clear."
+  (with-temp-buffer
+    (setq-local codex--app-server-pending-mentions '(("foo.el" . "/tmp/foo.el")))
+    (let* ((vec (codex--app-server-user-input-vector "look at this"))
+           (mention (cl-find-if (lambda (item)
+                                  (equal (alist-get 'type item) "mention"))
+                                (append vec nil))))
+      (should mention)
+      (should (equal (alist-get 'path mention) "/tmp/foo.el")))
+    (should (null codex--app-server-pending-mentions))))
+
+(ert-deftest codex-test-app-server-slash-raw-toggles-markdown ()
+  "The /raw command toggles Markdown rendering in the buffer."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-raw/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex-app-server-render-markdown t)
+    (codex--app-server-setup-input-region)
+    (codex--app-server-dispatch-slash "/raw")
+    (should-not codex-app-server-render-markdown)
+    (codex--app-server-dispatch-slash "/raw")
+    (should codex-app-server-render-markdown)))
+
+(ert-deftest codex-test-app-server-renders-hook-and-rate-limit ()
+  "Hook events render when enabled and rate-limit usage is recorded."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-hook/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (let ((codex-app-server-show-hooks t))
+      (codex--app-server-handle-message
+       '((method . "hook/started") (params (run (eventName . "Stop"))))))
+    (should (string-match-p "hook: Stop" (buffer-string)))
+    (codex--app-server-handle-message
+     '((method . "account/rateLimits/updated")
+       (params (rateLimits (primary (usedPercent . 42))))))
+    (should (equal codex--app-server-rate-limit 42))))
+
 (ert-deftest codex-test-app-server-expand-folded-output ()
   "Folded command output is stored and expandable in full."
   (with-temp-buffer
