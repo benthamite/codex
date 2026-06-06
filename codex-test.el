@@ -1119,6 +1119,19 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (should (string-match-p "… \\+95 lines" text))
       (should (string-match-p "✓ succeeded in 5ms" text)))))
 
+(ert-deftest codex-test-app-server-slash-command-not-sent-as-turn ()
+  "Slash commands dispatch locally instead of being sent to the model."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-slash/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-reasoning-items (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (codex--app-server-submit-command "/status")
+    (should (null codex--app-server-queued-commands))
+    (should (string-match-p "tokens" (buffer-string)))
+    (should-not (string-match-p "^User$" (buffer-string)))))
+
 (ert-deftest codex-test-app-server-renders-history ()
   "Resumed history renders user and assistant items in order."
   (with-temp-buffer

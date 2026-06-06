@@ -738,6 +738,9 @@ recompiled with a larger SB_MAX value."
 (defvar-local codex--app-server-status-timer nil
   "Repeating timer that refreshes the app-server status while working.")
 
+(defvar-local codex--app-server-last-agent-message nil
+  "Text of the most recent completed assistant message.")
+
 (defvar codex--app-server-pending-startup-action 'start
   "Startup action for the next app-server session: \\='start, \\='resume, or \\='fork.")
 
@@ -1184,7 +1187,7 @@ arguments."
       (goto-char (point-max)))))
 
 (defun codex--app-server-send-input ()
-  "Send the app-server input region text as a Codex turn."
+  "Send the app-server input region text as a Codex turn or slash command."
   (interactive)
   (let ((text (string-trim (codex--app-server-input-text))))
     (if (string-empty-p text)
@@ -1192,6 +1195,89 @@ arguments."
       (codex--app-server-clear-input)
       (codex--app-server-submit-command text)
       (goto-char (point-max)))))
+
+(defun codex--app-server-dispatch-slash (text)
+  "Dispatch slash-command TEXT to a protocol or local action."
+  (let* ((command (car (split-string text)))
+         (argument (string-trim (substring text (length command)))))
+    (pcase command
+      ("/compact" (codex--app-server-compact))
+      ("/clear" (codex--app-server-clear-display))
+      ("/status" (codex--app-server-show-status))
+      ("/diff" (codex--app-server-show-diff))
+      ("/copy" (codex--app-server-copy-last-message))
+      ("/new" (codex-new-instance))
+      ("/resume" (codex-resume nil))
+      ("/fork" (codex-fork nil))
+      ("/permissions" (codex-cycle-permissions))
+      ((or "/quit" "/exit") (codex--term-kill-process 'app-server (current-buffer)))
+      ((or "/init" "/review")
+       (codex--app-server-submit-command (codex--app-server-slash-prompt command argument)))
+      (_ (codex--app-server-insert-status
+          (format "Unsupported command: %s" command))))))
+
+(defun codex--app-server-slash-prompt (command argument)
+  "Return a prompt for a slash COMMAND that maps to a turn, with ARGUMENT."
+  (pcase command
+    ("/init" "Create an AGENTS.md describing how to work in this repository.")
+    ("/review"
+     (concat "Review the current working tree changes for bugs and issues."
+             (unless (string-empty-p argument) (concat " " argument))))
+    (_ argument)))
+
+(defun codex--app-server-compact ()
+  "Request conversation compaction for the current thread."
+  (if codex--app-server-thread-id
+      (codex--app-server-send-request
+       "thread/compact/start"
+       `((threadId . ,codex--app-server-thread-id))
+       (lambda (_result error)
+         (codex--app-server-insert-status
+          (if error (format "Compact failed: %S" error)
+            "Compacting conversation…"))))
+    (message "No active Codex thread")))
+
+(defun codex--app-server-clear-display ()
+  "Clear the buffer display while keeping the current thread."
+  (let ((inhibit-read-only t)) (erase-buffer))
+  (setq codex--app-server-output-marker nil
+        codex--app-server-input-marker nil
+        codex--app-server-plan-start nil
+        codex--app-server-plan-end nil)
+  (clrhash codex--app-server-agent-items)
+  (clrhash codex--app-server-command-items)
+  (clrhash codex--app-server-reasoning-items)
+  (codex--app-server-insert-status
+   (format "Connected to Codex thread %s" codex--app-server-thread-id))
+  (codex--app-server-setup-input-region))
+
+(defun codex--app-server-show-status ()
+  "Insert a session status line with model, tokens, and directory."
+  (codex--app-server-insert-status
+   (format "model %s · %s tokens · %s"
+           (or codex-model "default")
+           (or codex--app-server-token-usage 0)
+           (abbreviate-file-name (or codex--buffer-directory default-directory)))))
+
+(defun codex--app-server-show-diff ()
+  "Render the working-tree git diff folded in the buffer."
+  (let* ((default-directory (or codex--buffer-directory default-directory))
+         (diff (string-trim-right
+                (with-output-to-string
+                  (with-current-buffer standard-output
+                    (process-file "git" nil t nil "diff"))))))
+    (codex--app-server-insert-role "Diff")
+    (if (string-empty-p diff)
+        (codex--app-server-insert "(no changes)")
+      (codex--app-server-render-diff diff))))
+
+(defun codex--app-server-copy-last-message ()
+  "Copy the most recent assistant message text to the kill ring."
+  (if (and codex--app-server-last-agent-message
+           (not (string-empty-p codex--app-server-last-agent-message)))
+      (progn (kill-new codex--app-server-last-agent-message)
+             (message "Copied last Codex message"))
+    (message "No Codex message to copy")))
 
 (defun codex--app-server-input-text ()
   "Return the text currently in the app-server input region."
@@ -1562,6 +1648,7 @@ With no active turn, send the input immediately like Return."
 
 (defun codex--app-server-fontify-completed-message (item)
   "Apply Markdown faces to the rendered agent message for ITEM."
+  (setq codex--app-server-last-agent-message (alist-get 'text item))
   (when-let* ((start (gethash (alist-get 'id item)
                               codex--app-server-agent-items))
               ((markerp start)))
@@ -1805,13 +1892,16 @@ Uses `gfm-mode' when available, falling back to a built-in highlighter."
     `((model_reasoning_effort . ,codex-reasoning-effort))))
 
 (defun codex--app-server-submit-command (command)
-  "Submit COMMAND to the current app-server thread."
-  (codex--app-server-insert-role "User")
-  (codex--app-server-insert command)
-  (codex--app-server-ensure-trailing-newline)
-  (if codex--app-server-thread-id
-      (codex--app-server-send-turn-input command)
-    (push command codex--app-server-queued-commands)))
+  "Submit COMMAND to the current app-server thread.
+Slash commands are dispatched locally rather than sent to the model."
+  (if (string-prefix-p "/" (string-trim-left command))
+      (codex--app-server-dispatch-slash (string-trim command))
+    (codex--app-server-insert-role "User")
+    (codex--app-server-insert command)
+    (codex--app-server-ensure-trailing-newline)
+    (if codex--app-server-thread-id
+        (codex--app-server-send-turn-input command)
+      (push command codex--app-server-queued-commands))))
 
 (defun codex--app-server-send-turn-input (command)
   "Send COMMAND to the app-server as a turn input."
