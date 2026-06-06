@@ -720,6 +720,9 @@ recompiled with a larger SB_MAX value."
 (defvar-local codex--app-server-queued-commands nil
   "Commands waiting for app-server thread startup.")
 
+(defvar-local codex--app-server-queued-turn-inputs nil
+  "Inputs queued with Tab to send after the active turn completes.")
+
 (defvar-local codex--transcript-last-catch-up-message nil
   "Last transcript catch-up message appended to the current buffer.")
 
@@ -978,6 +981,7 @@ arguments."
       (setq-local codex--app-server-pending-output "")
       (setq-local codex--app-server-output-marker nil)
       (setq-local codex--app-server-input-marker nil)
+      (setq-local codex--app-server-queued-turn-inputs nil)
       (setq-local codex--app-server-next-request-id 0)
       (setq-local codex--app-server-pending-requests
                   (make-hash-table :test 'equal))
@@ -1009,6 +1013,7 @@ arguments."
   (pcase action
     (:string (codex--app-server-submit-command payload))
     (:return (codex--app-server-send-input))
+    (:tab (codex--app-server-queue-input))
     (:escape (codex--app-server-interrupt-turn))
     (:newline (newline))
     (:redraw (recenter -1))
@@ -1213,10 +1218,30 @@ arguments."
     (setq codex--app-server-turn-active-p t)))
 
 (defun codex--app-server-turn-completed (_params)
-  "Record that the active app-server turn completed."
+  "Record that the active app-server turn completed and flush queued input."
   (setq codex--app-server-turn-active-p nil)
   (setq codex--app-server-current-turn-id nil)
-  (codex--app-server-ensure-trailing-newline))
+  (codex--app-server-ensure-trailing-newline)
+  (codex--app-server-flush-turn-queue))
+
+(defun codex--app-server-flush-turn-queue ()
+  "Submit the next Tab-queued input, if any, as a new turn."
+  (when codex--app-server-queued-turn-inputs
+    (codex--app-server-submit-command
+     (pop codex--app-server-queued-turn-inputs))))
+
+(defun codex--app-server-queue-input ()
+  "Queue the input region text for the next turn, like the CLI Tab key.
+With no active turn, send the input immediately like Return."
+  (interactive)
+  (let ((text (string-trim (codex--app-server-input-text))))
+    (cond ((string-empty-p text) (message "Codex input is empty"))
+          ((not codex--app-server-turn-active-p) (codex--app-server-send-input))
+          (t (codex--app-server-clear-input)
+             (setq codex--app-server-queued-turn-inputs
+                   (append codex--app-server-queued-turn-inputs (list text)))
+             (codex--app-server-insert-status (format "⏳ Queued: %s" text))
+             (goto-char (point-max))))))
 
 (defun codex--app-server-render-agent-delta (params)
   "Render an agent message delta from PARAMS."

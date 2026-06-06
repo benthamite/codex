@@ -1119,6 +1119,24 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (should (string-match-p "… \\+95 lines" text))
       (should (string-match-p "✓ succeeded in 5ms" text)))))
 
+(ert-deftest codex-test-app-server-tab-queues-input-for-next-turn ()
+  "Tab queues input during an active turn and flushes it on completion."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-q/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (setq-local codex--app-server-turn-active-p t)
+    (goto-char (point-max))
+    (insert "next thing")
+    (codex--app-server-queue-input)
+    (should (equal codex--app-server-queued-turn-inputs '("next thing")))
+    (should (equal (codex--app-server-input-text) ""))
+    (should (string-match-p "Queued: next thing" (buffer-string)))
+    (codex--app-server-handle-message '((method . "turn/completed") (params)))
+    (should (null codex--app-server-queued-turn-inputs))
+    (should (member "next thing" codex--app-server-queued-commands))))
+
 (ert-deftest codex-test-app-server-renders-file-change-diff ()
   "File-change items render as faced diffs with kind labels."
   (with-temp-buffer
