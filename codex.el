@@ -106,6 +106,12 @@ Emacs.  The \\='eat and \\='vterm backends run the terminal TUI."
   :type '(repeat string)
   :group 'codex-app-server)
 
+(defcustom codex-app-server-prompt-string "\n❯ "
+  "Prompt shown before the editable input region in app-server buffers.
+The string marks where typed input begins; output renders above it."
+  :type 'string
+  :group 'codex-app-server)
+
 (defcustom codex-use-alt-screen nil
   "Whether to use Codex's alt-screen TUI.
 When nil (default), pass `--no-alt-screen' for inline/scrollback mode.
@@ -654,6 +660,12 @@ recompiled with a larger SB_MAX value."
 (defvar-local codex--app-server-user-agent nil
   "User agent string reported by the app-server initialize response.")
 
+(defvar-local codex--app-server-output-marker nil
+  "Marker before the input prompt where app-server output is inserted.")
+
+(defvar-local codex--app-server-input-marker nil
+  "Marker at the start of the editable app-server input region.")
+
 (defvar-local codex--app-server-current-turn-id nil
   "Current app-server turn id.")
 
@@ -922,6 +934,8 @@ arguments."
       (let ((inhibit-read-only t))
         (erase-buffer))
       (setq-local codex--app-server-pending-output "")
+      (setq-local codex--app-server-output-marker nil)
+      (setq-local codex--app-server-input-marker nil)
       (setq-local codex--app-server-next-request-id 0)
       (setq-local codex--app-server-pending-requests
                   (make-hash-table :test 'equal))
@@ -950,7 +964,7 @@ arguments."
   "Send ACTION with optional PAYLOAD to the app-server backend."
   (pcase action
     (:string (codex--app-server-submit-command payload))
-    (:return (call-interactively #'codex-send-command))
+    (:return (codex--app-server-send-input))
     (:escape (codex--app-server-interrupt-turn))
     (:newline (newline))
     (:redraw (recenter -1))
@@ -1072,7 +1086,46 @@ arguments."
     (unless (equal codex--app-server-thread-id thread-id)
       (setq codex--app-server-thread-id thread-id)
       (codex--app-server-render-header thread)
+      (codex--app-server-setup-input-region)
       (codex--app-server-flush-queued-commands))))
+
+(defun codex--app-server-setup-input-region ()
+  "Render the app-server input prompt and initialize input markers."
+  (let ((inhibit-read-only t))
+    (goto-char (point-max))
+    (let ((start (point)))
+      (insert codex-app-server-prompt-string)
+      (add-text-properties start (point)
+                           '(read-only t face codex-app-server-status-face))
+      (when (> (point) start)
+        (put-text-property (1- (point)) (point) 'rear-nonsticky t))
+      (setq codex--app-server-output-marker (copy-marker start t))
+      (setq codex--app-server-input-marker (copy-marker (point) nil))
+      (goto-char (point-max)))))
+
+(defun codex--app-server-send-input ()
+  "Send the app-server input region text as a Codex turn."
+  (interactive)
+  (let ((text (string-trim (codex--app-server-input-text))))
+    (if (string-empty-p text)
+        (message "Codex input is empty")
+      (codex--app-server-clear-input)
+      (codex--app-server-submit-command text)
+      (goto-char (point-max)))))
+
+(defun codex--app-server-input-text ()
+  "Return the text currently in the app-server input region."
+  (if (and (markerp codex--app-server-input-marker)
+           (marker-position codex--app-server-input-marker))
+      (buffer-substring-no-properties codex--app-server-input-marker (point-max))
+    ""))
+
+(defun codex--app-server-clear-input ()
+  "Delete the text in the app-server input region."
+  (when (and (markerp codex--app-server-input-marker)
+             (marker-position codex--app-server-input-marker))
+    (let ((inhibit-read-only t))
+      (delete-region codex--app-server-input-marker (point-max)))))
 
 (defun codex--app-server-render-header (thread)
   "Render the app-server session header from THREAD metadata."
@@ -1362,28 +1415,35 @@ arguments."
                             'codex-app-server-status-face))
 
 (defun codex--app-server-insert (text &optional face)
-  "Insert TEXT with optional FACE in the current app-server buffer."
+  "Insert TEXT with optional FACE into the app-server output region.
+Output is inserted before the input prompt and marked read-only."
   (let ((inhibit-read-only t)
-        (start (point-max)))
-    (goto-char (point-max))
-    (insert text)
-    (when face
-      (put-text-property start (point) 'face face))
-    (goto-char (point-max))))
+        (start (codex--app-server-output-point)))
+    (save-excursion
+      (goto-char start)
+      (insert text)
+      (let ((end (point)))
+        (when face (put-text-property start end 'face face))
+        (add-text-properties start end '(read-only t front-sticky t))))))
+
+(defun codex--app-server-output-point ()
+  "Return the position where app-server output should be inserted."
+  (if (and (markerp codex--app-server-output-marker)
+           (marker-position codex--app-server-output-marker))
+      (marker-position codex--app-server-output-marker)
+    (point-max)))
 
 (defun codex--app-server-ensure-section-break ()
-  "Ensure the current app-server buffer is ready for a new section."
-  (unless (bobp)
-    (codex--app-server-ensure-trailing-newline)
+  "Ensure the app-server output region is ready for a new section."
+  (unless (= (codex--app-server-output-point) (point-min))
     (codex--app-server-ensure-trailing-newline)))
 
 (defun codex--app-server-ensure-trailing-newline ()
-  "Ensure the current app-server buffer ends in a newline."
-  (unless (or (bobp)
-              (save-excursion
-                (goto-char (point-max))
-                (= (char-before) ?\n)))
-    (codex--app-server-insert "\n")))
+  "Ensure the app-server output region ends in a newline."
+  (let ((point (codex--app-server-output-point)))
+    (unless (or (= point (point-min))
+                (eq (char-before point) ?\n))
+      (codex--app-server-insert "\n"))))
 
 (defun codex--app-server-process-sentinel (process event)
   "Report PROCESS lifecycle EVENT in its app-server buffer."

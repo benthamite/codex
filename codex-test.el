@@ -1025,11 +1025,57 @@ assertion in `eat--t-cur-left' on the following cursor move."
   (should (null (codex--app-server-codex-version nil)))
   (should (null (codex--app-server-codex-version "no-version-here"))))
 
+(ert-deftest codex-test-app-server-output-renders-above-input-prompt ()
+  "App-server output is inserted above the persistent input prompt."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-above/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (goto-char (point-max))
+    (insert "my draft")
+    (codex--app-server-handle-message
+     '((method . "item/agentMessage/delta")
+       (params (itemId . "i") (delta . "streamed answer"))))
+    (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+      (should (string-match-p "streamed answer" text))
+      (should (< (string-match "streamed answer" text)
+                 (string-match "❯" text)))
+      (should (< (string-match "❯" text)
+                 (string-match "my draft" text))))
+    (should (equal (codex--app-server-input-text) "my draft"))))
+
+(ert-deftest codex-test-app-server-input-region-sends-and-clears ()
+  "Sending app-server input renders a user turn and clears the input."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-send/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (goto-char (point-max))
+    (insert "do the thing")
+    (codex--app-server-send-input)
+    (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+      (should (string-match-p "User" text))
+      (should (string-match-p "do the thing" text)))
+    (should (equal (codex--app-server-input-text) ""))
+    (should (member "do the thing" codex--app-server-queued-commands))))
+
+(ert-deftest codex-test-app-server-history-is-read-only ()
+  "Rendered app-server history cannot be edited interactively."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-ro/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (codex--app-server-insert-status "rendered history line")
+    (codex--app-server-setup-input-region)
+    (goto-char 5)
+    (should-error (insert "X") :type 'text-read-only)))
+
 (ert-deftest codex-test-app-server-process-filter-handles-json-lines ()
   "App-server filter parses newline-delimited JSON messages."
   (let ((buffer (generate-new-buffer "*codex:/tmp/app-server-filter/*")))
     (unwind-protect
         (let ((process (start-process "codex-test-cat" buffer "cat")))
+          (set-process-sentinel process #'ignore)
           (with-current-buffer buffer
             (setq-local codex--app-server-agent-items
                         (make-hash-table :test 'equal))
