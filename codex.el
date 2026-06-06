@@ -717,6 +717,9 @@ recompiled with a larger SB_MAX value."
 (defvar-local codex--app-server-reasoning-items nil
   "Hash table of rendered app-server reasoning items.")
 
+(defvar-local codex--app-server-full-outputs nil
+  "Hash table mapping item ids to full (unfolded) command output.")
+
 (defvar-local codex--app-server-queued-commands nil
   "Commands waiting for app-server thread startup.")
 
@@ -1016,6 +1019,8 @@ arguments."
       (setq-local codex--app-server-command-items
                   (make-hash-table :test 'equal))
       (setq-local codex--app-server-reasoning-items
+                  (make-hash-table :test 'equal))
+      (setq-local codex--app-server-full-outputs
                   (make-hash-table :test 'equal)))
     (let ((process
            (make-process :name (string-trim buffer-name "\\*")
@@ -1210,6 +1215,7 @@ arguments."
       ("/resume" (codex-resume nil))
       ("/fork" (codex-fork nil))
       ("/permissions" (codex-cycle-permissions))
+      ("/model" (codex--app-server-change-model))
       ((or "/quit" "/exit") (codex--term-kill-process 'app-server (current-buffer)))
       ((or "/init" "/review")
        (codex--app-server-submit-command (codex--app-server-slash-prompt command argument)))
@@ -1271,6 +1277,42 @@ arguments."
         (codex--app-server-insert "(no changes)")
       (codex--app-server-render-diff diff))))
 
+(defun codex--app-server-change-model ()
+  "Pick a model with `model/list' and apply it via `thread/settings/update'."
+  (codex--app-server-send-request
+   "model/list" '((limit . 50))
+   (lambda (result error)
+     (if error
+         (codex--app-server-insert-status
+          (format "Model list failed: %S" error))
+       (codex--app-server-prompt-model (alist-get 'data result))))))
+
+(defun codex--app-server-prompt-model (models)
+  "Prompt to pick one of MODELS and apply it to the current thread."
+  (if (null models)
+      (codex--app-server-insert-status "No Codex models available")
+    (let* ((choices (mapcar (lambda (model)
+                              (cons (or (alist-get 'displayName model)
+                                        (alist-get 'model model))
+                                    model))
+                            (append models nil)))
+           (selection (completing-read "Codex model: " choices nil t))
+           (model (cdr (assoc selection choices))))
+      (when model (codex--app-server-apply-model model)))))
+
+(defun codex--app-server-apply-model (model)
+  "Apply MODEL to the current thread via `thread/settings/update'."
+  (let ((id (or (alist-get 'model model) (alist-get 'id model))))
+    (codex--app-server-send-request
+     "thread/settings/update"
+     `((threadId . ,codex--app-server-thread-id) (model . ,id))
+     (lambda (_result error)
+       (if error
+           (codex--app-server-insert-status
+            (format "Model change failed: %S" error))
+         (setq-local codex-model id)
+         (codex--app-server-insert-status (format "Model set to %s" id)))))))
+
 (defun codex--app-server-copy-last-message ()
   "Copy the most recent assistant message text to the kill ring."
   (if (and codex--app-server-last-agent-message
@@ -1278,6 +1320,27 @@ arguments."
       (progn (kill-new codex--app-server-last-agent-message)
              (message "Copied last Codex message"))
     (message "No Codex message to copy")))
+
+(defun codex-app-server-expand-output ()
+  "Show the full output of the folded Codex command block at point."
+  (interactive)
+  (let ((id (get-text-property (point) 'codex-output-id)))
+    (if (and id (hash-table-p codex--app-server-full-outputs)
+             (gethash id codex--app-server-full-outputs))
+        (codex--app-server-display-output
+         (gethash id codex--app-server-full-outputs))
+      (message "No expandable Codex output at point"))))
+
+(defun codex--app-server-display-output (output)
+  "Display full command OUTPUT in a dedicated view buffer."
+  (let ((buffer (get-buffer-create "*codex-output*")))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert output)
+        (goto-char (point-min)))
+      (view-mode 1))
+    (display-buffer buffer)))
 
 (defun codex--app-server-input-text ()
   "Return the text currently in the app-server input region."
@@ -1486,10 +1549,17 @@ With no active turn, send the input immediately like Return."
     (codex--app-server-insert-role "Command")
     (codex--app-server-insert (codex--app-server-command-display item)
                               'codex-app-server-command-face)
-    (let ((output (string-trim-right (or (alist-get 'aggregatedOutput item) ""))))
+    (let* ((id (alist-get 'id item))
+           (output (string-trim-right (or (alist-get 'aggregatedOutput item) "")))
+           (folded (codex--app-server-fold-output output)))
       (unless (string-empty-p output)
-        (codex--app-server-insert
-         (concat "\n" (codex--app-server-fold-output output)))))
+        (let ((start (codex--app-server-output-point)))
+          (codex--app-server-insert (concat "\n" folded))
+          (unless (string= folded output)
+            (puthash id output codex--app-server-full-outputs)
+            (let ((inhibit-read-only t))
+              (put-text-property start (codex--app-server-output-point)
+                                 'codex-output-id id))))))
     (codex--app-server-insert (concat "\n" (codex--app-server-command-status item))
                               'codex-app-server-status-face)))
 
@@ -2623,6 +2693,7 @@ cursor tracking from buffer position and tripping an assertion in
     (set-keymap-parent map (current-local-map))
     (define-key map (kbd "C-g") #'codex-send-escape)
     (define-key map (kbd "C-l") #'codex-redraw)
+    (define-key map (kbd "C-c C-o") #'codex-app-server-expand-output)
     (define-key map (kbd "M-<left>") #'codex-previous-agent)
     (define-key map (kbd "M-<right>") #'codex-next-agent)
     (define-key map (kbd "TAB") #'codex--terminal-send-tab)

@@ -1103,6 +1103,7 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (rename-buffer "*codex:/tmp/app-server-cmd/*" t)
     (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
     (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-full-outputs (make-hash-table :test 'equal))
     (codex--app-server-setup-input-region)
     (let ((codex-app-server-max-command-output-lines 5)
           (output (mapconcat #'number-to-string (number-sequence 1 100) "\n")))
@@ -1118,6 +1119,30 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (should-not (string-match-p "^50$" text))
       (should (string-match-p "… \\+95 lines" text))
       (should (string-match-p "✓ succeeded in 5ms" text)))))
+
+(ert-deftest codex-test-app-server-expand-folded-output ()
+  "Folded command output is stored and expandable in full."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-expand/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-full-outputs (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (let ((codex-app-server-max-command-output-lines 3)
+          (output (mapconcat #'number-to-string (number-sequence 1 50) "\n")))
+      (codex--app-server-handle-message
+       `((method . "item/completed")
+         (params (item (type . "commandExecution") (id . "c9")
+                       (command . "seq 1 50") (exitCode . 0)
+                       (aggregatedOutput . ,output))))))
+    (should (string-match-p "^50$" (gethash "c9" codex--app-server-full-outputs)))
+    (goto-char (point-min))
+    (search-forward "… +")
+    (should (equal (get-text-property (1- (point)) 'codex-output-id) "c9"))
+    (cl-letf (((symbol-function 'display-buffer) #'ignore))
+      (codex-app-server-expand-output))
+    (should (with-current-buffer "*codex-output*"
+              (string-match-p "^50$" (buffer-string))))))
 
 (ert-deftest codex-test-app-server-slash-command-not-sent-as-turn ()
   "Slash commands dispatch locally instead of being sent to the model."
