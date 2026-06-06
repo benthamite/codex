@@ -1119,6 +1119,25 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (should (string-match-p "… \\+95 lines" text))
       (should (string-match-p "✓ succeeded in 5ms" text)))))
 
+(ert-deftest codex-test-app-server-approval-decisions ()
+  "Approval prompts offer the CLI decision set per protocol method."
+  (should (equal (codex--app-server-approval-decisions
+                  "item/commandExecution/requestApproval")
+                 '((?y . "accept") (?a . "acceptForSession")
+                   (?n . "decline") (?c . "cancel"))))
+  (should (equal (codex--app-server-approval-decisions "execCommandApproval")
+                 '((?y . "approved") (?a . "approved_for_session")
+                   (?n . "denied") (?c . "abort"))))
+  (let ((spec (codex--app-server-approval-spec
+               '((method . "item/commandExecution/requestApproval")
+                 (id . 5)
+                 (params (command . "/bin/zsh -lc \"rm -rf x\""))))))
+    (should (string-match-p "rm -rf x" (plist-get spec :prompt)))
+    (cl-letf (((symbol-function 'read-multiple-choice)
+               (lambda (&rest _) '(?a "always" "approve for the rest"))))
+      (should (equal (codex--app-server-read-approval spec)
+                     '((decision . "acceptForSession")))))))
+
 (ert-deftest codex-test-app-server-renders-and-updates-plan ()
   "Turn plan renders as a checklist and updates in place."
   (with-temp-buffer

@@ -1520,44 +1520,59 @@ Uses `gfm-mode' when available, falling back to a built-in highlighter."
   "Answer app-server MESSAGE in BUFFER."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
-      (pcase-let ((`(,prompt . ,result)
-                   (codex--app-server-approval-prompt-and-result message)))
-        (if prompt
+      (let ((spec (codex--app-server-approval-spec message)))
+        (if spec
             (codex--app-server-send-response
              (alist-get 'id message)
-             (if (yes-or-no-p prompt)
-                 (car result)
-               (cdr result)))
+             (codex--app-server-read-approval spec))
           (codex--app-server-send-error
            (alist-get 'id message)
            -32601
            (format "Unsupported app-server request: %s"
                    (alist-get 'method message))))))))
 
-(defun codex--app-server-approval-prompt-and-result (message)
-  "Return approval prompt and response pair for server MESSAGE."
+(defun codex--app-server-approval-spec (message)
+  "Return an approval prompt and decision map for server MESSAGE, or nil."
   (let ((method (alist-get 'method message nil nil #'equal))
         (params (alist-get 'params message)))
     (pcase method
-      ("item/commandExecution/requestApproval"
-       (cons (format "Allow Codex command %s? "
-                     (or (alist-get 'command params) "execution"))
-             (cons '((decision . "accept"))
-                   '((decision . "decline")))))
-      ("item/fileChange/requestApproval"
-       (cons "Allow Codex file change? "
-             (cons '((decision . "accept"))
-                   '((decision . "decline")))))
-      ("execCommandApproval"
-       (cons (format "Allow Codex command %s? "
-                     (or (alist-get 'command params) "execution"))
-             (cons '((decision . "approved"))
-                   '((decision . "denied")))))
-      ("applyPatchApproval"
-       (cons "Allow Codex file change? "
-             (cons '((decision . "approved"))
-                   '((decision . "denied")))))
+      ((or "item/commandExecution/requestApproval" "execCommandApproval")
+       (list :prompt (codex--app-server-command-approval-prompt params)
+             :decisions (codex--app-server-approval-decisions method)))
+      ((or "item/fileChange/requestApproval" "applyPatchApproval")
+       (list :prompt (codex--app-server-file-approval-prompt params)
+             :decisions (codex--app-server-approval-decisions method)))
       (_ nil))))
+
+(defun codex--app-server-command-approval-prompt (params)
+  "Return an approval prompt string for command request PARAMS."
+  (format "Run command: %s"
+          (codex--app-server-strip-shell-wrapper
+           (or (alist-get 'command params) "(unknown)"))))
+
+(defun codex--app-server-file-approval-prompt (params)
+  "Return an approval prompt string for file-change request PARAMS."
+  (let ((reason (alist-get 'reason params)))
+    (if reason (format "Apply file changes (%s)" reason) "Apply file changes")))
+
+(defun codex--app-server-approval-decisions (method)
+  "Return an alist mapping choice chars to decisions for METHOD."
+  (if (member method '("execCommandApproval" "applyPatchApproval"))
+      '((?y . "approved") (?a . "approved_for_session") (?n . "denied")
+        (?c . "abort"))
+    '((?y . "accept") (?a . "acceptForSession") (?n . "decline")
+      (?c . "cancel"))))
+
+(defun codex--app-server-read-approval (spec)
+  "Prompt with SPEC and return the chosen app-server approval decision."
+  (let* ((choice (read-multiple-choice
+                  (plist-get spec :prompt)
+                  '((?y "yes" "approve once")
+                    (?a "always" "approve for the rest of the session")
+                    (?n "no" "decline")
+                    (?c "cancel" "cancel the turn"))))
+         (decision (alist-get (car choice) (plist-get spec :decisions))))
+    `((decision . ,decision))))
 
 (defun codex--app-server-send-initialize ()
   "Send the app-server initialize request."
