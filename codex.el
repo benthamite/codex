@@ -2600,9 +2600,7 @@ _BACKEND is the terminal backend type (should be \\='eat)."
 ;;;;; vterm backend implementations
 
 ;; Declare external variables and functions from vterm package
-(defvar vterm-buffer-name)
 (defvar vterm-copy-mode)
-(defvar vterm-environment)
 (defvar vterm-max-scrollback)
 (defvar vterm-shell)
 (defvar vterm-term-environment-variable)
@@ -3117,11 +3115,6 @@ If SIMPLE-FORMAT is non-nil, use simplified display names."
                 (when other-buffers
                   (codex--prompt-for-codex-buffer))))))))))
 
-(defun codex--switch-to-selected-buffer (selected-buffer)
-  "Switch to SELECTED-BUFFER if it's not the current buffer."
-  (when (and selected-buffer (not (eq selected-buffer (current-buffer))))
-    (pop-to-buffer selected-buffer)))
-
 (defun codex--buffer-name (&optional instance-name)
   "Generate the Codex buffer name based on project or current buffer file.
 If INSTANCE-NAME is provided, include it in the buffer name."
@@ -3605,10 +3598,6 @@ The suffix starts after CURSOR and ends before LINE-END."
                   :mtime mtime
                   :entries (codex--read-prompt-autosuggestion-history file))))
     (plist-get codex--prompt-autosuggestion-history-state :entries)))
-
-(defun codex--reset-prompt-autosuggestion-history-cache ()
-  "Reset the prompt autosuggestion history cache."
-  (setq codex--prompt-autosuggestion-history-state nil))
 
 (defun codex--file-mtime (file)
   "Return FILE's modification time, or nil if FILE is unavailable."
@@ -4818,10 +4807,6 @@ Return non-nil when text was inserted."
                       (codex--transcript-display-line line))))
               (split-string message "\n")))))
 
-(defun codex--buffer-contains-display-line-p (line)
-  "Return non-nil when current buffer contains rendered transcript LINE."
-  (and (codex--buffer-display-line-position line) t))
-
 (defun codex--buffer-display-line-position (line &optional after)
   "Return end position of rendered transcript LINE in the buffer.
 When AFTER is non-nil, return the first occurrence after AFTER.
@@ -5189,11 +5174,6 @@ Only runs when `codex-enable-hooks' is non-nil."
                   (regexp-quote hook-type))
           command)))
      hooks)))
-
-(defun codex--hook-matcher (hook-type)
-  "Return the default matcher for HOOK-TYPE."
-  (or (plist-get (codex--hook-spec hook-type) :matcher)
-      codex--hook-all-events-matcher))
 
 (defun codex--hook-entry (spec command)
   "Return the hooks.json entry for SPEC running COMMAND."
