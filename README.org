@@ -71,6 +71,8 @@ When an =app-server= session connects, codex.el renders a session header showing
 
 The =app-server= buffer presents an editable input region after a prompt at the end of the buffer.  Type a message there and press the send key to submit it; conversation output renders above the prompt while the rendered history stays read-only and fully scrollable.  The send and newline keys follow ~codex-newline-keybinding-style~, so a multi-line prompt is composed with the newline key and submitted with the send key.  The user option ~codex-app-server-prompt-string~ sets the prompt shown before the input region; the default is ~"\n❯ "~.
 
+Completed assistant messages in =app-server= buffers receive lightweight Markdown highlighting for headings, bold spans, inline code, and fenced code blocks.
+
 The user option ~codex-app-server-listen-url~ controls the transport passed to ~codex app-server --listen~.  The default is ~"stdio://"~, which keeps the server private to the Emacs process.
 
 The user option ~codex-app-server-program-switches~ is a list of extra CLI flags to pass to ~codex app-server~.  The default value is ~nil~.

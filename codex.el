@@ -70,6 +70,16 @@
   "Face for the session header in app-server Codex buffers."
   :group 'codex-app-server)
 
+(defface codex-app-server-heading-face
+  '((t :inherit bold))
+  "Face for Markdown headings in app-server Codex buffers."
+  :group 'codex-app-server)
+
+(defface codex-app-server-code-face
+  '((t :inherit font-lock-constant-face))
+  "Face for Markdown code in app-server Codex buffers."
+  :group 'codex-app-server)
+
 ;; Reapply the default spec on reload so older sessions drop the previous
 ;; italic slant; custom face specs still take precedence.
 (face-spec-set 'codex-prompt-autosuggestion-face
@@ -1178,8 +1188,9 @@ arguments."
         (delta (alist-get 'delta params)))
     (when (and item-id delta)
       (unless (gethash item-id codex--app-server-agent-items)
-        (puthash item-id t codex--app-server-agent-items)
-        (codex--app-server-insert-role "Assistant"))
+        (codex--app-server-insert-role "Assistant")
+        (puthash item-id (copy-marker (codex--app-server-output-point))
+                 codex--app-server-agent-items))
       (codex--app-server-insert delta))))
 
 (defun codex--app-server-render-command-delta (params)
@@ -1195,12 +1206,43 @@ arguments."
 (defun codex--app-server-render-completed-item (params)
   "Render completed app-server item details from PARAMS when needed."
   (let ((item (alist-get 'item params)))
-    (when (and (equal (alist-get 'type item) "commandExecution")
-               (not (gethash (alist-get 'id item)
-                             codex--app-server-command-items)))
-      (when-let* ((output (alist-get 'aggregatedOutput item)))
-        (codex--app-server-insert-role "Command")
-        (codex--app-server-insert output)))))
+    (pcase (alist-get 'type item)
+      ("commandExecution" (codex--app-server-render-completed-command item))
+      ("agentMessage" (codex--app-server-fontify-completed-message item)))))
+
+(defun codex--app-server-render-completed-command (item)
+  "Render the aggregated output of a completed command ITEM."
+  (unless (gethash (alist-get 'id item) codex--app-server-command-items)
+    (when-let* ((output (alist-get 'aggregatedOutput item)))
+      (codex--app-server-insert-role "Command")
+      (codex--app-server-insert output))))
+
+(defun codex--app-server-fontify-completed-message (item)
+  "Apply Markdown faces to the rendered agent message for ITEM."
+  (when-let* ((start (gethash (alist-get 'id item)
+                              codex--app-server-agent-items))
+              ((markerp start)))
+    (codex--app-server-fontify-markdown
+     (marker-position start) (codex--app-server-output-point))))
+
+(defun codex--app-server-fontify-markdown (start end)
+  "Apply lightweight Markdown faces to the region between START and END."
+  (let ((inhibit-read-only t))
+    (codex--app-server-fontify-matches
+     "^#+ .*$" 'codex-app-server-heading-face start end)
+    (codex--app-server-fontify-matches
+     "\\*\\*[^*\n]+\\*\\*" 'bold start end)
+    (codex--app-server-fontify-matches
+     "`[^`\n]+`" 'codex-app-server-code-face start end)
+    (codex--app-server-fontify-matches
+     "^```\\(?:.\\|\n\\)*?^```$" 'codex-app-server-code-face start end)))
+
+(defun codex--app-server-fontify-matches (regexp face start end)
+  "Put FACE on each match of REGEXP between START and END."
+  (save-excursion
+    (goto-char start)
+    (while (re-search-forward regexp end t)
+      (put-text-property (match-beginning 0) (match-end 0) 'face face))))
 
 (defun codex--app-server-handle-server-request (message)
   "Prompt for and answer an app-server request MESSAGE."

@@ -1070,6 +1070,32 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (goto-char 5)
     (should-error (insert "X") :type 'text-read-only)))
 
+(ert-deftest codex-test-app-server-fontifies-completed-message ()
+  "Completed agent messages receive lightweight Markdown faces."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-md/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (codex--app-server-handle-message
+     '((method . "item/agentMessage/delta")
+       (params (itemId . "m1")
+               (delta . "# Title\nsome **bold** and `code` here\n"))))
+    (codex--app-server-handle-message
+     '((method . "item/completed")
+       (params (item (type . "agentMessage") (id . "m1")))))
+    (goto-char (point-min))
+    (search-forward "Title")
+    (should (eq (get-text-property (1- (point)) 'face)
+                'codex-app-server-heading-face))
+    (goto-char (point-min))
+    (search-forward "bold")
+    (should (eq (get-text-property (1- (point)) 'face) 'bold))
+    (goto-char (point-min))
+    (search-forward "code")
+    (should (eq (get-text-property (1- (point)) 'face)
+                'codex-app-server-code-face))))
+
 (ert-deftest codex-test-app-server-process-filter-handles-json-lines ()
   "App-server filter parses newline-delimited JSON messages."
   (let ((buffer (generate-new-buffer "*codex:/tmp/app-server-filter/*")))
