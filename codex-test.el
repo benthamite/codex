@@ -1146,6 +1146,17 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (should (equal (alist-get 'path mention) "/tmp/foo.el")))
     (should (null codex--app-server-pending-mentions))))
 
+(ert-deftest codex-test-app-server-all-slash-commands-recognized ()
+  "Documented message-only slash commands do not fall through as unsupported."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-allslash/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (dolist (cmd '("/fast" "/mcp" "/ps" "/ide" "/logout"
+                   "/experimental" "/plugins" "/hooks" "/statusline" "/skills"))
+      (codex--app-server-dispatch-slash cmd))
+    (should-not (string-match-p "Unsupported command" (buffer-string)))))
+
 (ert-deftest codex-test-app-server-slash-raw-toggles-markdown ()
   "The /raw command toggles Markdown rendering in the buffer."
   (with-temp-buffer

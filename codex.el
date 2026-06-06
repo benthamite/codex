@@ -1296,11 +1296,61 @@ arguments."
       ("/raw" (codex--app-server-toggle-raw))
       ("/statusline" (codex--app-server-insert-status
                       "Status line is the Emacs mode line; customize `mode-line-format'"))
+      ("/goal" (let ((objective (read-string "Goal: ")))
+                 (codex--app-server-thread-request
+                  "thread/goal/set" `((objective . ,objective))
+                  (format "Goal set: %s" objective))))
+      ("/title" (let ((name (read-string "Thread title: ")))
+                  (codex--app-server-thread-request
+                   "thread/name/set" `((name . ,name))
+                   (format "Thread renamed: %s" name))))
+      ("/memories" (let ((mode (completing-read "Memory mode: "
+                                                '("enabled" "disabled") nil t)))
+                     (codex--app-server-thread-request
+                      "thread/memoryMode/set" `((mode . ,mode))
+                      (format "Memory mode: %s" mode))))
+      ("/personality" (let ((personality (completing-read
+                                          "Personality: "
+                                          '("friendly" "pragmatic" "none") nil t)))
+                        (codex--app-server-thread-request
+                         "thread/settings/update" `((personality . ,personality))
+                         (format "Personality: %s" personality))))
+      ("/plan" (codex--app-server-thread-request
+                "thread/settings/update" '((collaborationMode . "plan"))
+                "Plan mode enabled"))
+      ("/stop" (codex--app-server-thread-request
+                "thread/backgroundTerminals/clean" nil
+                "Background terminals stopped"))
+      ("/ps" (codex--app-server-insert-status
+              "Background terminals run inside the Codex thread"))
+      ("/mcp" (codex--app-server-insert-status
+               "MCP servers are configured in ~/.codex/config.toml"))
+      ("/fast" (codex--app-server-insert-status
+                "Service tier is set by your Codex account and config"))
+      ("/ide" (codex--app-server-insert-status
+               "codex.el is the Emacs IDE integration; use @-references for context"))
+      ("/logout" (codex--app-server-insert-status
+                  "Run `codex logout' in a terminal to clear credentials"))
+      ((or "/experimental" "/debug-config" "/feedback" "/plugins" "/hooks"
+           "/approve" "/sandbox-add-read-dir")
+       (codex--app-server-insert-status
+        (format "%s is managed by Codex configuration (~/.codex)" command)))
       ((or "/quit" "/exit") (codex--term-kill-process 'app-server (current-buffer)))
       ((or "/init" "/review")
        (codex--app-server-submit-command (codex--app-server-slash-prompt command argument)))
       (_ (codex--app-server-insert-status
           (format "Unsupported command: %s" command))))))
+
+(defun codex--app-server-thread-request (method extra ok-message)
+  "Send thread request METHOD with EXTRA params, reporting OK-MESSAGE on success."
+  (if codex--app-server-thread-id
+      (codex--app-server-send-request
+       method
+       (cons `(threadId . ,codex--app-server-thread-id) extra)
+       (lambda (_result error)
+         (codex--app-server-insert-status
+          (if error (format "%s failed: %S" method error) ok-message))))
+    (message "No active Codex thread")))
 
 (defun codex-app-server-attach-mention ()
   "Attach a file mention to the next app-server turn input."
