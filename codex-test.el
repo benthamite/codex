@@ -1119,6 +1119,29 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (should (string-match-p "… \\+95 lines" text))
       (should (string-match-p "✓ succeeded in 5ms" text)))))
 
+(ert-deftest codex-test-app-server-renders-and-updates-plan ()
+  "Turn plan renders as a checklist and updates in place."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-plan/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (codex--app-server-handle-message
+     '((method . "turn/plan/updated")
+       (params (plan . (((step . "Write code") (status . "inProgress"))
+                        ((step . "Run tests") (status . "pending")))))))
+    (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+      (should (string-match-p "▶ Write code" text))
+      (should (string-match-p "○ Run tests" text)))
+    (codex--app-server-handle-message
+     '((method . "turn/plan/updated")
+       (params (plan . (((step . "Write code") (status . "completed"))
+                        ((step . "Run tests") (status . "inProgress")))))))
+    (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+      (should (string-match-p "✓ Write code" text))
+      (should (string-match-p "▶ Run tests" text))
+      (should-not (string-match-p "▶ Write code" text))
+      (should (= 1 (how-many "^Plan$" (point-min) (point-max)))))))
+
 (ert-deftest codex-test-app-server-tab-queues-input-for-next-turn ()
   "Tab queues input during an active turn and flushes it on completion."
   (with-temp-buffer

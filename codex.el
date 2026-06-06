@@ -723,6 +723,12 @@ recompiled with a larger SB_MAX value."
 (defvar-local codex--app-server-queued-turn-inputs nil
   "Inputs queued with Tab to send after the active turn completes.")
 
+(defvar-local codex--app-server-plan-start nil
+  "Marker at the start of the rendered turn-plan checklist.")
+
+(defvar-local codex--app-server-plan-end nil
+  "Marker at the end of the rendered turn-plan checklist.")
+
 (defvar-local codex--transcript-last-catch-up-message nil
   "Last transcript catch-up message appended to the current buffer.")
 
@@ -982,6 +988,8 @@ arguments."
       (setq-local codex--app-server-output-marker nil)
       (setq-local codex--app-server-input-marker nil)
       (setq-local codex--app-server-queued-turn-inputs nil)
+      (setq-local codex--app-server-plan-start nil)
+      (setq-local codex--app-server-plan-end nil)
       (setq-local codex--app-server-next-request-id 0)
       (setq-local codex--app-server-pending-requests
                   (make-hash-table :test 'equal))
@@ -1123,6 +1131,7 @@ arguments."
        (codex--app-server-render-reasoning-delta params))
       ("item/reasoning/summaryPartAdded"
        (codex--app-server-render-reasoning-part-break params))
+      ("turn/plan/updated" (codex--app-server-render-plan params))
       ("item/completed" (codex--app-server-render-completed-item params))
       ("error" (codex--app-server-insert-status
                 (or (alist-get 'message params) "Codex app-server error")))
@@ -1268,6 +1277,48 @@ With no active turn, send the input immediately like Return."
   "Insert a paragraph break between reasoning summary parts for PARAMS."
   (when (gethash (alist-get 'itemId params) codex--app-server-reasoning-items)
     (codex--app-server-insert "\n\n" 'codex-app-server-reasoning-face)))
+
+(defun codex--app-server-render-plan (params)
+  "Render or update the turn-plan checklist from PARAMS in place."
+  (when-let* ((plan (alist-get 'plan params))
+              (text (codex--app-server-plan-text plan)))
+    (if (and (markerp codex--app-server-plan-start)
+             (marker-position codex--app-server-plan-start))
+        (codex--app-server-replace-plan text)
+      (codex--app-server-insert-role "Plan")
+      (setq codex--app-server-plan-start
+            (copy-marker (codex--app-server-output-point)))
+      (codex--app-server-insert text 'codex-app-server-status-face)
+      (setq codex--app-server-plan-end
+            (copy-marker (codex--app-server-output-point))))))
+
+(defun codex--app-server-replace-plan (text)
+  "Replace the rendered plan region with TEXT."
+  (let ((inhibit-read-only t))
+    (save-excursion
+      (delete-region codex--app-server-plan-start codex--app-server-plan-end)
+      (goto-char codex--app-server-plan-start)
+      (let ((start (point)))
+        (insert text)
+        (put-text-property start (point) 'face 'codex-app-server-status-face)
+        (add-text-properties start (point) '(read-only t front-sticky t))
+        (set-marker codex--app-server-plan-end (point))))))
+
+(defun codex--app-server-plan-text (plan)
+  "Return checklist text for PLAN, a list of step alists."
+  (mapconcat
+   (lambda (step)
+     (format "%s %s"
+             (codex--app-server-plan-status-char (alist-get 'status step))
+             (alist-get 'step step)))
+   (append plan nil) "\n"))
+
+(defun codex--app-server-plan-status-char (status)
+  "Return a checklist marker character for plan STATUS."
+  (pcase status
+    ("completed" "✓")
+    ("inProgress" "▶")
+    (_ "○")))
 
 (defun codex--app-server-render-completed-item (params)
   "Render completed app-server item details from PARAMS when needed."
