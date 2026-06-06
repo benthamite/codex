@@ -80,6 +80,11 @@
   "Face for Markdown code in app-server Codex buffers."
   :group 'codex-app-server)
 
+(defface codex-app-server-command-face
+  '((t :inherit font-lock-builtin-face))
+  "Face for command lines in app-server Codex buffers."
+  :group 'codex-app-server)
+
 ;; Reapply the default spec on reload so older sessions drop the previous
 ;; italic slant; custom face specs still take precedence.
 (face-spec-set 'codex-prompt-autosuggestion-face
@@ -128,6 +133,14 @@ When non-nil and `markdown-mode' is available, completed assistant
 messages are rendered with Markdown faces and hidden markup.  Otherwise
 a lightweight built-in highlighter is used."
   :type 'boolean
+  :group 'codex-app-server)
+
+(defcustom codex-app-server-max-command-output-lines 10
+  "Maximum number of command output lines shown in app-server buffers.
+Like the Codex CLI, command output longer than this is folded and the
+remaining line count is shown as a \"… +N lines\" marker instead of
+printing the full output."
+  :type 'integer
   :group 'codex-app-server)
 
 (defcustom codex-use-alt-screen nil
@@ -1091,8 +1104,6 @@ arguments."
       ("turn/completed" (codex--app-server-turn-completed params))
       ("item/agentMessage/delta"
        (codex--app-server-render-agent-delta params))
-      ("item/commandExecution/outputDelta"
-       (codex--app-server-render-command-delta params))
       ("item/completed" (codex--app-server-render-completed-item params))
       ("error" (codex--app-server-insert-status
                 (or (alist-get 'message params) "Codex app-server error")))
@@ -1204,16 +1215,6 @@ arguments."
                  codex--app-server-agent-items))
       (codex--app-server-insert delta))))
 
-(defun codex--app-server-render-command-delta (params)
-  "Render a command output delta from PARAMS."
-  (let ((item-id (alist-get 'itemId params))
-        (delta (alist-get 'delta params)))
-    (when (and item-id delta)
-      (unless (gethash item-id codex--app-server-command-items)
-        (puthash item-id t codex--app-server-command-items)
-        (codex--app-server-insert-role "Command"))
-      (codex--app-server-insert delta))))
-
 (defun codex--app-server-render-completed-item (params)
   "Render completed app-server item details from PARAMS when needed."
   (let ((item (alist-get 'item params)))
@@ -1222,11 +1223,35 @@ arguments."
       ("agentMessage" (codex--app-server-fontify-completed-message item)))))
 
 (defun codex--app-server-render-completed-command (item)
-  "Render the aggregated output of a completed command ITEM."
+  "Render a completed command ITEM as a folded command block."
   (unless (gethash (alist-get 'id item) codex--app-server-command-items)
-    (when-let* ((output (alist-get 'aggregatedOutput item)))
-      (codex--app-server-insert-role "Command")
-      (codex--app-server-insert output))))
+    (puthash (alist-get 'id item) t codex--app-server-command-items)
+    (codex--app-server-insert-role "Command")
+    (codex--app-server-insert (codex--app-server-command-display item)
+                              'codex-app-server-command-face)
+    (let ((output (string-trim-right (or (alist-get 'aggregatedOutput item) ""))))
+      (unless (string-empty-p output)
+        (codex--app-server-insert
+         (concat "\n" (codex--app-server-fold-output output)))))))
+
+(defun codex--app-server-command-display (item)
+  "Return the command line to display for command ITEM."
+  (codex--app-server-strip-shell-wrapper (or (alist-get 'command item) "")))
+
+(defun codex--app-server-strip-shell-wrapper (command)
+  "Strip a `/bin/sh -lc \"...\"' wrapper from COMMAND when present."
+  (if (string-match "\\`/[^ ]*sh -lc [\"']\\(\\(?:.\\|\n\\)*\\)[\"']\\'" command)
+      (match-string 1 command)
+    command))
+
+(defun codex--app-server-fold-output (output)
+  "Return OUTPUT folded to `codex-app-server-max-command-output-lines'."
+  (let* ((lines (split-string output "\n"))
+         (limit codex-app-server-max-command-output-lines))
+    (if (<= (length lines) limit)
+        output
+      (concat (string-join (seq-take lines limit) "\n")
+              (format "\n… +%d lines" (- (length lines) limit))))))
 
 (defun codex--app-server-fontify-completed-message (item)
   "Apply Markdown faces to the rendered agent message for ITEM."
