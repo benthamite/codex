@@ -1110,12 +1110,52 @@ assertion in `eat--t-cur-left' on the following cursor move."
        `((method . "item/completed")
          (params (item (type . "commandExecution") (id . "c1")
                        (command . "/bin/zsh -lc \"seq 1 100\"")
+                       (exitCode . 0) (durationMs . 5)
                        (aggregatedOutput . ,output))))))
     (let ((text (buffer-substring-no-properties (point-min) (point-max))))
       (should (string-match-p "seq 1 100" text))
       (should (string-match-p "^5$" text))
       (should-not (string-match-p "^50$" text))
-      (should (string-match-p "… \\+95 lines" text)))))
+      (should (string-match-p "… \\+95 lines" text))
+      (should (string-match-p "✓ succeeded in 5ms" text)))))
+
+(ert-deftest codex-test-app-server-renders-file-change-diff ()
+  "File-change items render as faced diffs with kind labels."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-fc/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (codex--app-server-handle-message
+     '((method . "item/completed")
+       (params (item (type . "fileChange") (id . "f1") (status . "completed")
+                     (changes . (((path . "foo.el")
+                                  (kind . ((type . "update")))
+                                  (diff . "@@ -1 +1 @@\n-old line\n+new line"))))))))
+    (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+      (should (string-match-p "Edited foo.el" text))
+      (should (string-match-p "new line" text)))
+    (goto-char (point-min))
+    (search-forward "+new line")
+    (should (eq (get-text-property (1- (point)) 'face) 'diff-added))))
+
+(ert-deftest codex-test-app-server-renders-reasoning-summary ()
+  "Reasoning summary deltas render as dimmed text under a Thinking label."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-reason/*" t)
+    (setq-local codex--app-server-reasoning-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (codex--app-server-handle-message
+     '((method . "item/reasoning/summaryTextDelta")
+       (params (itemId . "r1") (delta . "Considering the options"))))
+    (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+      (should (string-match-p "Thinking" text))
+      (should (string-match-p "Considering the options" text)))
+    (goto-char (point-min))
+    (search-forward "Considering")
+    (should (eq (get-text-property (1- (point)) 'face)
+                'codex-app-server-reasoning-face))))
 
 (ert-deftest codex-test-app-server-renders-markdown-hides-markup ()
   "Completed messages render through `gfm-mode' with markup hidden."

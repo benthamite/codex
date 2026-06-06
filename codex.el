@@ -85,6 +85,11 @@
   "Face for command lines in app-server Codex buffers."
   :group 'codex-app-server)
 
+(defface codex-app-server-reasoning-face
+  '((t :inherit (shadow italic)))
+  "Face for reasoning summaries in app-server Codex buffers."
+  :group 'codex-app-server)
+
 ;; Reapply the default spec on reload so older sessions drop the previous
 ;; italic slant; custom face specs still take precedence.
 (face-spec-set 'codex-prompt-autosuggestion-face
@@ -709,6 +714,9 @@ recompiled with a larger SB_MAX value."
 (defvar-local codex--app-server-command-items nil
   "Hash table of rendered app-server command output items.")
 
+(defvar-local codex--app-server-reasoning-items nil
+  "Hash table of rendered app-server reasoning items.")
+
 (defvar-local codex--app-server-queued-commands nil
   "Commands waiting for app-server thread startup.")
 
@@ -976,6 +984,8 @@ arguments."
       (setq-local codex--app-server-agent-items
                   (make-hash-table :test 'equal))
       (setq-local codex--app-server-command-items
+                  (make-hash-table :test 'equal))
+      (setq-local codex--app-server-reasoning-items
                   (make-hash-table :test 'equal)))
     (let ((process
            (make-process :name (string-trim buffer-name "\\*")
@@ -1104,6 +1114,10 @@ arguments."
       ("turn/completed" (codex--app-server-turn-completed params))
       ("item/agentMessage/delta"
        (codex--app-server-render-agent-delta params))
+      ("item/reasoning/summaryTextDelta"
+       (codex--app-server-render-reasoning-delta params))
+      ("item/reasoning/summaryPartAdded"
+       (codex--app-server-render-reasoning-part-break params))
       ("item/completed" (codex--app-server-render-completed-item params))
       ("error" (codex--app-server-insert-status
                 (or (alist-get 'message params) "Codex app-server error")))
@@ -1215,11 +1229,29 @@ arguments."
                  codex--app-server-agent-items))
       (codex--app-server-insert delta))))
 
+(defun codex--app-server-render-reasoning-delta (params)
+  "Render a reasoning summary delta from PARAMS as dimmed text."
+  (let ((item-id (alist-get 'itemId params))
+        (delta (alist-get 'delta params)))
+    (when (and item-id delta)
+      (unless (gethash item-id codex--app-server-reasoning-items)
+        (codex--app-server-insert-role "Thinking")
+        (puthash item-id t codex--app-server-reasoning-items))
+      (codex--app-server-insert delta 'codex-app-server-reasoning-face))))
+
+(defun codex--app-server-render-reasoning-part-break (params)
+  "Insert a paragraph break between reasoning summary parts for PARAMS."
+  (when (gethash (alist-get 'itemId params) codex--app-server-reasoning-items)
+    (codex--app-server-insert "\n\n" 'codex-app-server-reasoning-face)))
+
 (defun codex--app-server-render-completed-item (params)
   "Render completed app-server item details from PARAMS when needed."
   (let ((item (alist-get 'item params)))
     (pcase (alist-get 'type item)
       ("commandExecution" (codex--app-server-render-completed-command item))
+      ("fileChange" (codex--app-server-render-completed-filechange item))
+      ("mcpToolCall" (codex--app-server-render-completed-tool-call item))
+      ("webSearch" (codex--app-server-render-completed-web-search item))
       ("agentMessage" (codex--app-server-fontify-completed-message item)))))
 
 (defun codex--app-server-render-completed-command (item)
@@ -1232,7 +1264,88 @@ arguments."
     (let ((output (string-trim-right (or (alist-get 'aggregatedOutput item) ""))))
       (unless (string-empty-p output)
         (codex--app-server-insert
-         (concat "\n" (codex--app-server-fold-output output)))))))
+         (concat "\n" (codex--app-server-fold-output output)))))
+    (codex--app-server-insert (concat "\n" (codex--app-server-command-status item))
+                              'codex-app-server-status-face)))
+
+(defun codex--app-server-command-status (item)
+  "Return a status summary line for command ITEM."
+  (let ((exit (alist-get 'exitCode item))
+        (ms (alist-get 'durationMs item)))
+    (concat (cond ((null exit) "done")
+                  ((eq exit 0) "✓ succeeded")
+                  (t (format "✗ exit %s" exit)))
+            (when (numberp ms)
+              (format " in %s" (codex--app-server-format-duration ms))))))
+
+(defun codex--app-server-format-duration (ms)
+  "Return a human-readable duration for MS milliseconds."
+  (cond ((< ms 1000) (format "%dms" ms))
+        ((< ms 60000) (format "%.1fs" (/ ms 1000.0)))
+        (t (format "%dm%ds" (/ ms 60000) (/ (% ms 60000) 1000)))))
+
+(defun codex--app-server-render-completed-filechange (item)
+  "Render a completed file-change ITEM as folded, faced diffs."
+  (codex--app-server-insert-role "Edit")
+  (dolist (change (append (alist-get 'changes item) nil))
+    (codex--app-server-insert
+     (format "%s %s\n"
+             (codex--app-server-change-kind-label (alist-get 'kind change))
+             (alist-get 'path change))
+     'codex-app-server-command-face)
+    (codex--app-server-render-diff (string-trim-right (or (alist-get 'diff change) "")))))
+
+(defun codex--app-server-change-kind-label (kind)
+  "Return a human label for file-change KIND."
+  (pcase (alist-get 'type kind)
+    ("add" "Added")
+    ("delete" "Deleted")
+    ("update" "Edited")
+    ("rename" "Renamed")
+    (_ "Changed")))
+
+(defun codex--app-server-render-diff (diff)
+  "Insert folded DIFF text with added and removed line faces."
+  (unless (string-empty-p diff)
+    (let ((start (codex--app-server-output-point)))
+      (codex--app-server-insert (concat (codex--app-server-fold-output diff) "\n"))
+      (let ((end (codex--app-server-output-point)))
+        (codex--app-server-fontify-matches "^\\+.*$" 'diff-added start end)
+        (codex--app-server-fontify-matches "^-.*$" 'diff-removed start end)))))
+
+(defun codex--app-server-render-completed-tool-call (item)
+  "Render a completed MCP tool-call ITEM."
+  (codex--app-server-insert-role "Tool")
+  (codex--app-server-insert
+   (concat (if-let* ((server (alist-get 'server item))) (concat server ".") "")
+           (or (alist-get 'tool item) "tool"))
+   'codex-app-server-command-face)
+  (let ((result (codex--app-server-tool-result-text item)))
+    (unless (string-empty-p result)
+      (codex--app-server-insert (concat "\n" (codex--app-server-fold-output result)))))
+  (codex--app-server-insert (concat "\n" (codex--app-server-command-status item))
+                            'codex-app-server-status-face))
+
+(defun codex--app-server-tool-result-text (item)
+  "Return a string rendering of MCP tool-call ITEM result or error."
+  (let ((error (alist-get 'error item))
+        (result (alist-get 'result item)))
+    (cond (error (format "error: %s" error))
+          ((stringp result) result)
+          (result (codex--app-server-stringify result))
+          (t ""))))
+
+(defun codex--app-server-stringify (value)
+  "Return a compact string representation of VALUE."
+  (condition-case nil
+      (json-encode value)
+    (error (format "%s" value))))
+
+(defun codex--app-server-render-completed-web-search (item)
+  "Render a completed web-search ITEM."
+  (codex--app-server-insert-role "Search")
+  (codex--app-server-insert (or (alist-get 'query item) "")
+                            'codex-app-server-command-face))
 
 (defun codex--app-server-command-display (item)
   "Return the command line to display for command ITEM."
@@ -1315,10 +1428,11 @@ Uses `gfm-mode' when available, falling back to a built-in highlighter."
 
 (defun codex--app-server-fontify-matches (regexp face start end)
   "Put FACE on each match of REGEXP between START and END."
-  (save-excursion
-    (goto-char start)
-    (while (re-search-forward regexp end t)
-      (put-text-property (match-beginning 0) (match-end 0) 'face face))))
+  (let ((inhibit-read-only t))
+    (save-excursion
+      (goto-char start)
+      (while (re-search-forward regexp end t)
+        (put-text-property (match-beginning 0) (match-end 0) 'face face)))))
 
 (defun codex--app-server-handle-server-request (message)
   "Prompt for and answer an app-server request MESSAGE."
