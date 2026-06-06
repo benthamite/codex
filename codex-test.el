@@ -996,6 +996,35 @@ assertion in `eat--t-cur-left' on the following cursor move."
                              (point-min)
                              (point-max)))))))
 
+(ert-deftest codex-test-app-server-header-renders-session-metadata ()
+  "App-server renders a session header from thread metadata on start."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-header/*" t)
+    (setq-local codex--buffer-directory "/tmp/myproj/")
+    (setq-local codex--app-server-user-agent
+                "codex.el/0.137.0 (Mac OS 26.4.1; arm64) xterm-256color")
+    (let ((codex-model "gpt-5-codex"))
+      (codex--app-server-handle-message
+       '((method . "thread/started")
+         (params
+          (thread
+           (id . "019e9dfd-abc")
+           (modelProvider . "openai")
+           (path . "/home/me/.codex/sessions/x/rollout-y.jsonl"))))))
+    (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+      (should (string-match-p "0\\.137\\.0" text))
+      (should (string-match-p "gpt-5-codex" text))
+      (should (string-match-p "019e9dfd-abc" text))
+      (should (string-match-p "myproj" text)))))
+
+(ert-deftest codex-test-app-server-header-version-extracted-from-user-agent ()
+  "Codex version is extracted from the app-server user agent string."
+  (should (equal (codex--app-server-codex-version
+                  "codex.el/0.137.0 (Mac OS 26.4.1; arm64) xterm-256color")
+                 "0.137.0"))
+  (should (null (codex--app-server-codex-version nil)))
+  (should (null (codex--app-server-codex-version "no-version-here"))))
+
 (ert-deftest codex-test-app-server-process-filter-handles-json-lines ()
   "App-server filter parses newline-delimited JSON messages."
   (let ((buffer (generate-new-buffer "*codex:/tmp/app-server-filter/*")))

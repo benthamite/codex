@@ -65,6 +65,11 @@
   "Face for status lines in app-server Codex buffers."
   :group 'codex-app-server)
 
+(defface codex-app-server-header-face
+  '((t :inherit shadow))
+  "Face for the session header in app-server Codex buffers."
+  :group 'codex-app-server)
+
 ;; Reapply the default spec on reload so older sessions drop the previous
 ;; italic slant; custom face specs still take precedence.
 (face-spec-set 'codex-prompt-autosuggestion-face
@@ -646,6 +651,9 @@ recompiled with a larger SB_MAX value."
 (defvar-local codex--app-server-thread-id nil
   "Current app-server thread id.")
 
+(defvar-local codex--app-server-user-agent nil
+  "User agent string reported by the app-server initialize response.")
+
 (defvar-local codex--app-server-current-turn-id nil
   "Current app-server turn id.")
 
@@ -1058,13 +1066,46 @@ arguments."
       (_ nil))))
 
 (defun codex--app-server-thread-started (params)
-  "Record app-server thread startup PARAMS."
-  (let ((thread-id (alist-get 'id (alist-get 'thread params))))
+  "Record app-server thread startup PARAMS and render the session header."
+  (let* ((thread (alist-get 'thread params))
+         (thread-id (alist-get 'id thread)))
     (unless (equal codex--app-server-thread-id thread-id)
       (setq codex--app-server-thread-id thread-id)
-      (codex--app-server-insert-status
-       (format "Connected to Codex thread %s" codex--app-server-thread-id))
+      (codex--app-server-render-header thread)
       (codex--app-server-flush-queued-commands))))
+
+(defun codex--app-server-render-header (thread)
+  "Render the app-server session header from THREAD metadata."
+  (codex--app-server-insert
+   (codex--app-server-header-text thread)
+   'codex-app-server-header-face))
+
+(defun codex--app-server-header-text (thread)
+  "Return the app-server session header text from THREAD metadata."
+  (let ((version (codex--app-server-codex-version codex--app-server-user-agent))
+        (model (codex--app-server-header-model thread))
+        (directory (codex--app-server-header-directory))
+        (thread-id (alist-get 'id thread))
+        (path (alist-get 'path thread)))
+    (concat (format "Codex%s · %s · %s\n"
+                    (if version (concat " " version) "") model directory)
+            (format "Thread %s\n" thread-id)
+            (if path (format "Session %s\n" (abbreviate-file-name path)) "")
+            (make-string 48 ?─) "\n")))
+
+(defun codex--app-server-codex-version (user-agent)
+  "Return the Codex version parsed from USER-AGENT, or nil when absent."
+  (when (and user-agent
+             (string-match "/\\([0-9]+\\.[0-9]+\\.[0-9]+\\)" user-agent))
+    (match-string 1 user-agent)))
+
+(defun codex--app-server-header-model (thread)
+  "Return the model label for the app-server header from THREAD metadata."
+  (or codex-model (alist-get 'modelProvider thread) "default"))
+
+(defun codex--app-server-header-directory ()
+  "Return the abbreviated working directory for the app-server header."
+  (abbreviate-file-name (or codex--buffer-directory default-directory)))
 
 (defun codex--app-server-turn-started (params)
   "Record app-server turn startup PARAMS."
@@ -1168,10 +1209,11 @@ arguments."
      (capabilities
       (experimentalApi . t)
       (requestAttestation . :json-false)))
-   (lambda (_result error)
+   (lambda (result error)
      (if error
          (codex--app-server-insert-status
           (format "Codex app-server initialize failed: %S" error))
+       (setq codex--app-server-user-agent (alist-get 'userAgent result))
        (codex--app-server-send-thread-start)))))
 
 (defun codex--app-server-send-thread-start ()

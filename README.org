@@ -67,6 +67,8 @@ The user option ~codex-program-switches~ is a list of extra CLI flags to pass to
 
 The user option ~codex-terminal-backend~ selects the Codex backend.  The choices are ~app-server~ (the default), ~eat~, and ~vterm~.  The =app-server= backend starts ~codex app-server --listen stdio://~, parses its newline-delimited JSON-RPC event stream, and renders assistant messages directly in the Emacs buffer.  This avoids terminal redraw and scrollback loss for wide Markdown tables.  The =eat= and =vterm= choices keep the Codex terminal TUI available as fallback backends.  Until Codex app-server exposes a native resume/fork picker, ~codex-resume~ and ~codex-fork~ use the Eat terminal fallback even when =app-server= is the default for new sessions.
 
+When an =app-server= session connects, codex.el renders a session header showing the Codex version, the model or provider, the working directory, the thread id, and the session transcript path.  The header replaces the terminal TUI's startup banner, which is not emitted over the app-server protocol.
+
 The user option ~codex-app-server-listen-url~ controls the transport passed to ~codex app-server --listen~.  The default is ~"stdio://"~, which keeps the server private to the Emacs process.
 
 The user option ~codex-app-server-program-switches~ is a list of extra CLI flags to pass to ~codex app-server~.  The default value is ~nil~.
