@@ -1192,6 +1192,14 @@ arguments."
       ("item/completed" (codex--app-server-render-completed-item params))
       ("thread/compacted"
        (codex--app-server-insert-status "Conversation compacted"))
+      ("thread/name/updated"
+       (when-let* ((name (alist-get 'name params)))
+         (codex--app-server-insert-status (format "Thread renamed: %s" name))))
+      ("thread/goal/updated"
+       (when-let* ((goal (alist-get 'goal params)))
+         (codex--app-server-insert-status (format "Goal: %s" goal))))
+      ("thread/goal/cleared"
+       (codex--app-server-insert-status "Goal cleared"))
       ("model/rerouted"
        (codex--app-server-insert-status
         (format "Model rerouted%s"

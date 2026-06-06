@@ -1158,6 +1158,19 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (codex--app-server-dispatch-slash "/raw")
     (should codex-app-server-render-markdown)))
 
+(ert-deftest codex-test-app-server-renders-thread-name-and-goal ()
+  "Thread name and goal updates render as status lines."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-meta/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (codex--app-server-handle-message
+     '((method . "thread/name/updated") (params (name . "My Task"))))
+    (should (string-match-p "Thread renamed: My Task" (buffer-string)))
+    (codex--app-server-handle-message
+     '((method . "thread/goal/updated") (params (goal . "Ship the feature"))))
+    (should (string-match-p "Goal: Ship the feature" (buffer-string)))))
+
 (ert-deftest codex-test-app-server-renders-realtime-transcript ()
   "Realtime lifecycle and transcript events render in the buffer."
   (with-temp-buffer
