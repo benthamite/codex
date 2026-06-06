@@ -720,6 +720,9 @@ recompiled with a larger SB_MAX value."
 (defvar-local codex--app-server-full-outputs nil
   "Hash table mapping item ids to full (unfolded) command output.")
 
+(defvar-local codex--app-server-pending-images nil
+  "Image file paths to attach to the next app-server turn input.")
+
 (defvar-local codex--app-server-queued-commands nil
   "Commands waiting for app-server thread startup.")
 
@@ -1081,6 +1084,8 @@ arguments."
   (setq-local mode-line-process '(:eval (codex--app-server-mode-line)))
   (setq-local codex--app-server-startup-action
               codex--app-server-pending-startup-action)
+  (setq-local codex--app-server-pending-images
+              (mapcar #'expand-file-name codex-default-images))
   (codex--app-server-send-initialize))
 
 (cl-defmethod codex--term-customize-faces ((_backend (eql app-server)))
@@ -2009,10 +2014,22 @@ Slash commands are dispatched locally rather than sent to the model."
         (format "Codex turn steering failed: %S" error))))))
 
 (defun codex--app-server-user-input-vector (text)
-  "Return app-server user input vector for TEXT."
-  (vector `((type . "text")
-            (text . ,text)
-            (text_elements . []))))
+  "Return app-server user input vector for TEXT and any pending images."
+  (let ((images (mapcar (lambda (path)
+                          `((type . "localImage") (path . ,path)))
+                        codex--app-server-pending-images)))
+    (setq codex--app-server-pending-images nil)
+    (apply #'vector
+           (append images
+                   (list `((type . "text")
+                           (text . ,text)
+                           (text_elements . [])))))))
+
+(defun codex-app-server-attach-image (path)
+  "Attach image at PATH to the next app-server turn input."
+  (interactive "fAttach image: ")
+  (push (expand-file-name path) codex--app-server-pending-images)
+  (message "Image attached for next Codex turn: %s" path))
 
 (defun codex--app-server-flush-queued-commands ()
   "Submit commands queued before app-server thread startup."

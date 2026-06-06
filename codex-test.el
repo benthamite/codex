@@ -1120,6 +1120,20 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (should (string-match-p "… \\+95 lines" text))
       (should (string-match-p "✓ succeeded in 5ms" text)))))
 
+(ert-deftest codex-test-app-server-input-vector-includes-images ()
+  "Pending images attach as localImage input items, then clear."
+  (with-temp-buffer
+    (setq-local codex--app-server-pending-images '("/tmp/a.png" "/tmp/b.png"))
+    (let ((vec (codex--app-server-user-input-vector "hello")))
+      (should (= 3 (length vec)))
+      (should (equal (alist-get 'type (aref vec 0)) "localImage"))
+      (should (equal (alist-get 'path (aref vec 0)) "/tmp/a.png"))
+      (should (equal (alist-get 'type (aref vec 2)) "text")))
+    (should (null codex--app-server-pending-images))
+    (let ((vec (codex--app-server-user-input-vector "hi")))
+      (should (= 1 (length vec)))
+      (should (equal (alist-get 'type (aref vec 0)) "text")))))
+
 (ert-deftest codex-test-app-server-expand-folded-output ()
   "Folded command output is stored and expandable in full."
   (with-temp-buffer
