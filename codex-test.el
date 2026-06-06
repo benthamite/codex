@@ -1158,6 +1158,23 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (codex--app-server-dispatch-slash "/raw")
     (should codex-app-server-render-markdown)))
 
+(ert-deftest codex-test-app-server-renders-realtime-transcript ()
+  "Realtime lifecycle and transcript events render in the buffer."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-rt/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (codex--app-server-handle-message '((method . "thread/realtime/started") (params)))
+    (should (string-match-p "Realtime session started" (buffer-string)))
+    (codex--app-server-handle-message
+     '((method . "thread/realtime/transcript/delta")
+       (params (role . "assistant") (delta . "hello there"))))
+    (should (string-match-p "Voice (assistant)" (buffer-string)))
+    (should (string-match-p "hello there" (buffer-string)))
+    (codex--app-server-handle-message
+     '((method . "thread/realtime/error") (params (message . "mic lost"))))
+    (should (string-match-p "Realtime error: mic lost" (buffer-string)))))
+
 (ert-deftest codex-test-app-server-renders-warnings-and-status-events ()
   "Warning, compaction, and MCP status notifications render as status lines."
   (with-temp-buffer

@@ -734,6 +734,9 @@ recompiled with a larger SB_MAX value."
 (defvar-local codex--app-server-pending-mentions nil
   "Alist of (NAME . PATH) file mentions to attach to the next turn input.")
 
+(defvar-local codex--app-server-realtime-role nil
+  "Speaker role of the realtime transcript segment being rendered.")
+
 (defvar-local codex--app-server-queued-commands nil
   "Commands waiting for app-server thread startup.")
 
@@ -1195,6 +1198,20 @@ arguments."
                 (if-let* ((to (alist-get 'model params))) (format " to %s" to) ""))))
       ("mcpServer/startupStatus/updated"
        (codex--app-server-render-mcp-status params))
+      ("thread/realtime/started"
+       (codex--app-server-insert-status "Realtime session started"))
+      ("thread/realtime/closed"
+       (setq codex--app-server-realtime-role nil)
+       (codex--app-server-insert-status "Realtime session closed"))
+      ("thread/realtime/error"
+       (codex--app-server-insert-status
+        (format "Realtime error: %s" (or (alist-get 'message params) "unknown"))))
+      ("thread/realtime/transcript/delta"
+       (codex--app-server-render-realtime-transcript params))
+      ("thread/realtime/transcript/done"
+       (codex--app-server-realtime-transcript-done))
+      ("thread/realtime/itemAdded"
+       (codex--app-server-render-history-item (alist-get 'item params)))
       ((or "error" "configWarning" "deprecationNotice" "guardianWarning"
            "warning" "windows/worldWritableWarning")
        (codex--app-server-insert-status
@@ -1587,6 +1604,52 @@ With no active turn, send the input immediately like Return."
   "Insert a paragraph break between reasoning summary parts for PARAMS."
   (when (gethash (alist-get 'itemId params) codex--app-server-reasoning-items)
     (codex--app-server-insert "\n\n" 'codex-app-server-reasoning-face)))
+
+(defun codex--app-server-render-realtime-transcript (params)
+  "Render a realtime transcript delta from PARAMS under a Voice label."
+  (let ((delta (alist-get 'delta params))
+        (role (alist-get 'role params)))
+    (when delta
+      (unless (equal role codex--app-server-realtime-role)
+        (setq codex--app-server-realtime-role role)
+        (codex--app-server-insert-role (format "Voice (%s)" (or role "?"))))
+      (codex--app-server-insert delta))))
+
+(defun codex--app-server-realtime-transcript-done ()
+  "Finish the current realtime transcript segment."
+  (setq codex--app-server-realtime-role nil)
+  (codex--app-server-ensure-trailing-newline))
+
+(defun codex-app-server-realtime-start ()
+  "Start a text-output realtime session in the current Codex thread."
+  (interactive)
+  (if codex--app-server-thread-id
+      (codex--app-server-send-request
+       "thread/realtime/start"
+       `((threadId . ,codex--app-server-thread-id) (outputModality . "text"))
+       (lambda (_result error)
+         (when error
+           (codex--app-server-insert-status
+            (format "Realtime start failed: %S" error)))))
+    (message "No active Codex thread")))
+
+(defun codex-app-server-realtime-stop ()
+  "Stop the realtime session in the current Codex thread."
+  (interactive)
+  (when codex--app-server-thread-id
+    (codex--app-server-send-request
+     "thread/realtime/stop"
+     `((threadId . ,codex--app-server-thread-id))
+     #'ignore)))
+
+(defun codex-app-server-realtime-send-text (text)
+  "Send TEXT to the active realtime session."
+  (interactive "sRealtime text: ")
+  (when codex--app-server-thread-id
+    (codex--app-server-send-request
+     "thread/realtime/appendText"
+     `((threadId . ,codex--app-server-thread-id) (text . ,text))
+     #'ignore)))
 
 (defun codex--app-server-render-plan (params)
   "Render or update the turn-plan checklist from PARAMS in place."
