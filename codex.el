@@ -738,6 +738,12 @@ recompiled with a larger SB_MAX value."
 (defvar-local codex--app-server-status-timer nil
   "Repeating timer that refreshes the app-server status while working.")
 
+(defvar codex--app-server-pending-startup-action 'start
+  "Startup action for the next app-server session: \\='start, \\='resume, or \\='fork.")
+
+(defvar-local codex--app-server-startup-action 'start
+  "Startup action for this app-server buffer: \\='start, \\='resume, or \\='fork.")
+
 (defvar-local codex--transcript-last-catch-up-message nil
   "Last transcript catch-up message appended to the current buffer.")
 
@@ -1065,6 +1071,8 @@ arguments."
   (setq-local truncate-lines nil)
   (setq-local word-wrap t)
   (setq-local mode-line-process '(:eval (codex--app-server-mode-line)))
+  (setq-local codex--app-server-startup-action
+              codex--app-server-pending-startup-action)
   (codex--app-server-send-initialize))
 
 (cl-defmethod codex--term-customize-faces ((_backend (eql app-server)))
@@ -1478,6 +1486,61 @@ With no active turn, send the input immediately like Return."
   (codex--app-server-insert (or (alist-get 'query item) "")
                             'codex-app-server-command-face))
 
+(defun codex--app-server-render-history (turns)
+  "Render resumed history TURNS, oldest first, reusing item renderers."
+  (dolist (turn (append turns nil))
+    (dolist (item (append (alist-get 'items turn) nil))
+      (codex--app-server-render-history-item item))))
+
+(defun codex--app-server-render-history-item (item)
+  "Render a single historical ITEM during resume."
+  (pcase (alist-get 'type item)
+    ("userMessage" (codex--app-server-render-history-user item))
+    ("agentMessage" (codex--app-server-render-history-agent item))
+    ("reasoning" (codex--app-server-render-history-reasoning item))
+    ("commandExecution" (codex--app-server-render-completed-command item))
+    ("fileChange" (codex--app-server-render-completed-filechange item))
+    ("mcpToolCall" (codex--app-server-render-completed-tool-call item))
+    ("webSearch" (codex--app-server-render-completed-web-search item))))
+
+(defun codex--app-server-render-history-user (item)
+  "Render a historical user-message ITEM."
+  (codex--app-server-insert-role "User")
+  (codex--app-server-insert (codex--app-server-content-text
+                             (alist-get 'content item))))
+
+(defun codex--app-server-render-history-agent (item)
+  "Render a historical agent-message ITEM with Markdown."
+  (codex--app-server-insert-role "Assistant")
+  (let ((start (codex--app-server-output-point)))
+    (codex--app-server-insert (or (alist-get 'text item) ""))
+    (codex--app-server-fontify-markdown start (codex--app-server-output-point))))
+
+(defun codex--app-server-render-history-reasoning (item)
+  "Render a historical reasoning ITEM summary as dimmed text."
+  (let ((summary (codex--app-server-reasoning-summary-text
+                  (alist-get 'summary item))))
+    (unless (string-empty-p summary)
+      (codex--app-server-insert-role "Thinking")
+      (codex--app-server-insert summary 'codex-app-server-reasoning-face))))
+
+(defun codex--app-server-content-text (content)
+  "Return the text of a message CONTENT field (string or part list)."
+  (cond ((stringp content) content)
+        ((listp content)
+         (mapconcat (lambda (part) (or (alist-get 'text part) ""))
+                    (append content nil) ""))
+        (t "")))
+
+(defun codex--app-server-reasoning-summary-text (summary)
+  "Return joined text for a reasoning SUMMARY field."
+  (cond ((stringp summary) summary)
+        ((listp summary)
+         (mapconcat (lambda (part)
+                      (if (stringp part) part (or (alist-get 'text part) "")))
+                    (append summary nil) "\n"))
+        (t "")))
+
 (defun codex--app-server-command-display (item)
   "Return the command line to display for command ITEM."
   (codex--app-server-strip-shell-wrapper (or (alist-get 'command item) "")))
@@ -1645,7 +1708,63 @@ Uses `gfm-mode' when available, falling back to a built-in highlighter."
          (codex--app-server-insert-status
           (format "Codex app-server initialize failed: %S" error))
        (setq codex--app-server-user-agent (alist-get 'userAgent result))
-       (codex--app-server-send-thread-start)))))
+       (pcase codex--app-server-startup-action
+         ('resume (codex--app-server-begin-resume "thread/resume"))
+         ('fork (codex--app-server-begin-resume "thread/fork"))
+         (_ (codex--app-server-send-thread-start)))))))
+
+(defun codex--app-server-begin-resume (method)
+  "List threads and resume or fork one via METHOD."
+  (codex--app-server-send-request
+   "thread/list"
+   `((cwd . ,codex--buffer-directory)
+     (limit . 30)
+     (sortKey . "updated_at")
+     (sortDirection . "desc"))
+   (lambda (result error)
+     (if error
+         (codex--app-server-insert-status
+          (format "Codex thread list failed: %S" error))
+       (codex--app-server-prompt-resume method (alist-get 'data result))))))
+
+(defun codex--app-server-prompt-resume (method threads)
+  "Prompt to pick one of THREADS and resume or fork it via METHOD."
+  (if (null threads)
+      (codex--app-server-insert-status "No previous Codex threads found")
+    (let* ((choices (mapcar (lambda (thread)
+                              (cons (codex--app-server-thread-label thread) thread))
+                            (append threads nil)))
+           (selection (completing-read "Codex thread: " choices nil t))
+           (thread (cdr (assoc selection choices))))
+      (when thread
+        (codex--app-server-send-resume method thread)))))
+
+(defun codex--app-server-thread-label (thread)
+  "Return a completion label for THREAD."
+  (let ((preview (alist-get 'preview thread))
+        (id (alist-get 'id thread)))
+    (format "%s  [%s]"
+            (if (and preview (not (string-empty-p preview)))
+                (truncate-string-to-width preview 70)
+              "(no preview)")
+            (or id "?"))))
+
+(defun codex--app-server-send-resume (method thread)
+  "Resume or fork THREAD via METHOD and render its history."
+  (codex--app-server-send-request
+   method
+   `((path . ,(alist-get 'path thread))
+     (threadId . ,(alist-get 'id thread))
+     (cwd . ,codex--buffer-directory)
+     (initialTurnsPage . ((limit . 100) (sortDirection . "asc"))))
+   (lambda (result error)
+     (if error
+         (codex--app-server-insert-status
+          (format "Codex resume failed: %S" error))
+       (codex--app-server-thread-started
+        `((thread . ,(alist-get 'thread result))))
+       (codex--app-server-render-history
+        (alist-get 'data (alist-get 'initialTurnsPage result)))))))
 
 (defun codex--app-server-send-thread-start ()
   "Send the app-server thread/start request."
@@ -3654,16 +3773,31 @@ With prefix ARG, switch to buffer after creating."
 ;;;###autoload
 (defun codex-resume (arg)
   "Resume a previous Codex session (`codex resume').
-With prefix ARG, use `--last' to resume the most recent session."
+With prefix ARG, use `--last' to resume the most recent session.
+The app-server backend resumes natively through `thread/resume'."
   (interactive "P")
-  (codex--start-subcommand "resume" (when arg t)))
+  (if (eq codex-terminal-backend 'app-server)
+      (codex--app-server-launch-startup 'resume)
+    (codex--start-subcommand "resume" (when arg t))))
 
 ;;;###autoload
 (defun codex-fork (arg)
   "Fork a previous Codex session (`codex fork').
-With prefix ARG, use `--last' to fork the most recent session."
+With prefix ARG, use `--last' to fork the most recent session.
+The app-server backend forks natively through `thread/fork'."
   (interactive "P")
-  (codex--start-subcommand "fork" (when arg t)))
+  (if (eq codex-terminal-backend 'app-server)
+      (codex--app-server-launch-startup 'fork)
+    (codex--start-subcommand "fork" (when arg t))))
+
+(defun codex--app-server-launch-startup (action)
+  "Launch an app-server Codex session performing ACTION on startup."
+  (let* ((dir (codex--directory))
+         (instance-name (codex--session-instance-name dir))
+         (buffer-name (codex--buffer-name-for-directory dir instance-name))
+         (codex--app-server-pending-startup-action action))
+    (codex--launch-session dir 'app-server buffer-name instance-name
+                           (codex--build-backend-switches 'app-server nil) t)))
 
 ;;;###autoload
 (defun codex-new-instance (&optional arg)

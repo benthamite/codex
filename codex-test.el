@@ -1119,6 +1119,29 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (should (string-match-p "… \\+95 lines" text))
       (should (string-match-p "✓ succeeded in 5ms" text)))))
 
+(ert-deftest codex-test-app-server-renders-history ()
+  "Resumed history renders user and assistant items in order."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-hist/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (codex--app-server-render-history
+     '(((items . (((type . "userMessage")
+                   (content . (((type . "text") (text . "hi there")))))
+                  ((type . "agentMessage") (text . "**hello** back")))))))
+    (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+      (should (string-match-p "User" text))
+      (should (string-match-p "hi there" text))
+      (should (string-match-p "Assistant" text))
+      (should (string-match-p "hello" text)))
+    (goto-char (point-min))
+    (search-forward "hi there")
+    (let ((user-pos (match-beginning 0)))
+      (goto-char (point-min))
+      (search-forward "hello")
+      (should (< user-pos (match-beginning 0))))))
+
 (ert-deftest codex-test-app-server-status-mode-line ()
   "The mode line shows a working indicator with tokens during a turn."
   (with-temp-buffer
