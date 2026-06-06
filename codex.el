@@ -729,6 +729,15 @@ recompiled with a larger SB_MAX value."
 (defvar-local codex--app-server-plan-end nil
   "Marker at the end of the rendered turn-plan checklist.")
 
+(defvar-local codex--app-server-turn-start-time nil
+  "Float time when the active app-server turn started.")
+
+(defvar-local codex--app-server-token-usage nil
+  "Total token count reported for the current app-server thread.")
+
+(defvar-local codex--app-server-status-timer nil
+  "Repeating timer that refreshes the app-server status while working.")
+
 (defvar-local codex--transcript-last-catch-up-message nil
   "Last transcript catch-up message appended to the current buffer.")
 
@@ -1055,6 +1064,7 @@ arguments."
   "Configure the app-server backend in the current buffer."
   (setq-local truncate-lines nil)
   (setq-local word-wrap t)
+  (setq-local mode-line-process '(:eval (codex--app-server-mode-line)))
   (codex--app-server-send-initialize))
 
 (cl-defmethod codex--term-customize-faces ((_backend (eql app-server)))
@@ -1132,6 +1142,8 @@ arguments."
       ("item/reasoning/summaryPartAdded"
        (codex--app-server-render-reasoning-part-break params))
       ("turn/plan/updated" (codex--app-server-render-plan params))
+      ("thread/tokenUsage/updated"
+       (codex--app-server-token-usage-updated params))
       ("item/completed" (codex--app-server-render-completed-item params))
       ("error" (codex--app-server-insert-status
                 (or (alist-get 'message params) "Codex app-server error")))
@@ -1221,17 +1233,60 @@ arguments."
   (abbreviate-file-name (or codex--buffer-directory default-directory)))
 
 (defun codex--app-server-turn-started (params)
-  "Record app-server turn startup PARAMS."
+  "Record app-server turn startup PARAMS and begin the status indicator."
   (let ((turn (alist-get 'turn params)))
     (setq codex--app-server-current-turn-id (alist-get 'id turn))
-    (setq codex--app-server-turn-active-p t)))
+    (setq codex--app-server-turn-active-p t)
+    (setq codex--app-server-turn-start-time (float-time))
+    (codex--app-server-start-status-timer)
+    (force-mode-line-update)))
 
 (defun codex--app-server-turn-completed (_params)
   "Record that the active app-server turn completed and flush queued input."
   (setq codex--app-server-turn-active-p nil)
   (setq codex--app-server-current-turn-id nil)
+  (codex--app-server-stop-status-timer)
+  (force-mode-line-update)
   (codex--app-server-ensure-trailing-newline)
   (codex--app-server-flush-turn-queue))
+
+(defun codex--app-server-mode-line ()
+  "Return the app-server status string for the mode line while working."
+  (when codex--app-server-turn-active-p
+    (concat " ● Working"
+            (when codex--app-server-turn-start-time
+              (format " %ds"
+                      (floor (- (float-time)
+                                codex--app-server-turn-start-time))))
+            (when codex--app-server-token-usage
+              (format " · %s tok" codex--app-server-token-usage))
+            " · esc to interrupt")))
+
+(defun codex--app-server-token-usage-updated (params)
+  "Record total token usage from PARAMS for the status indicator."
+  (when-let* ((total (alist-get 'total (alist-get 'tokenUsage params))))
+    (setq codex--app-server-token-usage (alist-get 'totalTokens total))
+    (force-mode-line-update)))
+
+(defun codex--app-server-start-status-timer ()
+  "Start the repeating timer that refreshes the working status."
+  (unless (timerp codex--app-server-status-timer)
+    (setq codex--app-server-status-timer
+          (run-at-time 1 1 #'codex--app-server-status-tick (current-buffer)))))
+
+(defun codex--app-server-status-tick (buffer)
+  "Refresh the mode line in BUFFER while a turn is active, else stop."
+  (if (and (buffer-live-p buffer)
+           (buffer-local-value 'codex--app-server-turn-active-p buffer))
+      (with-current-buffer buffer (force-mode-line-update))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer (codex--app-server-stop-status-timer)))))
+
+(defun codex--app-server-stop-status-timer ()
+  "Cancel the app-server status refresh timer."
+  (when (timerp codex--app-server-status-timer)
+    (cancel-timer codex--app-server-status-timer))
+  (setq codex--app-server-status-timer nil))
 
 (defun codex--app-server-flush-turn-queue ()
   "Submit the next Tab-queued input, if any, as a new turn."
@@ -2614,6 +2669,8 @@ If FORCE-PROMPT is non-nil, always prompt even if no instances exist."
 (defun codex--cleanup-buffer-state ()
   "Clean up Codex buffer-local state before the current buffer is killed."
   (codex--clear-vterm-multiline-buffer)
+  (when (timerp (bound-and-true-p codex--app-server-status-timer))
+    (cancel-timer codex--app-server-status-timer))
   (codex--release-managed-advices)
   (codex--cleanup-directory-mapping))
 

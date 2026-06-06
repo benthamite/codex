@@ -75,6 +75,8 @@ The =app-server= backend renders conversation items the way the Codex CLI does. 
 
 When Codex requests approval for a command or file change, codex.el prompts with the same choices as the CLI: approve once, approve for the rest of the session, decline, or cancel the turn.
 
+While a turn is running, the mode line shows a working indicator with elapsed time, token usage, and an Esc-to-interrupt hint, mirroring the CLI status line.
+
 Completed assistant messages in =app-server= buffers are rendered as Markdown.  When =markdown-mode= is available, codex.el renders each message through =gfm-mode= and hides the Markdown markup, so headings, bold and italic spans, strikethrough, inline code, fenced code blocks, lists, blockquotes, links, and horizontal rules display as formatted text while the raw Markdown remains in the buffer for copying.  The user option ~codex-app-server-render-markdown~ enables this rendering; the default is ~t~.  When it is nil, or when =markdown-mode= is not installed, a lightweight built-in highlighter is used instead.
 
 The user option ~codex-app-server-listen-url~ controls the transport passed to ~codex app-server --listen~.  The default is ~"stdio://"~, which keeps the server private to the Emacs process.

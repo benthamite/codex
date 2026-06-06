@@ -1119,6 +1119,21 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (should (string-match-p "… \\+95 lines" text))
       (should (string-match-p "✓ succeeded in 5ms" text)))))
 
+(ert-deftest codex-test-app-server-status-mode-line ()
+  "The mode line shows a working indicator with tokens during a turn."
+  (with-temp-buffer
+    (should-not (codex--app-server-mode-line))
+    (setq-local codex--app-server-turn-active-p t)
+    (setq-local codex--app-server-turn-start-time (float-time))
+    (codex--app-server-token-usage-updated
+     '((tokenUsage (total (totalTokens . 1234)))))
+    (let ((status (codex--app-server-mode-line)))
+      (should (string-match-p "Working" status))
+      (should (string-match-p "1234 tok" status))
+      (should (string-match-p "esc to interrupt" status)))
+    (setq-local codex--app-server-turn-active-p nil)
+    (should-not (codex--app-server-mode-line))))
+
 (ert-deftest codex-test-app-server-approval-decisions ()
   "Approval prompts offer the CLI decision set per protocol method."
   (should (equal (codex--app-server-approval-decisions
