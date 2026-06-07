@@ -761,6 +761,12 @@ recompiled with a larger SB_MAX value."
 (defvar-local codex--app-server-queued-turn-inputs nil
   "Inputs queued with Tab to send after the active turn completes.")
 
+(defvar-local codex--app-server-queue-start nil
+  "Marker at the start of the rendered queued-inputs block.")
+
+(defvar-local codex--app-server-queue-end nil
+  "Marker at the end of the rendered queued-inputs block.")
+
 (defvar-local codex--app-server-plan-start nil
   "Marker at the start of the rendered turn-plan checklist.")
 
@@ -1045,6 +1051,12 @@ the terminal backends.")
 (define-derived-mode codex-app-server-mode fundamental-mode "Codex"
   "Major mode for Codex app-server session buffers.")
 
+(defconst codex--app-server-bullet "• "
+  "Prefix the Codex CLI shows before agent output items.")
+
+(defconst codex--app-server-user-prefix "› "
+  "Prefix the Codex CLI shows before user messages.")
+
 (cl-defmethod codex--term-make ((_backend (eql app-server)) buffer-name
                                 program &optional switches)
   "Create an app-server Codex buffer named BUFFER-NAME.
@@ -1064,6 +1076,8 @@ arguments."
       (setq-local codex--app-server-queued-turn-inputs nil)
       (setq-local codex--app-server-plan-start nil)
       (setq-local codex--app-server-plan-end nil)
+      (setq-local codex--app-server-queue-start nil)
+      (setq-local codex--app-server-queue-end nil)
       (setq-local codex--app-server-explore-files nil)
       (setq-local codex--app-server-explore-start nil)
       (setq-local codex--app-server-explore-end nil)
@@ -1441,6 +1455,8 @@ arguments."
         codex--app-server-input-marker nil
         codex--app-server-plan-start nil
         codex--app-server-plan-end nil
+        codex--app-server-queue-start nil
+        codex--app-server-queue-end nil
         codex--app-server-explore-files nil
         codex--app-server-explore-start nil
         codex--app-server-explore-end nil)
@@ -1685,8 +1701,59 @@ arguments."
 (defun codex--app-server-flush-turn-queue ()
   "Submit the next Tab-queued input, if any, as a new turn."
   (when codex--app-server-queued-turn-inputs
-    (codex--app-server-submit-command
-     (pop codex--app-server-queued-turn-inputs))))
+    (let ((input (pop codex--app-server-queued-turn-inputs)))
+      (codex--app-server-render-queue)
+      (codex--app-server-submit-command input))))
+
+(defun codex--app-server-render-queue ()
+  "Render or update the queued-inputs block in place, like the Codex CLI.
+Removes the block when the queue is empty."
+  (cond
+   ((null codex--app-server-queued-turn-inputs)
+    (codex--app-server-remove-queue))
+   ((and (markerp codex--app-server-queue-start)
+         (marker-position codex--app-server-queue-start))
+    (codex--app-server-replace-region
+     codex--app-server-queue-start codex--app-server-queue-end
+     (codex--app-server-queue-block-text) 'codex-app-server-command-face))
+   (t
+    (codex--app-server-ensure-section-break)
+    (setq codex--app-server-queue-start
+          (copy-marker (codex--app-server-output-point) nil))
+    (codex--app-server-insert (codex--app-server-queue-block-text)
+                              'codex-app-server-command-face)
+    (setq codex--app-server-queue-end
+          (copy-marker (codex--app-server-output-point) nil)))))
+
+(defun codex--app-server-queue-block-text ()
+  "Return the full queued-inputs block: header, items, and edit hint."
+  (concat codex--app-server-bullet "Queued follow-up inputs\n"
+          (mapconcat (lambda (input) (concat "  ↳ " input))
+                     codex--app-server-queued-turn-inputs "\n")
+          "\n    M-↑ edit last queued message"))
+
+(defun codex--app-server-remove-queue ()
+  "Remove the rendered queued-inputs block, if any."
+  (when (and (markerp codex--app-server-queue-start)
+             (marker-position codex--app-server-queue-start))
+    (let ((inhibit-read-only t))
+      (delete-region codex--app-server-queue-start
+                     codex--app-server-queue-end)))
+  (setq codex--app-server-queue-start nil
+        codex--app-server-queue-end nil))
+
+(defun codex--app-server-replace-region (start end text face)
+  "Replace the buffer region START..END with TEXT in FACE, read-only.
+END is updated to the new end of the replaced region."
+  (let ((inhibit-read-only t))
+    (save-excursion
+      (delete-region start end)
+      (goto-char start)
+      (let ((from (point)))
+        (insert text)
+        (put-text-property from (point) 'face face)
+        (add-text-properties from (point) '(read-only t front-sticky t))
+        (set-marker end (point))))))
 
 (defconst codex--app-server-slash-commands
   '("/agent" "/approve" "/apps" "/clear" "/compact" "/copy" "/debug-config"
@@ -1696,12 +1763,6 @@ arguments."
     "/plugins" "/ps" "/quit" "/raw" "/resume" "/review" "/sandbox-add-read-dir"
     "/side" "/skills" "/status" "/statusline" "/stop" "/theme" "/title" "/vim")
   "Slash commands recognized by the app-server backend, used for completion.")
-
-(defconst codex--app-server-bullet "• "
-  "Prefix the Codex CLI shows before agent output items.")
-
-(defconst codex--app-server-user-prefix "› "
-  "Prefix the Codex CLI shows before user messages.")
 
 (defun codex--app-server-complete-or-queue ()
   "Complete a slash command when idle, or queue input while a turn runs.
@@ -1737,8 +1798,21 @@ With no active turn, send the input immediately like Return."
           (t (codex--app-server-clear-input)
              (setq codex--app-server-queued-turn-inputs
                    (append codex--app-server-queued-turn-inputs (list text)))
-             (codex--app-server-insert-status (format "⏳ Queued: %s" text))
+             (codex--app-server-render-queue)
              (goto-char (point-max))))))
+
+(defun codex-app-server-edit-last-queued ()
+  "Pull the last queued follow-up input back into the composer to edit it.
+Mirrors the Codex CLI's \\=`edit last queued message\\=' affordance."
+  (interactive)
+  (if (null codex--app-server-queued-turn-inputs)
+      (message "No queued Codex input")
+    (let ((last (car (last codex--app-server-queued-turn-inputs))))
+      (setq codex--app-server-queued-turn-inputs
+            (butlast codex--app-server-queued-turn-inputs))
+      (codex--app-server-render-queue)
+      (codex--app-server-replace-input last)
+      (goto-char (point-max)))))
 
 (defun codex--app-server-render-agent-delta (params)
   "Render an agent message delta from PARAMS."
@@ -3421,7 +3495,9 @@ cursor tracking from buffer position and tripping an assertion in
     (when (eq backend 'app-server)
       (define-key map (kbd "@") #'codex-app-server-insert-file-reference)
       (define-key map (kbd "C-v") #'codex-app-server-paste-image)
+      (define-key map (kbd "<escape>") #'codex-send-escape)
       (define-key map (kbd "C-c C-e") #'codex-app-server-open-editor)
+      (define-key map (kbd "M-<up>") #'codex-app-server-edit-last-queued)
       (define-key map (kbd "M-p") #'codex-app-server-previous-input)
       (define-key map (kbd "M-n") #'codex-app-server-next-input)
       (define-key map (kbd "C-c C-r") #'codex-app-server-search-input-history))

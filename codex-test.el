@@ -1521,10 +1521,33 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (codex--app-server-queue-input)
     (should (equal codex--app-server-queued-turn-inputs '("next thing")))
     (should (equal (codex--app-server-input-text) ""))
-    (should (string-match-p "Queued: next thing" (buffer-string)))
+    (should (string-match-p "• Queued follow-up inputs" (buffer-string)))
+    (should (string-match-p "  ↳ next thing" (buffer-string)))
     (codex--app-server-handle-message '((method . "turn/completed") (params)))
     (should (null codex--app-server-queued-turn-inputs))
-    (should (member "next thing" codex--app-server-queued-commands))))
+    (should (member "next thing" codex--app-server-queued-commands))
+    ;; the queued-inputs block is removed once the queue drains
+    (should-not (string-match-p "Queued follow-up inputs" (buffer-string)))))
+
+(ert-deftest codex-test-app-server-queue-block-updates-and-edits ()
+  "The queued-inputs block lists each item and edit pulls the last back."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-q2/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-turn-active-p t)
+    (codex--app-server-setup-input-region)
+    (goto-char (point-max))
+    (insert "first") (codex--app-server-queue-input)
+    (goto-char (point-max))
+    (insert "second") (codex--app-server-queue-input)
+    (let ((text (buffer-string)))
+      (should (= 1 (how-many "Queued follow-up inputs"
+                             (point-min) (point-max))))
+      (should (string-match-p "  ↳ first" text))
+      (should (string-match-p "  ↳ second" text)))
+    (codex-app-server-edit-last-queued)
+    (should (equal codex--app-server-queued-turn-inputs '("first")))
+    (should (equal (codex--app-server-input-text) "second"))))
 
 (ert-deftest codex-test-app-server-renders-file-change-diff ()
   "File-change items render as CLI numbered diffs with a `(+N -M)' header."
@@ -1579,6 +1602,14 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (codex--term-setup-keymap 'app-server)
     (should (eq (lookup-key (current-local-map) (kbd "C-v"))
                 #'codex-app-server-paste-image))))
+
+(ert-deftest codex-test-app-server-binds-escape-to-interrupt ()
+  "Esc interrupts the turn in app-server buffers, as the CLI hint promises."
+  (with-temp-buffer
+    (codex-app-server-mode)
+    (codex--term-setup-keymap 'app-server)
+    (should (eq (lookup-key (current-local-map) (kbd "<escape>"))
+                #'codex-send-escape))))
 
 (ert-deftest codex-test-app-server-renders-reasoning-summary ()
   "Reasoning summary deltas render as dimmed bulleted text."
