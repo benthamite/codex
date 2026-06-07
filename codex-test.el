@@ -1629,6 +1629,20 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (search-forward "-four")
     (should (eq (get-text-property (1- (point)) 'face) 'diff-removed))))
 
+(ert-deftest codex-test-app-server-renders-web-search ()
+  "A web-search item renders as `• Searched the web for QUERY', like the CLI."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-ws/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (codex--app-server-handle-message
+     '((method . "item/completed")
+       (params (item (type . "webSearch") (id . "ws1")
+                     (query . "latest stable Rust release")))))
+    (should (string-match-p "• Searched the web for latest stable Rust release"
+                            (buffer-string)))))
+
 (ert-deftest codex-test-app-server-renders-error-item ()
   "An error item surfaces its message instead of being dropped."
   (with-temp-buffer

@@ -2219,10 +2219,10 @@ the old-file number, added lines and context use the new-file number."
     (error (format "%s" value))))
 
 (defun codex--app-server-render-completed-web-search (item)
-  "Render a completed web-search ITEM with a CLI-style bullet."
+  "Render a completed web-search ITEM as the CLI does."
   (codex--app-server-ensure-section-break)
   (codex--app-server-insert
-   (concat codex--app-server-bullet "Searched "
+   (concat codex--app-server-bullet "Searched the web for "
            (or (alist-get 'query item) "") "\n")
    'codex-app-server-command-face))
 
