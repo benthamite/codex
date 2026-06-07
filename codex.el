@@ -1860,7 +1860,14 @@ pending and in-progress steps."
       ("fileChange" (codex--app-server-render-completed-filechange item))
       ("mcpToolCall" (codex--app-server-render-completed-tool-call item))
       ("webSearch" (codex--app-server-render-completed-web-search item))
+      ("error" (codex--app-server-render-error-item item))
       ("agentMessage" (codex--app-server-fontify-completed-message item)))))
+
+(defun codex--app-server-render-error-item (item)
+  "Render an error ITEM as a status line."
+  (codex--app-server-insert-status
+   (format "Error: %s"
+           (or (alist-get 'message item) (alist-get 'error item) "unknown"))))
 
 (defun codex--app-server-render-completed-command (item)
   "Render a completed command ITEM as a collapsed block like the Codex CLI."

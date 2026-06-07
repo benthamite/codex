@@ -1533,8 +1533,21 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (search-forward "-four")
     (should (eq (get-text-property (1- (point)) 'face) 'diff-removed))))
 
+(ert-deftest codex-test-app-server-renders-error-item ()
+  "An error item surfaces its message instead of being dropped."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-err/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (codex--app-server-handle-message
+     '((method . "item/completed")
+       (params (item (type . "error") (id . "e1")
+                     (message . "rate limit exceeded")))))
+    (should (string-match-p "Error: rate limit exceeded" (buffer-string)))))
+
 (ert-deftest codex-test-app-server-renders-reasoning-summary ()
-  "Reasoning summary deltas render as dimmed text under a Thinking label."
+  "Reasoning summary deltas render as dimmed bulleted text."
   (with-temp-buffer
     (rename-buffer "*codex:/tmp/app-server-reason/*" t)
     (setq-local codex--app-server-reasoning-items (make-hash-table :test 'equal))
