@@ -1278,6 +1278,28 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (codex--app-server-dispatch-slash cmd))
     (should-not (string-match-p "Unsupported command" (buffer-string)))))
 
+(ert-deftest codex-test-app-server-archive-and-rename-dispatch ()
+  "/archive and /rename send the matching thread requests, like the CLI."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-arch/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-thread-id "t1")
+    (codex--app-server-setup-input-region)
+    (let (methods)
+      (cl-letf (((symbol-function 'codex--app-server-send-request)
+                 (lambda (method _params _cb) (push method methods)))
+                ((symbol-function 'read-string) (lambda (&rest _) "New name")))
+        (codex--app-server-dispatch-slash "/archive")
+        (codex--app-server-dispatch-slash "/rename"))
+      (should (member "thread/archive" methods))
+      (should (member "thread/name/set" methods)))))
+
+(ert-deftest codex-test-app-server-slash-commands-match-cli ()
+  "The completion set includes the CLI's commands and omits non-CLI /help."
+  (dolist (cmd '("/archive" "/rename" "/model" "/fork" "/review"))
+    (should (member cmd codex--app-server-slash-commands)))
+  (should-not (member "/help" codex--app-server-slash-commands)))
+
 (ert-deftest codex-test-app-server-slash-raw-toggles-markdown ()
   "The /raw command toggles Markdown rendering in the buffer."
   (with-temp-buffer

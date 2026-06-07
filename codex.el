@@ -1348,10 +1348,15 @@ arguments."
                  (codex--app-server-thread-request
                   "thread/goal/set" `((objective . ,objective))
                   (format "Goal set: %s" objective))))
-      ("/title" (let ((name (read-string "Thread title: ")))
-                  (codex--app-server-thread-request
-                   "thread/name/set" `((name . ,name))
-                   (format "Thread renamed: %s" name))))
+      ((or "/title" "/rename")
+       (let ((name (read-string "Rename thread: ")))
+         (codex--app-server-thread-request
+          "thread/name/set" `((name . ,name))
+          (format "Thread renamed: %s" name))))
+      ("/archive" (codex--app-server-thread-request
+                   "thread/archive" nil "Thread archived"))
+      ("/pets" (codex--app-server-insert-status
+                "Ambient pets are a Codex CLI-only animation"))
       ("/memories" (let ((mode (completing-read "Memory mode: "
                                                 '("enabled" "disabled") nil t)))
                      (codex--app-server-thread-request
@@ -1756,13 +1761,15 @@ END is updated to the new end of the replaced region."
         (set-marker end (point))))))
 
 (defconst codex--app-server-slash-commands
-  '("/agent" "/approve" "/apps" "/clear" "/compact" "/copy" "/debug-config"
-    "/diff" "/exit" "/experimental" "/fast" "/feedback" "/fork" "/goal"
-    "/help" "/hooks" "/ide" "/init" "/keymap" "/logout" "/mcp" "/memories"
+  '("/agent" "/approve" "/apps" "/archive" "/clear" "/compact" "/copy"
+    "/debug-config" "/diff" "/exit" "/experimental" "/fast" "/feedback" "/fork"
+    "/goal" "/hooks" "/ide" "/init" "/keymap" "/logout" "/mcp" "/memories"
     "/mention" "/model" "/new" "/permissions" "/personality" "/plan"
-    "/plugins" "/ps" "/quit" "/raw" "/resume" "/review" "/sandbox-add-read-dir"
-    "/side" "/skills" "/status" "/statusline" "/stop" "/theme" "/title" "/vim")
-  "Slash commands recognized by the app-server backend, used for completion.")
+    "/pets" "/plugins" "/ps" "/quit" "/raw" "/rename" "/resume" "/review"
+    "/sandbox-add-read-dir" "/side" "/skills" "/status" "/statusline" "/stop"
+    "/theme" "/title" "/vim")
+  "Slash commands recognized by the app-server backend, used for completion.
+Mirrors the Codex CLI's slash-command set.")
 
 (defun codex--app-server-complete-or-queue ()
   "Complete a slash command when idle, or queue input while a turn runs.
