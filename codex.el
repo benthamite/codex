@@ -1808,6 +1808,31 @@ With no active turn, send the input immediately like Return."
              (codex--app-server-render-queue)
              (goto-char (point-max))))))
 
+(defconst codex--app-server-reasoning-levels
+  '("minimal" "low" "medium" "high" "xhigh")
+  "Reasoning-effort levels, lowest to highest, as the Codex models accept.")
+
+(defun codex-app-server-reasoning-up ()
+  "Raise the reasoning effort for upcoming turns, like the Codex CLI."
+  (interactive)
+  (codex--app-server-step-reasoning 1))
+
+(defun codex-app-server-reasoning-down ()
+  "Lower the reasoning effort for upcoming turns, like the Codex CLI."
+  (interactive)
+  (codex--app-server-step-reasoning -1))
+
+(defun codex--app-server-step-reasoning (delta)
+  "Move the reasoning effort by DELTA steps and report the new level.
+The change applies to subsequent turns through `codex-reasoning-effort'."
+  (let* ((levels codex--app-server-reasoning-levels)
+         (index (or (cl-position (or codex-reasoning-effort "medium")
+                                 levels :test #'equal)
+                    2))
+         (new (nth (max 0 (min (1- (length levels)) (+ index delta))) levels)))
+    (setq codex-reasoning-effort new)
+    (message "Reasoning effort: %s" new)))
+
 (defun codex-app-server-edit-last-queued ()
   "Pull the last queued follow-up input back into the composer to edit it.
 Mirrors the Codex CLI's \\=`edit last queued message\\=' affordance."
@@ -3505,6 +3530,8 @@ cursor tracking from buffer position and tripping an assertion in
       (define-key map (kbd "<escape>") #'codex-send-escape)
       (define-key map (kbd "C-c C-e") #'codex-app-server-open-editor)
       (define-key map (kbd "M-<up>") #'codex-app-server-edit-last-queued)
+      (define-key map (kbd "C-c C-<up>") #'codex-app-server-reasoning-up)
+      (define-key map (kbd "C-c C-<down>") #'codex-app-server-reasoning-down)
       (define-key map (kbd "M-p") #'codex-app-server-previous-input)
       (define-key map (kbd "M-n") #'codex-app-server-next-input)
       (define-key map (kbd "C-c C-r") #'codex-app-server-search-input-history))

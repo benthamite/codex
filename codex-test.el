@@ -1294,6 +1294,21 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (should (member "thread/archive" methods))
       (should (member "thread/name/set" methods)))))
 
+(ert-deftest codex-test-app-server-reasoning-up-down ()
+  "Reasoning up/down cycle the effort levels and clamp at the ends."
+  (let ((codex-reasoning-effort nil))
+    (codex-app-server-reasoning-up)
+    (should (equal codex-reasoning-effort "high"))
+    (codex-app-server-reasoning-up)
+    (should (equal codex-reasoning-effort "xhigh"))
+    (codex-app-server-reasoning-up)
+    (should (equal codex-reasoning-effort "xhigh"))
+    (codex-app-server-reasoning-down)
+    (should (equal codex-reasoning-effort "high"))
+    (setq codex-reasoning-effort "minimal")
+    (codex-app-server-reasoning-down)
+    (should (equal codex-reasoning-effort "minimal"))))
+
 (ert-deftest codex-test-app-server-slash-commands-match-cli ()
   "The completion set includes the CLI's commands and omits non-CLI /help."
   (dolist (cmd '("/archive" "/rename" "/model" "/fork" "/review"))
