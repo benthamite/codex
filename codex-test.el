@@ -1477,24 +1477,41 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (setq-local codex--app-server-turn-active-p nil)
     (should-not (codex--app-server-mode-line))))
 
-(ert-deftest codex-test-app-server-approval-decisions ()
-  "Approval prompts offer the CLI decision set per protocol method."
-  (should (equal (codex--app-server-approval-decisions
-                  "item/commandExecution/requestApproval")
-                 '((?y . "accept") (?a . "acceptForSession")
-                   (?n . "decline") (?c . "cancel"))))
-  (should (equal (codex--app-server-approval-decisions "execCommandApproval")
-                 '((?y . "approved") (?a . "approved_for_session")
-                   (?n . "denied") (?c . "abort"))))
-  (let ((spec (codex--app-server-approval-spec
-               '((method . "item/commandExecution/requestApproval")
-                 (id . 5)
-                 (params (command . "/bin/zsh -lc \"rm -rf x\""))))))
-    (should (string-match-p "rm -rf x" (plist-get spec :prompt)))
+(ert-deftest codex-test-app-server-command-approval-uses-available-decisions ()
+  "Command approval offers exactly the request's availableDecisions, as the CLI does."
+  (let* ((amend '((acceptWithExecpolicyAmendment
+                   (execpolicy_amendment . ["/bin/zsh" "-lc" "echo hi"]))))
+         (spec (codex--app-server-approval-spec
+                `((method . "item/commandExecution/requestApproval")
+                  (id . 5)
+                  (params (command . "/bin/zsh -lc \"echo hi\"")
+                          (availableDecisions . ("accept" ,amend "cancel")))))))
+    (should (string-match-p "echo hi" (plist-get spec :prompt)))
+    (let ((values (mapcar (lambda (c) (nth 3 c)) (plist-get spec :choices))))
+      (should (equal values (list "accept" amend "cancel"))))
+    ;; selecting the amendment returns the object verbatim
     (cl-letf (((symbol-function 'read-multiple-choice)
-               (lambda (&rest _) '(?a "always" "approve for the rest"))))
+               (lambda (&rest _) '(?p "prefix" "don't ask again"))))
       (should (equal (codex--app-server-read-approval spec)
-                     '((decision . "acceptForSession")))))))
+                     `((decision . ,amend)))))
+    ;; selecting yes returns "accept", not the invalid "acceptForSession"
+    (cl-letf (((symbol-function 'read-multiple-choice)
+               (lambda (&rest _) '(?y "yes" "proceed"))))
+      (should (equal (codex--app-server-read-approval spec)
+                     '((decision . "accept")))))))
+
+(ert-deftest codex-test-app-server-file-approval-decisions ()
+  "File-change approval offers accept/session/decline/cancel (all server-valid)."
+  (let ((spec (codex--app-server-approval-spec
+               '((method . "item/fileChange/requestApproval") (id . 6)
+                 (params (reason . "outside workspace"))))))
+    (should (string-match-p "Apply file changes" (plist-get spec :prompt)))
+    (should (equal (mapcar (lambda (c) (nth 3 c)) (plist-get spec :choices))
+                   '("accept" "acceptForSession" "decline" "cancel")))
+    (cl-letf (((symbol-function 'read-multiple-choice)
+               (lambda (&rest _) '(?n "no" "decline"))))
+      (should (equal (codex--app-server-read-approval spec)
+                     '((decision . "decline")))))))
 
 (ert-deftest codex-test-app-server-renders-and-updates-plan ()
   "Turn plan renders as a checklist and updates in place."

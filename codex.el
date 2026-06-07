@@ -2405,10 +2405,10 @@ when it follows the item bullet, which precedes START on the same line."
     (pcase method
       ((or "item/commandExecution/requestApproval" "execCommandApproval")
        (list :prompt (codex--app-server-command-approval-prompt params)
-             :decisions (codex--app-server-approval-decisions method)))
+             :choices (codex--app-server-command-approval-choices params method)))
       ((or "item/fileChange/requestApproval" "applyPatchApproval")
        (list :prompt (codex--app-server-file-approval-prompt params)
-             :decisions (codex--app-server-approval-decisions method)))
+             :choices (codex--app-server-file-approval-choices method)))
       (_ nil))))
 
 (defun codex--app-server-command-approval-prompt (params)
@@ -2422,24 +2422,50 @@ when it follows the item bullet, which precedes START on the same line."
   (let ((reason (alist-get 'reason params)))
     (if reason (format "Apply file changes (%s)" reason) "Apply file changes")))
 
-(defun codex--app-server-approval-decisions (method)
-  "Return an alist mapping choice chars to decisions for METHOD."
-  (if (member method '("execCommandApproval" "applyPatchApproval"))
-      '((?y . "approved") (?a . "approved_for_session") (?n . "denied")
-        (?c . "abort"))
-    '((?y . "accept") (?a . "acceptForSession") (?n . "decline")
-      (?c . "cancel"))))
+(defun codex--app-server-command-approval-choices (params method)
+  "Return command-approval choices for PARAMS, honoring `availableDecisions'.
+Each choice is (CHAR NAME HELP VALUE); VALUE is the decision sent back.
+Falls back to a fixed set for the legacy METHOD when no decisions are
+advertised."
+  (let ((available (append (alist-get 'availableDecisions params) nil)))
+    (if available
+        (delq nil (mapcar #'codex--app-server-decision-choice available))
+      (codex--app-server-file-approval-choices method))))
+
+(defun codex--app-server-decision-choice (decision)
+  "Map an advertised DECISION to a (CHAR NAME HELP VALUE) approval choice.
+DECISION is a string like \"accept\" or \"cancel\", or an amendment
+object such as the \"don't ask again\" execpolicy amendment."
+  (cond
+   ((equal decision "accept") (list ?y "yes" "Yes, proceed" "accept"))
+   ((equal decision "cancel")
+    (list ?n "no" "No, and tell Codex what to do differently" "cancel"))
+   ((and (consp decision) (assq 'acceptWithExecpolicyAmendment decision))
+    (list ?p "prefix" "Yes, and don't ask again for this command" decision))
+   ((stringp decision) (list (aref decision 0) decision decision decision))
+   (t nil)))
+
+(defun codex--app-server-file-approval-choices (method)
+  "Return the fixed file-change approval choices for METHOD."
+  (if (equal method "applyPatchApproval")
+      '((?y "yes" "apply once" "approved")
+        (?a "always" "apply for the rest of the session" "approved_for_session")
+        (?n "no" "decline" "denied")
+        (?c "cancel" "cancel the turn" "abort"))
+    '((?y "yes" "apply once" "accept")
+      (?a "always" "apply for the rest of the session" "acceptForSession")
+      (?n "no" "decline" "decline")
+      (?c "cancel" "cancel the turn" "cancel"))))
 
 (defun codex--app-server-read-approval (spec)
   "Prompt with SPEC and return the chosen app-server approval decision."
-  (let* ((choice (read-multiple-choice
+  (let* ((choices (plist-get spec :choices))
+         (chosen (read-multiple-choice
                   (plist-get spec :prompt)
-                  '((?y "yes" "approve once")
-                    (?a "always" "approve for the rest of the session")
-                    (?n "no" "decline")
-                    (?c "cancel" "cancel the turn"))))
-         (decision (alist-get (car choice) (plist-get spec :decisions))))
-    `((decision . ,decision))))
+                  (mapcar (lambda (c) (list (nth 0 c) (nth 1 c) (nth 2 c)))
+                          choices)))
+         (value (nth 3 (assq (car chosen) choices))))
+    `((decision . ,value))))
 
 (defun codex--app-server-send-initialize ()
   "Send the app-server initialize request."
