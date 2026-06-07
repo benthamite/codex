@@ -728,6 +728,15 @@ recompiled with a larger SB_MAX value."
 (defvar-local codex--app-server-full-outputs nil
   "Hash table mapping item ids to full (unfolded) command output.")
 
+(defvar-local codex--app-server-explore-files nil
+  "File names listed in the currently open `Explored' block.")
+
+(defvar-local codex--app-server-explore-start nil
+  "Marker at the start of the open `Explored' block's `└ Read' line.")
+
+(defvar-local codex--app-server-explore-end nil
+  "Marker at the end of the open `Explored' block's `└ Read' line.")
+
 (defvar-local codex--app-server-pending-images nil
   "Image file paths to attach to the next app-server turn input.")
 
@@ -1045,6 +1054,9 @@ arguments."
       (setq-local codex--app-server-queued-turn-inputs nil)
       (setq-local codex--app-server-plan-start nil)
       (setq-local codex--app-server-plan-end nil)
+      (setq-local codex--app-server-explore-files nil)
+      (setq-local codex--app-server-explore-start nil)
+      (setq-local codex--app-server-explore-end nil)
       (setq-local codex--app-server-next-request-id 0)
       (setq-local codex--app-server-pending-requests
                   (make-hash-table :test 'equal))
@@ -1418,7 +1430,10 @@ arguments."
   (setq codex--app-server-output-marker nil
         codex--app-server-input-marker nil
         codex--app-server-plan-start nil
-        codex--app-server-plan-end nil)
+        codex--app-server-plan-end nil
+        codex--app-server-explore-files nil
+        codex--app-server-explore-start nil
+        codex--app-server-explore-end nil)
   (clrhash codex--app-server-agent-items)
   (clrhash codex--app-server-command-items)
   (clrhash codex--app-server-reasoning-items)
@@ -1444,7 +1459,7 @@ arguments."
                 (with-output-to-string
                   (with-current-buffer standard-output
                     (process-file "git" nil t nil "diff"))))))
-    (codex--app-server-insert-role "Diff")
+    (codex--app-server-insert-status "Working tree diff")
     (if (string-empty-p diff)
         (codex--app-server-insert "(no changes)")
       (codex--app-server-render-diff diff))))
@@ -1672,6 +1687,12 @@ arguments."
     "/side" "/skills" "/status" "/statusline" "/stop" "/theme" "/title" "/vim")
   "Slash commands recognized by the app-server backend, used for completion.")
 
+(defconst codex--app-server-bullet "• "
+  "Prefix the Codex CLI shows before agent output items.")
+
+(defconst codex--app-server-user-prefix "› "
+  "Prefix the Codex CLI shows before user messages.")
+
 (defun codex--app-server-complete-or-queue ()
   "Complete a slash command when idle, or queue input while a turn runs.
 This mirrors the Codex CLI, where Tab completes the composer when idle
@@ -1715,10 +1736,9 @@ With no active turn, send the input immediately like Return."
         (delta (alist-get 'delta params)))
     (when (and item-id delta)
       (unless (gethash item-id codex--app-server-agent-items)
-        (codex--app-server-insert-role "Assistant")
-        (puthash item-id (copy-marker (codex--app-server-output-point))
+        (puthash item-id (codex--app-server-open-message codex--app-server-bullet)
                  codex--app-server-agent-items))
-      (codex--app-server-insert delta))))
+      (codex--app-server-append-message delta))))
 
 (defun codex--app-server-render-reasoning-delta (params)
   "Render a reasoning summary delta from PARAMS as dimmed text."
@@ -1726,14 +1746,14 @@ With no active turn, send the input immediately like Return."
         (delta (alist-get 'delta params)))
     (when (and item-id delta)
       (unless (gethash item-id codex--app-server-reasoning-items)
-        (codex--app-server-insert-role "Thinking")
+        (codex--app-server-open-message codex--app-server-bullet)
         (puthash item-id t codex--app-server-reasoning-items))
-      (codex--app-server-insert delta 'codex-app-server-reasoning-face))))
+      (codex--app-server-append-message delta 'codex-app-server-reasoning-face))))
 
 (defun codex--app-server-render-reasoning-part-break (params)
   "Insert a paragraph break between reasoning summary parts for PARAMS."
   (when (gethash (alist-get 'itemId params) codex--app-server-reasoning-items)
-    (codex--app-server-insert "\n\n" 'codex-app-server-reasoning-face)))
+    (codex--app-server-append-message "\n\n" 'codex-app-server-reasoning-face)))
 
 (defun codex--app-server-render-realtime-transcript (params)
   "Render a realtime transcript delta from PARAMS under a Voice label."
@@ -1742,8 +1762,9 @@ With no active turn, send the input immediately like Return."
     (when delta
       (unless (equal role codex--app-server-realtime-role)
         (setq codex--app-server-realtime-role role)
-        (codex--app-server-insert-role (format "Voice (%s)" (or role "?"))))
-      (codex--app-server-insert delta))))
+        (codex--app-server-open-message
+         (format "%s(%s) " codex--app-server-bullet (or role "?"))))
+      (codex--app-server-append-message delta))))
 
 (defun codex--app-server-realtime-transcript-done ()
   "Finish the current realtime transcript segment."
@@ -1788,7 +1809,10 @@ With no active turn, send the input immediately like Return."
     (if (and (markerp codex--app-server-plan-start)
              (marker-position codex--app-server-plan-start))
         (codex--app-server-replace-plan text)
-      (codex--app-server-insert-role "Plan")
+      (codex--app-server-ensure-section-break)
+      (codex--app-server-insert
+       (concat codex--app-server-bullet "Updated Plan\n")
+       'codex-app-server-command-face)
       (setq codex--app-server-plan-start
             (copy-marker (codex--app-server-output-point)))
       (codex--app-server-insert text 'codex-app-server-status-face)
@@ -1808,20 +1832,25 @@ With no active turn, send the input immediately like Return."
         (set-marker codex--app-server-plan-end (point))))))
 
 (defun codex--app-server-plan-text (plan)
-  "Return checklist text for PLAN, a list of step alists."
-  (mapconcat
+  "Return tree-indented checklist text for PLAN, a list of step alists."
+  (codex--app-server-indent-output (codex--app-server-plan-lines plan)))
+
+(defun codex--app-server-plan-lines (plan)
+  "Return checklist lines for PLAN, one `GLYPH STEP' line per step."
+  (mapcar
    (lambda (step)
      (format "%s %s"
              (codex--app-server-plan-status-char (alist-get 'status step))
              (alist-get 'step step)))
-   (append plan nil) "\n"))
+   (append plan nil)))
 
 (defun codex--app-server-plan-status-char (status)
-  "Return a checklist marker character for plan STATUS."
+  "Return a checklist marker character for plan STATUS.
+The Codex CLI uses a check for completed steps and an open box for
+pending and in-progress steps."
   (pcase status
-    ("completed" "✓")
-    ("inProgress" "▶")
-    (_ "○")))
+    ("completed" "✔")
+    (_ "□")))
 
 (defun codex--app-server-render-completed-item (params)
   "Render completed app-server item details from PARAMS when needed."
@@ -1839,27 +1868,78 @@ With no active turn, send the input immediately like Return."
     (puthash (alist-get 'id item) t codex--app-server-command-items)
     (let ((reads (codex--app-server-command-reads item)))
       (if reads
-          (codex--app-server-insert
-           (format "• Read %s\n" (string-join reads ", "))
-           'codex-app-server-command-face)
-        (codex--app-server-insert (concat (codex--app-server-command-header item) "\n")
-                                  'codex-app-server-command-face)
-        (let* ((id (alist-get 'id item))
-               (output (string-trim-right (or (alist-get 'aggregatedOutput item) "")))
-               (lines (codex--app-server-collapse-output output)))
-          (when lines
-            (let ((start (codex--app-server-output-point)))
-              (codex--app-server-insert (codex--app-server-indent-output lines))
-              (unless (equal lines (split-string output "\n"))
-                (puthash id output codex--app-server-full-outputs)
-                (let ((inhibit-read-only t))
-                  (put-text-property start (codex--app-server-output-point)
-                                     'codex-output-id id))))))))))
+          (codex--app-server-render-explored reads)
+        (codex--app-server-render-ran-command item)))))
+
+(defun codex--app-server-render-explored (names)
+  "Render file reads NAMES as an `Explored' block, aggregating reads.
+Consecutive read commands extend a single `• Explored' block, matching
+the way the Codex CLI groups them onto one `└ Read FILE, FILE' line."
+  (if (codex--app-server-explore-active-p)
+      (codex--app-server-extend-explore names)
+    (codex--app-server-begin-explore names)))
+
+(defun codex--app-server-explore-active-p ()
+  "Return non-nil when the last rendered output is an open Explored block."
+  (and (markerp codex--app-server-explore-end)
+       (marker-position codex--app-server-explore-end)
+       (= (marker-position codex--app-server-explore-end)
+          (codex--app-server-output-point))))
+
+(defun codex--app-server-begin-explore (names)
+  "Start a new `• Explored' block listing read file NAMES."
+  (codex--app-server-ensure-section-break)
+  (codex--app-server-insert (concat codex--app-server-bullet "Explored\n")
+                            'codex-app-server-command-face)
+  (setq codex--app-server-explore-files names)
+  (setq codex--app-server-explore-start
+        (copy-marker (codex--app-server-output-point) nil))
+  (codex--app-server-insert (codex--app-server-explore-body names)
+                            'codex-app-server-command-face)
+  (setq codex--app-server-explore-end
+        (copy-marker (codex--app-server-output-point) nil)))
+
+(defun codex--app-server-extend-explore (names)
+  "Add read file NAMES to the open Explored block, rewriting its line."
+  (setq codex--app-server-explore-files
+        (append codex--app-server-explore-files names))
+  (let ((inhibit-read-only t))
+    (delete-region codex--app-server-explore-start
+                   codex--app-server-explore-end)
+    (save-excursion
+      (goto-char codex--app-server-explore-start)
+      (let ((start (point)))
+        (insert (codex--app-server-explore-body
+                 codex--app-server-explore-files))
+        (put-text-property start (point) 'face 'codex-app-server-command-face)
+        (add-text-properties start (point) '(read-only t front-sticky t))
+        (set-marker codex--app-server-explore-end (point))))))
+
+(defun codex--app-server-explore-body (names)
+  "Return the `  └ Read NAME, NAME' tree line for explored NAMES."
+  (concat "  └ Read " (string-join names ", ")))
+
+(defun codex--app-server-render-ran-command (item)
+  "Render a non-read command ITEM as a `• Ran' block with folded output."
+  (codex--app-server-ensure-section-break)
+  (codex--app-server-insert (concat (codex--app-server-command-header item) "\n")
+                            'codex-app-server-command-face)
+  (let* ((id (alist-get 'id item))
+         (output (string-trim-right (or (alist-get 'aggregatedOutput item) "")))
+         (lines (codex--app-server-collapse-output output)))
+    (when lines
+      (let ((start (codex--app-server-output-point)))
+        (codex--app-server-insert (codex--app-server-indent-output lines))
+        (unless (equal lines (split-string output "\n"))
+          (puthash id output codex--app-server-full-outputs)
+          (let ((inhibit-read-only t))
+            (put-text-property start (codex--app-server-output-point)
+                               'codex-output-id id)))))))
 
 (defun codex--app-server-command-reads (item)
   "Return read-action file names for ITEM when it only reads files, else nil.
-The Codex CLI summarizes pure file reads as \"Read FILE\" without
-dumping the file contents."
+The Codex CLI summarizes pure file reads under an `Explored' block
+without dumping the file contents."
   (let ((actions (append (alist-get 'commandActions item) nil)))
     (when (and actions
                (cl-every (lambda (action)
@@ -1898,15 +1978,75 @@ Shows the first `codex-app-server-max-command-output-lines' lines, a
           (mapconcat (lambda (line) (concat "\n    " line)) (cdr lines) "")))
 
 (defun codex--app-server-render-completed-filechange (item)
-  "Render a completed file-change ITEM as folded, faced diffs."
-  (codex--app-server-insert-role "Edit")
+  "Render a completed file-change ITEM as CLI numbered diffs.
+Each change shows a `• Added FILE (+N -M)' header followed by the diff
+body numbered and marked exactly like the Codex CLI."
   (dolist (change (append (alist-get 'changes item) nil))
-    (codex--app-server-insert
-     (format "%s %s\n"
-             (codex--app-server-change-kind-label (alist-get 'kind change))
-             (alist-get 'path change))
-     'codex-app-server-command-face)
-    (codex--app-server-render-diff (string-trim-right (or (alist-get 'diff change) "")))))
+    (let ((diff (string-trim-right (or (alist-get 'diff change) ""))))
+      (codex--app-server-render-change-header change diff)
+      (codex--app-server-render-numbered-diff diff))))
+
+(defun codex--app-server-render-change-header (change diff)
+  "Insert the `• Added FILE (+N -M)' header for CHANGE with DIFF."
+  (codex--app-server-ensure-section-break)
+  (codex--app-server-insert
+   (format "%s%s %s (+%d -%d)\n"
+           codex--app-server-bullet
+           (codex--app-server-change-kind-label (alist-get 'kind change))
+           (codex--app-server-change-name change)
+           (codex--app-server-count-diff-lines diff "+")
+           (codex--app-server-count-diff-lines diff "-"))
+   'codex-app-server-command-face))
+
+(defun codex--app-server-change-name (change)
+  "Return the display path for file-change CHANGE, relative to the cwd."
+  (let ((path (alist-get 'path change)))
+    (if (and path codex--buffer-directory)
+        (file-relative-name path codex--buffer-directory)
+      (or path ""))))
+
+(defun codex--app-server-count-diff-lines (diff prefix)
+  "Return the number of DIFF body lines beginning with PREFIX.
+File headers (`+++' and `---') are not counted."
+  (let ((count 0))
+    (dolist (line (split-string diff "\n") count)
+      (when (and (string-prefix-p prefix line)
+                 (not (string-prefix-p "+++" line))
+                 (not (string-prefix-p "---" line)))
+        (setq count (1+ count))))))
+
+(defun codex--app-server-render-numbered-diff (diff)
+  "Insert DIFF as CLI numbered lines, faced for additions and removals."
+  (let ((text (codex--app-server-numbered-diff-text diff)))
+    (unless (string-empty-p text)
+      (let ((start (codex--app-server-output-point)))
+        (codex--app-server-insert text)
+        (let ((end (codex--app-server-output-point)))
+          (codex--app-server-fontify-matches
+           "^    [0-9]+ \\+.*$" 'diff-added start end)
+          (codex--app-server-fontify-matches
+           "^    [0-9]+ -.*$" 'diff-removed start end))))))
+
+(defun codex--app-server-numbered-diff-text (diff)
+  "Return DIFF rendered as CLI numbered lines with +, - and space markers.
+Line numbers are tracked from the `@@' hunk headers: removed lines use
+the old-file number, added lines and context use the new-file number."
+  (let ((old 0) (new 0) (lines nil))
+    (dolist (line (split-string diff "\n"))
+      (cond
+       ((string-match "\\`@@ -\\([0-9]+\\)\\(?:,[0-9]+\\)? \\+\\([0-9]+\\)" line)
+        (setq old (string-to-number (match-string 1 line))
+              new (string-to-number (match-string 2 line))))
+       ((string-prefix-p "+" line)
+        (push (format "    %d +%s" new (substring line 1)) lines)
+        (setq new (1+ new)))
+       ((string-prefix-p "-" line)
+        (push (format "    %d -%s" old (substring line 1)) lines)
+        (setq old (1+ old)))
+       ((string-prefix-p " " line)
+        (push (format "    %d  %s" new (substring line 1)) lines)
+        (setq new (1+ new) old (1+ old)))))
+    (if lines (concat (string-join (nreverse lines) "\n") "\n") "")))
 
 (defun codex--app-server-change-kind-label (kind)
   "Return a human label for file-change KIND."
@@ -1927,17 +2067,18 @@ Shows the first `codex-app-server-max-command-output-lines' lines, a
         (codex--app-server-fontify-matches "^-.*$" 'diff-removed start end)))))
 
 (defun codex--app-server-render-completed-tool-call (item)
-  "Render a completed MCP tool-call ITEM."
-  (codex--app-server-insert-role "Tool")
+  "Render a completed MCP tool-call ITEM with a CLI-style bullet."
+  (codex--app-server-ensure-section-break)
   (codex--app-server-insert
-   (concat (if-let* ((server (alist-get 'server item))) (concat server ".") "")
-           (or (alist-get 'tool item) "tool"))
+   (concat codex--app-server-bullet "Called "
+           (if-let* ((server (alist-get 'server item))) (concat server ".") "")
+           (or (alist-get 'tool item) "tool") "\n")
    'codex-app-server-command-face)
-  (let ((result (codex--app-server-tool-result-text item)))
+  (let ((result (string-trim-right (codex--app-server-tool-result-text item))))
     (unless (string-empty-p result)
-      (codex--app-server-insert (concat "\n" (codex--app-server-fold-output result)))))
-  (codex--app-server-insert (concat "\n" (codex--app-server-command-status item))
-                            'codex-app-server-status-face))
+      (codex--app-server-insert
+       (codex--app-server-indent-output
+        (codex--app-server-collapse-output result))))))
 
 (defun codex--app-server-tool-result-text (item)
   "Return a string rendering of MCP tool-call ITEM result or error."
@@ -1955,10 +2096,12 @@ Shows the first `codex-app-server-max-command-output-lines' lines, a
     (error (format "%s" value))))
 
 (defun codex--app-server-render-completed-web-search (item)
-  "Render a completed web-search ITEM."
-  (codex--app-server-insert-role "Search")
-  (codex--app-server-insert (or (alist-get 'query item) "")
-                            'codex-app-server-command-face))
+  "Render a completed web-search ITEM with a CLI-style bullet."
+  (codex--app-server-ensure-section-break)
+  (codex--app-server-insert
+   (concat codex--app-server-bullet "Searched "
+           (or (alist-get 'query item) "") "\n")
+   'codex-app-server-command-face))
 
 (defun codex--app-server-render-history (turns)
   "Render resumed history TURNS, oldest first, reusing item renderers."
@@ -1979,15 +2122,14 @@ Shows the first `codex-app-server-max-command-output-lines' lines, a
 
 (defun codex--app-server-render-history-user (item)
   "Render a historical user-message ITEM."
-  (codex--app-server-insert-role "User")
-  (codex--app-server-insert (codex--app-server-content-text
-                             (alist-get 'content item))))
+  (codex--app-server-insert-message
+   codex--app-server-user-prefix
+   (codex--app-server-content-text (alist-get 'content item))))
 
 (defun codex--app-server-render-history-agent (item)
   "Render a historical agent-message ITEM with Markdown."
-  (codex--app-server-insert-role "Assistant")
-  (let ((start (codex--app-server-output-point)))
-    (codex--app-server-insert (or (alist-get 'text item) ""))
+  (let ((start (codex--app-server-insert-message
+                codex--app-server-bullet (or (alist-get 'text item) ""))))
     (codex--app-server-fontify-markdown start (codex--app-server-output-point))))
 
 (defun codex--app-server-render-history-reasoning (item)
@@ -1995,8 +2137,8 @@ Shows the first `codex-app-server-max-command-output-lines' lines, a
   (let ((summary (codex--app-server-reasoning-summary-text
                   (alist-get 'summary item))))
     (unless (string-empty-p summary)
-      (codex--app-server-insert-role "Thinking")
-      (codex--app-server-insert summary 'codex-app-server-reasoning-face))))
+      (codex--app-server-insert-message
+       codex--app-server-bullet summary 'codex-app-server-reasoning-face))))
 
 (defun codex--app-server-content-text (content)
   "Return the text of a message CONTENT field (string or part list)."
@@ -2088,16 +2230,21 @@ deliberately not copied."
         (setq pos next)))))
 
 (defun codex--app-server-fontify-markdown-basic (start end)
-  "Apply lightweight Markdown faces to the region between START and END."
+  "Apply lightweight Markdown faces to the region between START and END.
+The region is narrowed so a heading on the first line is recognized even
+when it follows the item bullet, which precedes START on the same line."
   (let ((inhibit-read-only t))
-    (codex--app-server-fontify-matches
-     "^#+ .*$" 'codex-app-server-heading-face start end)
-    (codex--app-server-fontify-matches
-     "\\*\\*[^*\n]+\\*\\*" 'bold start end)
-    (codex--app-server-fontify-matches
-     "`[^`\n]+`" 'codex-app-server-code-face start end)
-    (codex--app-server-fontify-matches
-     "^```\\(?:.\\|\n\\)*?^```$" 'codex-app-server-code-face start end)))
+    (save-restriction
+      (narrow-to-region start end)
+      (codex--app-server-fontify-matches
+       "^#+ .*$" 'codex-app-server-heading-face (point-min) (point-max))
+      (codex--app-server-fontify-matches
+       "\\*\\*[^*\n]+\\*\\*" 'bold (point-min) (point-max))
+      (codex--app-server-fontify-matches
+       "`[^`\n]+`" 'codex-app-server-code-face (point-min) (point-max))
+      (codex--app-server-fontify-matches
+       "^```\\(?:.\\|\n\\)*?^```$" 'codex-app-server-code-face
+       (point-min) (point-max)))))
 
 (defun codex--app-server-fontify-matches (regexp face start end)
   "Put FACE on each match of REGEXP between START and END."
@@ -2296,8 +2443,7 @@ command, and everything else is sent to the model as a turn."
        (string-trim (substring trimmed 1))))
      (t
       (codex--app-server-record-input command)
-      (codex--app-server-insert-role "User")
-      (codex--app-server-insert command)
+      (codex--app-server-insert-message codex--app-server-user-prefix command)
       (codex--app-server-ensure-trailing-newline)
       (if codex--app-server-thread-id
           (codex--app-server-send-turn-input command)
@@ -2572,11 +2718,39 @@ Its output arrives as a command-execution item like the CLI's \"!\"."
     (process-send-string codex--app-server-process
                          (concat (json-encode message) "\n"))))
 
-(defun codex--app-server-insert-role (role)
-  "Insert ROLE label in the current app-server buffer."
+(defun codex--app-server-open-message (prefix)
+  "Begin a CLI-style item led by PREFIX, returning the text-start marker.
+PREFIX is a short lead such as `codex--app-server-bullet' or
+`codex--app-server-user-prefix'.  The returned marker points just after
+PREFIX so callers can stream text and later fontify the region."
   (codex--app-server-ensure-section-break)
-  (codex--app-server-insert (concat role "\n")
-                            'codex-app-server-role-face))
+  (codex--app-server-insert prefix 'codex-app-server-role-face)
+  (copy-marker (codex--app-server-output-point)))
+
+(defun codex--app-server-append-message (text &optional face)
+  "Append TEXT with optional FACE to the open message item.
+Continuation lines are indented under the leading bullet to match the
+Codex CLI."
+  (let ((start (codex--app-server-output-point)))
+    (codex--app-server-insert text face)
+    (codex--app-server-set-hanging-indent
+     start (codex--app-server-output-point) 2)))
+
+(defun codex--app-server-insert-message (prefix text &optional face)
+  "Insert a complete CLI-style item: PREFIX then TEXT with FACE.
+Return the marker at the start of TEXT for later fontification."
+  (let ((start (codex--app-server-open-message prefix)))
+    (codex--app-server-append-message text face)
+    start))
+
+(defun codex--app-server-set-hanging-indent (start end columns)
+  "Indent continuation lines between START and END by COLUMNS spaces.
+Sets `line-prefix' and `wrap-prefix' so soft- and hard-wrapped lines
+align under a leading bullet, matching the Codex CLI."
+  (let ((inhibit-read-only t)
+        (indent (make-string columns ?\s)))
+    (put-text-property start end 'wrap-prefix indent)
+    (put-text-property start end 'line-prefix indent)))
 
 (defun codex--app-server-insert-status (text)
   "Insert app-server status TEXT."
@@ -2604,9 +2778,14 @@ Output is inserted before the input prompt and marked read-only."
     (point-max)))
 
 (defun codex--app-server-ensure-section-break ()
-  "Ensure the app-server output region is ready for a new section."
+  "Ensure a blank line separates the next item from earlier output.
+The Codex CLI shows one blank line between successive output items."
   (unless (= (codex--app-server-output-point) (point-min))
-    (codex--app-server-ensure-trailing-newline)))
+    (codex--app-server-ensure-trailing-newline)
+    (let ((point (codex--app-server-output-point)))
+      (unless (and (> point (1+ (point-min)))
+                   (eq (char-before (1- point)) ?\n))
+        (codex--app-server-insert "\n")))))
 
 (defun codex--app-server-ensure-trailing-newline ()
   "Ensure the app-server output region ends in a newline."

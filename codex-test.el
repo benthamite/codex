@@ -1055,8 +1055,7 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (insert "do the thing")
     (codex--app-server-send-input)
     (let ((text (buffer-substring-no-properties (point-min) (point-max))))
-      (should (string-match-p "User" text))
-      (should (string-match-p "do the thing" text)))
+      (should (string-match-p "› do the thing" text)))
     (should (equal (codex--app-server-input-text) ""))
     (should (member "do the thing" codex--app-server-queued-commands))))
 
@@ -1098,7 +1097,7 @@ assertion in `eat--t-cur-left' on the following cursor move."
                 'codex-app-server-code-face))))
 
 (ert-deftest codex-test-app-server-read-command-summarized ()
-  "A file-read command is summarized as `Read FILE' with no content dump."
+  "A file-read command renders as an Explored block with no content dump."
   (with-temp-buffer
     (rename-buffer "*codex:/tmp/app-server-read/*" t)
     (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
@@ -1114,9 +1113,30 @@ assertion in `eat--t-cur-left' on the following cursor move."
                                          (path . "/x/SKILL.md"))))
                      (aggregatedOutput . "line1\nline2\nSECRETCONTENT\nline4")))))
     (let ((text (buffer-substring-no-properties (point-min) (point-max))))
-      (should (string-match-p "• Read SKILL.md" text))
+      (should (string-match-p "• Explored" text))
+      (should (string-match-p "  └ Read SKILL.md" text))
       (should-not (string-match-p "SECRETCONTENT" text))
       (should-not (string-match-p "sed -n" text)))))
+
+(ert-deftest codex-test-app-server-aggregates-consecutive-reads ()
+  "Consecutive read commands extend one Explored block, like the CLI."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-reads/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-full-outputs (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (dolist (file '("alpha.txt" "beta.txt"))
+      (codex--app-server-handle-message
+       `((method . "item/completed")
+         (params (item (type . "commandExecution") (id . ,(concat "r-" file))
+                       (exitCode . 0)
+                       (command . ,(format "/bin/zsh -lc \"cat %s\"" file))
+                       (commandActions . (((type . "read") (name . ,file)
+                                           (path . ,(concat "/x/" file))))))))))
+    (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+      (should (= 1 (how-many "• Explored" (point-min) (point-max))))
+      (should (string-match-p "  └ Read alpha.txt, beta.txt" text)))))
 
 (ert-deftest codex-test-app-server-folds-long-command-output ()
   "Long command output collapses to head + marker + last line, like the CLI."
@@ -1169,7 +1189,7 @@ assertion in `eat--t-cur-left' on the following cursor move."
         (codex--app-server-submit-command "!echo hi"))
       (should (equal (car sent) "thread/shellCommand"))
       (should (equal (alist-get 'command (cdr sent)) "echo hi")))
-    (should-not (string-match-p "^User$" (buffer-string)))))
+    (should-not (string-match-p "› " (buffer-string)))))
 
 (ert-deftest codex-test-app-server-file-reference ()
   "Inserting a file reference prepends @ and the chosen path."
@@ -1275,7 +1295,7 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (codex--app-server-handle-message
      '((method . "thread/realtime/transcript/delta")
        (params (role . "assistant") (delta . "hello there"))))
-    (should (string-match-p "Voice (assistant)" (buffer-string)))
+    (should (string-match-p "(assistant)" (buffer-string)))
     (should (string-match-p "hello there" (buffer-string)))
     (codex--app-server-handle-message
      '((method . "thread/realtime/error") (params (message . "mic lost"))))
@@ -1361,9 +1381,8 @@ assertion in `eat--t-cur-left' on the following cursor move."
                    (content . (((type . "text") (text . "hi there")))))
                   ((type . "agentMessage") (text . "**hello** back")))))))
     (let ((text (buffer-substring-no-properties (point-min) (point-max))))
-      (should (string-match-p "User" text))
-      (should (string-match-p "hi there" text))
-      (should (string-match-p "Assistant" text))
+      (should (string-match-p "› hi there" text))
+      (should (string-match-p "• " text))
       (should (string-match-p "hello" text)))
     (goto-char (point-min))
     (search-forward "hi there")
@@ -1432,17 +1451,18 @@ assertion in `eat--t-cur-left' on the following cursor move."
        (params (plan . (((step . "Write code") (status . "inProgress"))
                         ((step . "Run tests") (status . "pending")))))))
     (let ((text (buffer-substring-no-properties (point-min) (point-max))))
-      (should (string-match-p "▶ Write code" text))
-      (should (string-match-p "○ Run tests" text)))
+      (should (string-match-p "□ Write code" text))
+      (should (string-match-p "□ Run tests" text))
+      (should (string-match-p "• Updated Plan" text)))
     (codex--app-server-handle-message
      '((method . "turn/plan/updated")
        (params (plan . (((step . "Write code") (status . "completed"))
                         ((step . "Run tests") (status . "inProgress")))))))
     (let ((text (buffer-substring-no-properties (point-min) (point-max))))
-      (should (string-match-p "✓ Write code" text))
-      (should (string-match-p "▶ Run tests" text))
-      (should-not (string-match-p "▶ Write code" text))
-      (should (= 1 (how-many "^Plan$" (point-min) (point-max)))))))
+      (should (string-match-p "✔ Write code" text))
+      (should (string-match-p "□ Run tests" text))
+      (should-not (string-match-p "□ Write code" text))
+      (should (= 1 (how-many "Updated Plan" (point-min) (point-max)))))))
 
 (ert-deftest codex-test-app-server-tab-completes-slash-when-idle ()
   "TAB completes a slash-command prefix when no turn is active (CLI parity)."
@@ -1488,7 +1508,7 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (should (member "next thing" codex--app-server-queued-commands))))
 
 (ert-deftest codex-test-app-server-renders-file-change-diff ()
-  "File-change items render as faced diffs with kind labels."
+  "File-change items render as CLI numbered diffs with a `(+N -M)' header."
   (with-temp-buffer
     (rename-buffer "*codex:/tmp/app-server-fc/*" t)
     (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
@@ -1499,13 +1519,19 @@ assertion in `eat--t-cur-left' on the following cursor move."
        (params (item (type . "fileChange") (id . "f1") (status . "completed")
                      (changes . (((path . "foo.el")
                                   (kind . ((type . "update")))
-                                  (diff . "@@ -1 +1 @@\n-old line\n+new line"))))))))
+                                  (diff . "@@ -3,3 +3,3 @@\n three\n-four\n+FOUR\n five"))))))))
     (let ((text (buffer-substring-no-properties (point-min) (point-max))))
-      (should (string-match-p "Edited foo.el" text))
-      (should (string-match-p "new line" text)))
+      (should (string-match-p (regexp-quote "• Edited foo.el (+1 -1)") text))
+      (should (string-match-p "^    3  three$" text))
+      (should (string-match-p "^    4 -four$" text))
+      (should (string-match-p "^    4 \\+FOUR$" text))
+      (should (string-match-p "^    5  five$" text)))
     (goto-char (point-min))
-    (search-forward "+new line")
-    (should (eq (get-text-property (1- (point)) 'face) 'diff-added))))
+    (search-forward "+FOUR")
+    (should (eq (get-text-property (1- (point)) 'face) 'diff-added))
+    (goto-char (point-min))
+    (search-forward "-four")
+    (should (eq (get-text-property (1- (point)) 'face) 'diff-removed))))
 
 (ert-deftest codex-test-app-server-renders-reasoning-summary ()
   "Reasoning summary deltas render as dimmed text under a Thinking label."
@@ -1518,8 +1544,7 @@ assertion in `eat--t-cur-left' on the following cursor move."
      '((method . "item/reasoning/summaryTextDelta")
        (params (itemId . "r1") (delta . "Considering the options"))))
     (let ((text (buffer-substring-no-properties (point-min) (point-max))))
-      (should (string-match-p "Thinking" text))
-      (should (string-match-p "Considering the options" text)))
+      (should (string-match-p "• Considering the options" text)))
     (goto-char (point-min))
     (search-forward "Considering")
     (should (eq (get-text-property (1- (point)) 'face)
