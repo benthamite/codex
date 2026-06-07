@@ -83,7 +83,7 @@ The experimental realtime channel is handled too: ~codex-app-server-realtime-sta
 
 Because command output is folded, ~codex-app-server-expand-output~ (bound to ~C-c C-o~) shows the full, unfolded output of the command block at point in a dedicated buffer, mirroring the CLI transcript view.
 
-Images can be attached to a turn on the =app-server= backend: ~codex-default-images~ are attached to the first prompt, and ~codex-app-server-attach-image~ attaches an image file to the next turn.  Attached images are sent as =localImage= input items.
+Images can be attached to a turn on the =app-server= backend: ~codex-default-images~ are attached to the first prompt, ~codex-app-server-attach-image~ attaches an image file to the next turn, and ~codex-app-server-paste-image~ (bound to ~C-c C-v~) attaches an image directly from the system clipboard.  Attached images are sent as =localImage= input items.
 
 Completed assistant messages in =app-server= buffers are rendered as Markdown.  When =markdown-mode= is available, codex.el renders each message through =gfm-mode= and hides the Markdown markup, so headings, bold and italic spans, strikethrough, inline code, fenced code blocks, lists, blockquotes, links, and horizontal rules display as formatted text while the raw Markdown remains in the buffer for copying.  The user option ~codex-app-server-render-markdown~ enables this rendering; the default is ~t~.  When it is nil, or when =markdown-mode= is not installed, a lightweight built-in highlighter is used instead.
 

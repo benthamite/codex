@@ -1134,6 +1134,25 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (should (= 1 (length vec)))
       (should (equal (alist-get 'type (aref vec 0)) "text")))))
 
+(ert-deftest codex-test-app-server-paste-image ()
+  "Pasting a clipboard image writes a temp PNG and queues it for the next turn."
+  (with-temp-buffer
+    (setq-local codex--app-server-pending-images nil)
+    (cl-letf (((symbol-function 'codex--app-server-clipboard-image-data)
+               (lambda () "\211PNG\r\n\032\nFAKEDATA")))
+      (codex-app-server-paste-image))
+    (should (= 1 (length codex--app-server-pending-images)))
+    (let ((file (car codex--app-server-pending-images)))
+      (unwind-protect
+          (progn
+            (should (file-exists-p file))
+            (should (string-suffix-p ".png" file))
+            (with-temp-buffer
+              (set-buffer-multibyte nil)
+              (insert-file-contents-literally file)
+              (should (string-match-p "FAKEDATA" (buffer-string)))))
+        (delete-file file)))))
+
 (ert-deftest codex-test-app-server-input-vector-includes-mentions ()
   "Pending file mentions attach as mention input items, then clear."
   (with-temp-buffer

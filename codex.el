@@ -2251,6 +2251,49 @@ Slash commands are dispatched locally rather than sent to the model."
   (push (expand-file-name path) codex--app-server-pending-images)
   (message "Image attached for next Codex turn: %s" path))
 
+(defun codex-app-server-paste-image ()
+  "Attach an image from the clipboard to the next app-server turn input."
+  (interactive)
+  (let ((file (codex--app-server-clipboard-image-file)))
+    (if file
+        (progn (push file codex--app-server-pending-images)
+               (message "Clipboard image attached for next Codex turn"))
+      (user-error "No image found on the clipboard"))))
+
+(defun codex--app-server-clipboard-image-file ()
+  "Save a clipboard image to a temporary PNG file and return its path, or nil."
+  (when-let* ((data (codex--app-server-clipboard-image-data)))
+    (let ((file (make-temp-file "codex-clipboard-" nil ".png"))
+          (coding-system-for-write 'binary))
+      (with-temp-file file
+        (set-buffer-multibyte nil)
+        (insert data))
+      file)))
+
+(defun codex--app-server-clipboard-image-data ()
+  "Return raw PNG bytes from the clipboard, or nil."
+  (or (ignore-errors (gui-get-selection 'CLIPBOARD 'image/png))
+      (codex--app-server-clipboard-image-via-program)))
+
+(defun codex--app-server-clipboard-image-via-program ()
+  "Return clipboard PNG bytes via an external program, or nil."
+  (cond
+   ((and (eq system-type 'darwin) (executable-find "pngpaste"))
+    (let ((tmp (make-temp-file "codex-pngpaste-" nil ".png")))
+      (unwind-protect
+          (when (and (zerop (call-process "pngpaste" nil nil nil tmp))
+                     (> (file-attribute-size (file-attributes tmp)) 0))
+            (with-temp-buffer
+              (set-buffer-multibyte nil)
+              (insert-file-contents-literally tmp)
+              (buffer-string)))
+        (ignore-errors (delete-file tmp)))))
+   ((and (eq system-type 'gnu/linux) (executable-find "wl-paste"))
+    (with-temp-buffer
+      (set-buffer-multibyte nil)
+      (when (zerop (call-process "wl-paste" nil t nil "--type" "image/png"))
+        (buffer-string))))))
+
 (defun codex--app-server-flush-queued-commands ()
   "Submit commands queued before app-server thread startup."
   (let ((commands (nreverse codex--app-server-queued-commands)))
@@ -2929,6 +2972,7 @@ cursor tracking from buffer position and tripping an assertion in
     (define-key map (kbd "C-g") #'codex-send-escape)
     (define-key map (kbd "C-l") #'codex-redraw)
     (define-key map (kbd "C-c C-o") #'codex-app-server-expand-output)
+    (define-key map (kbd "C-c C-v") #'codex-app-server-paste-image)
     (define-key map (kbd "M-<left>") #'codex-previous-agent)
     (define-key map (kbd "M-<right>") #'codex-next-agent)
     (define-key map (kbd "TAB") #'codex--terminal-send-tab)
