@@ -1568,6 +1568,54 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (codex--app-server-complete-or-queue)
     (should (equal (codex--app-server-input-text) "/resume"))))
 
+(ert-deftest codex-test-app-server-capf-completes-slash-when-idle ()
+  "Completion candidates are offered after a slash-command prefix."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-slash-capf/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-turn-active-p nil)
+    (codex-app-server-mode)
+    (codex--app-server-setup-input-region)
+    (goto-char (point-max))
+    (insert "/resu")
+    (pcase-let ((`(,start ,end ,collection . ,_)
+                 (codex--app-server-completion-at-point)))
+      (should (= start (- (point) 4)))
+      (should (= end (point)))
+      (should (member "/resume" (all-completions "/resu" collection))))))
+
+(ert-deftest codex-test-app-server-capf-completes-skill-when-idle ()
+  "Completion candidates are offered after a skill prefix."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-skill-capf/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-turn-active-p nil)
+    (codex-app-server-mode)
+    (codex--app-server-setup-input-region)
+    (goto-char (point-max))
+    (insert "$ski")
+    (cl-letf (((symbol-function 'codex--app-server-skill-names)
+               (lambda () '("skill-creator" "skill-installer"))))
+      (pcase-let ((`(,start ,end ,collection . ,_)
+                   (codex--app-server-completion-at-point)))
+        (should (= start (- (point) 3)))
+        (should (= end (point)))
+        (should (member "skill-creator" (all-completions "ski" collection)))))))
+
+(ert-deftest codex-test-app-server-tab-completes-skill-when-idle ()
+  "TAB completes a skill prefix when no turn is active."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-skill-tab/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-turn-active-p nil)
+    (codex--app-server-setup-input-region)
+    (goto-char (point-max))
+    (insert "$skill-c")
+    (cl-letf (((symbol-function 'codex--app-server-skill-names)
+               (lambda () '("skill-creator" "skill-installer"))))
+      (codex--app-server-complete-or-queue))
+    (should (equal (codex--app-server-input-text) "$skill-creator"))))
+
 (ert-deftest codex-test-app-server-tab-queues-when-running ()
   "TAB queues input while a turn is active (CLI parity)."
   (with-temp-buffer

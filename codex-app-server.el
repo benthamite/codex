@@ -115,6 +115,15 @@ because per-tool hooks can be frequent."
   :type 'boolean
   :group 'codex-app-server)
 
+(defcustom codex-app-server-skill-directories
+  (let ((home (or (getenv "CODEX_HOME") (expand-file-name "~/.codex"))))
+    (mapcar (lambda (dir) (expand-file-name dir home))
+            '("skills" "plugins/cache" "vendor_imports/skills/skills"
+              ".tmp/plugins/plugins")))
+  "Directories searched for Codex skills used by `$' completion."
+  :type '(repeat directory)
+  :group 'codex-app-server)
+
 ;;;; Internal state variables
 (defvar-local codex--app-server-process nil
   "App-server process associated with the current Codex buffer.")
@@ -224,6 +233,12 @@ because per-tool hooks can be frequent."
 (defvar-local codex--app-server-last-agent-message nil
   "Text of the most recent completed assistant message.")
 
+(defvar codex--app-server-skill-cache nil
+  "Cached list of Codex skill names for app-server completion.")
+
+(defvar codex--app-server-skill-cache-key nil
+  "Directory state key for `codex--app-server-skill-cache'.")
+
 (defvar codex--app-server-pending-startup-action 'start
   "Startup action for the next app-server session: \\='start, \\='resume, or \\='fork.")
 
@@ -244,7 +259,9 @@ since they depend on `codex-newline-keybinding-style' and are shared with
 the terminal backends.")
 
 (define-derived-mode codex-app-server-mode fundamental-mode "Codex"
-  "Major mode for Codex app-server session buffers.")
+  "Major mode for Codex app-server session buffers."
+  (add-hook 'completion-at-point-functions
+            #'codex--app-server-completion-at-point nil t))
 
 (defconst codex--app-server-bullet "• "
   "Prefix the Codex CLI shows before agent output items.")
@@ -974,13 +991,14 @@ END is updated to the new end of the replaced region."
 Mirrors the Codex CLI's slash-command set.")
 
 (defun codex--app-server-complete-or-queue ()
-  "Complete a slash command when idle, or queue input while a turn runs.
+  "Complete prompt references when idle, or queue input while a turn runs.
 This mirrors the Codex CLI, where Tab completes the composer when idle
 and queues follow-up input while a turn is in progress."
   (let ((text (string-trim-left (codex--app-server-input-text))))
     (cond
      (codex--app-server-turn-active-p (codex--app-server-queue-input))
      ((string-prefix-p "/" text) (codex--app-server-complete-slash text))
+     ((string-prefix-p "$" text) (codex--app-server-complete-skill text))
      (t (message "Nothing to complete")))))
 
 (defun codex--app-server-complete-slash (text)
@@ -996,6 +1014,87 @@ and queues follow-up input while a turn is in progress."
            (if (and (stringp common) (> (length common) (length token)))
                common
              (completing-read "Command: " matches nil t token))))))))
+
+(defun codex--app-server-complete-skill (text)
+  "Complete the skill reference TEXT in the input region."
+  (let* ((token (string-trim text))
+         (prefix (string-remove-prefix "$" token))
+         (matches (seq-filter
+                   (lambda (skill) (string-prefix-p prefix skill))
+                   (codex--app-server-skill-names))))
+    (cond
+     ((null matches) (message "No matching skill: %s" token))
+     ((= 1 (length matches))
+      (codex--app-server-replace-input (concat "$" (car matches))))
+     (t (let ((common (try-completion prefix matches)))
+          (codex--app-server-replace-input
+           (concat "$"
+                   (if (and (stringp common)
+                            (> (length common) (length prefix)))
+                       common
+                     (completing-read "Skill: " matches nil t prefix)))))))))
+
+(defun codex--app-server-completion-at-point ()
+  "Return app-server input completion data at point, or nil."
+  (when (and (markerp codex--app-server-input-marker)
+             (marker-position codex--app-server-input-marker)
+             (>= (point) codex--app-server-input-marker)
+             (not codex--app-server-turn-active-p))
+    (cond
+     ((codex--app-server-completion-bounds "$")
+      (pcase-let ((`(,start . ,end)
+                   (codex--app-server-completion-bounds "$")))
+        (list start end (codex--app-server-skill-names)
+              :exclusive 'no)))
+     ((codex--app-server-completion-bounds "/")
+      (pcase-let ((`(,start . ,end)
+                   (codex--app-server-completion-bounds "/")))
+        (list start end codex--app-server-slash-commands
+              :exclusive 'no))))))
+
+(defun codex--app-server-completion-bounds (leader)
+  "Return completion bounds after LEADER at point, or nil."
+  (let ((input-start (marker-position codex--app-server-input-marker))
+        (end (point)))
+    (save-excursion
+      (skip-chars-backward "[:alnum:]_.:+-")
+      (when (and (> (point) input-start)
+                 (string= (buffer-substring-no-properties
+                           (1- (point)) (point))
+                          leader))
+        (cons (point) end)))))
+
+(defun codex--app-server-skill-names ()
+  "Return locally available Codex skill names."
+  (let ((key (codex--app-server-skill-cache-key)))
+    (unless (equal key codex--app-server-skill-cache-key)
+      (setq codex--app-server-skill-cache-key key
+            codex--app-server-skill-cache
+            (codex--app-server-read-skill-names)))
+    codex--app-server-skill-cache))
+
+(defun codex--app-server-skill-cache-key ()
+  "Return a cache key for current skill directory state."
+  (mapcar (lambda (dir)
+            (when (file-directory-p dir)
+              (list dir (file-attribute-modification-time
+                         (file-attributes dir)))))
+          codex-app-server-skill-directories))
+
+(defun codex--app-server-read-skill-names ()
+  "Read skill names from `codex-app-server-skill-directories'."
+  (sort (delete-dups
+         (delq nil (mapcan #'codex--app-server-skill-names-in-directory
+                           codex-app-server-skill-directories)))
+        #'string<))
+
+(defun codex--app-server-skill-names-in-directory (directory)
+  "Return skill names below DIRECTORY."
+  (when (file-directory-p directory)
+    (mapcar (lambda (file)
+              (file-name-nondirectory
+               (directory-file-name (file-name-directory file))))
+            (directory-files-recursively directory "\\`SKILL\\.md\\'" nil))))
 
 (defun codex--app-server-queue-input ()
   "Queue the input region text for the next turn, like the CLI Tab key.
