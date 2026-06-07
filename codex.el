@@ -737,6 +737,15 @@ recompiled with a larger SB_MAX value."
 (defvar-local codex--app-server-realtime-role nil
   "Speaker role of the realtime transcript segment being rendered.")
 
+(defvar-local codex--app-server-input-history nil
+  "Most-recent-first list of prompts submitted from this buffer.")
+
+(defvar-local codex--app-server-input-history-index nil
+  "Current index into `codex--app-server-input-history' while navigating.")
+
+(defvar-local codex--app-server-compose-target nil
+  "Codex buffer that a compose buffer sends its prompt back to.")
+
 (defvar-local codex--app-server-queued-commands nil
   "Commands waiting for app-server thread startup.")
 
@@ -2182,15 +2191,45 @@ Uses `gfm-mode' when available, falling back to a built-in highlighter."
 
 (defun codex--app-server-submit-command (command)
   "Submit COMMAND to the current app-server thread.
-Slash commands are dispatched locally rather than sent to the model."
-  (if (string-prefix-p "/" (string-trim-left command))
-      (codex--app-server-dispatch-slash (string-trim command))
-    (codex--app-server-insert-role "User")
-    (codex--app-server-insert command)
-    (codex--app-server-ensure-trailing-newline)
-    (if codex--app-server-thread-id
-        (codex--app-server-send-turn-input command)
-      (push command codex--app-server-queued-commands))))
+Slash commands are dispatched locally, a leading \"!\" runs a shell
+command, and everything else is sent to the model as a turn."
+  (let ((trimmed (string-trim-left command)))
+    (cond
+     ((string-prefix-p "/" trimmed)
+      (codex--app-server-dispatch-slash (string-trim command)))
+     ((string-prefix-p "!" trimmed)
+      (codex--app-server-run-shell-command
+       (string-trim (substring trimmed 1))))
+     (t
+      (codex--app-server-record-input command)
+      (codex--app-server-insert-role "User")
+      (codex--app-server-insert command)
+      (codex--app-server-ensure-trailing-newline)
+      (if codex--app-server-thread-id
+          (codex--app-server-send-turn-input command)
+        (push command codex--app-server-queued-commands))))))
+
+(defun codex--app-server-record-input (command)
+  "Record COMMAND in this buffer's input history."
+  (unless (string-empty-p (string-trim command))
+    (setq codex--app-server-input-history
+          (cons command (delete command codex--app-server-input-history))))
+  (setq codex--app-server-input-history-index nil))
+
+(defun codex--app-server-run-shell-command (command)
+  "Run COMMAND as a shell command in the current thread.
+Its output arrives as a command-execution item like the CLI's \"!\"."
+  (cond
+   ((string-empty-p command) (message "Empty shell command"))
+   (codex--app-server-thread-id
+    (codex--app-server-send-request
+     "thread/shellCommand"
+     `((threadId . ,codex--app-server-thread-id) (command . ,command))
+     (lambda (_result error)
+       (when error
+         (codex--app-server-insert-status
+          (format "Shell command failed: %S" error))))))
+   (t (message "No active Codex thread"))))
 
 (defun codex--app-server-send-turn-input (command)
   "Send COMMAND to the app-server as a turn input."
@@ -2293,6 +2332,106 @@ Slash commands are dispatched locally rather than sent to the model."
       (set-buffer-multibyte nil)
       (when (zerop (call-process "wl-paste" nil t nil "--type" "image/png"))
         (buffer-string))))))
+
+(defun codex-app-server-insert-file-reference ()
+  "Insert an @-file reference, completing over project files."
+  (interactive)
+  (insert "@")
+  (when-let* ((file (condition-case nil
+                        (codex--app-server-read-project-file)
+                      (quit nil))))
+    (insert file)))
+
+(defun codex--app-server-read-project-file ()
+  "Read a project file path relative to the session directory."
+  (when-let* ((files (codex--app-server-project-files)))
+    (completing-read "File: " files nil t)))
+
+(defun codex--app-server-project-files ()
+  "Return project file paths under the session directory."
+  (let ((dir (or codex--buffer-directory default-directory)))
+    (when (and dir (file-directory-p dir))
+      (let ((default-directory dir))
+        (split-string
+         (shell-command-to-string
+          "git ls-files 2>/dev/null || find . -type f -not -path './.*' 2>/dev/null")
+         "\n" t)))))
+
+(defun codex-app-server-previous-input ()
+  "Replace the input region with the previous prompt from history."
+  (interactive)
+  (let ((count (length codex--app-server-input-history)))
+    (if (zerop count)
+        (message "No Codex input history")
+      (setq codex--app-server-input-history-index
+            (min (1- count) (1+ (or codex--app-server-input-history-index -1))))
+      (codex--app-server-replace-input
+       (nth codex--app-server-input-history-index
+            codex--app-server-input-history)))))
+
+(defun codex-app-server-next-input ()
+  "Replace the input region with the next prompt from history."
+  (interactive)
+  (let ((index codex--app-server-input-history-index))
+    (cond
+     ((null index) (message "Not navigating Codex input history"))
+     ((<= index 0)
+      (setq codex--app-server-input-history-index nil)
+      (codex--app-server-replace-input ""))
+     (t (setq codex--app-server-input-history-index (1- index))
+        (codex--app-server-replace-input
+         (nth codex--app-server-input-history-index
+              codex--app-server-input-history))))))
+
+(defun codex-app-server-search-input-history ()
+  "Insert a prompt chosen from the input history by completion."
+  (interactive)
+  (if codex--app-server-input-history
+      (codex--app-server-replace-input
+       (completing-read "Input history: "
+                        codex--app-server-input-history nil t))
+    (message "No Codex input history")))
+
+(defun codex--app-server-replace-input (text)
+  "Replace the input region contents with TEXT."
+  (codex--app-server-clear-input)
+  (goto-char (point-max))
+  (when (and text (not (string-empty-p text)))
+    (insert text)))
+
+(defun codex-app-server-open-editor ()
+  "Compose a Codex prompt in a separate buffer; C-c C-c sends it."
+  (interactive)
+  (let ((target (current-buffer))
+        (initial (codex--app-server-input-text)))
+    (codex--app-server-clear-input)
+    (let ((buffer (get-buffer-create "*codex-compose*")))
+      (with-current-buffer buffer
+        (text-mode)
+        (erase-buffer)
+        (when initial (insert initial))
+        (setq-local codex--app-server-compose-target target)
+        (local-set-key (kbd "C-c C-c") #'codex-app-server-compose-send)
+        (local-set-key (kbd "C-c C-k") #'codex-app-server-compose-cancel)
+        (setq header-line-format
+              "Compose Codex prompt — C-c C-c to send, C-c C-k to cancel"))
+      (pop-to-buffer buffer))))
+
+(defun codex-app-server-compose-send ()
+  "Send the composed prompt back to its Codex buffer."
+  (interactive)
+  (let ((text (string-trim (buffer-string)))
+        (target codex--app-server-compose-target))
+    (kill-buffer (current-buffer))
+    (when (and (buffer-live-p target) (not (string-empty-p text)))
+      (with-current-buffer target
+        (codex--app-server-submit-command text)
+        (goto-char (point-max))))))
+
+(defun codex-app-server-compose-cancel ()
+  "Discard the compose buffer without sending."
+  (interactive)
+  (kill-buffer (current-buffer)))
 
 (defun codex--app-server-flush-queued-commands ()
   "Submit commands queued before app-server thread startup."
@@ -2965,8 +3104,8 @@ cursor tracking from buffer position and tripping an assertion in
   (interactive)
   (codex--term-send-action codex-terminal-backend :tab))
 
-(defun codex--term-setup-keymap (_backend)
-  "Set up the local Codex terminal keymap."
+(defun codex--term-setup-keymap (backend)
+  "Set up the local Codex terminal keymap for BACKEND."
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map (current-local-map))
     (define-key map (kbd "C-g") #'codex-send-escape)
@@ -2977,6 +3116,12 @@ cursor tracking from buffer position and tripping an assertion in
     (define-key map (kbd "M-<right>") #'codex-next-agent)
     (define-key map (kbd "TAB") #'codex--terminal-send-tab)
     (define-key map [tab] #'codex--terminal-send-tab)
+    (when (eq backend 'app-server)
+      (define-key map (kbd "@") #'codex-app-server-insert-file-reference)
+      (define-key map (kbd "C-c C-e") #'codex-app-server-open-editor)
+      (define-key map (kbd "M-p") #'codex-app-server-previous-input)
+      (define-key map (kbd "M-n") #'codex-app-server-next-input)
+      (define-key map (kbd "C-c C-r") #'codex-app-server-search-input-history))
     (codex--term-bind-newline-keys map)
     (use-local-map map)))
 

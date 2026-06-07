@@ -1134,6 +1134,47 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (should (= 1 (length vec)))
       (should (equal (alist-get 'type (aref vec 0)) "text")))))
 
+(ert-deftest codex-test-app-server-shell-command-prefix ()
+  "A leading \"!\" runs a shell command instead of sending a turn."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-sh/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-thread-id "t1")
+    (codex--app-server-setup-input-region)
+    (let (sent)
+      (cl-letf (((symbol-function 'codex--app-server-send-request)
+                 (lambda (method params _cb) (setq sent (cons method params)))))
+        (codex--app-server-submit-command "!echo hi"))
+      (should (equal (car sent) "thread/shellCommand"))
+      (should (equal (alist-get 'command (cdr sent)) "echo hi")))
+    (should-not (string-match-p "^User$" (buffer-string)))))
+
+(ert-deftest codex-test-app-server-file-reference ()
+  "Inserting a file reference prepends @ and the chosen path."
+  (with-temp-buffer
+    (cl-letf (((symbol-function 'codex--app-server-read-project-file)
+               (lambda () "src/foo.el")))
+      (codex-app-server-insert-file-reference))
+    (should (equal (buffer-string) "@src/foo.el"))))
+
+(ert-deftest codex-test-app-server-input-history ()
+  "Input history records prompts and navigates with previous/next."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-hist2/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (codex--app-server-record-input "first")
+    (codex--app-server-record-input "second")
+    (should (equal codex--app-server-input-history '("second" "first")))
+    (codex-app-server-previous-input)
+    (should (equal (codex--app-server-input-text) "second"))
+    (codex-app-server-previous-input)
+    (should (equal (codex--app-server-input-text) "first"))
+    (codex-app-server-next-input)
+    (should (equal (codex--app-server-input-text) "second"))
+    (codex-app-server-next-input)
+    (should (equal (codex--app-server-input-text) ""))))
+
 (ert-deftest codex-test-app-server-paste-image ()
   "Pasting a clipboard image writes a temp PNG and queues it for the next turn."
   (with-temp-buffer
