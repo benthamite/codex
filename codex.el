@@ -1075,7 +1075,7 @@ arguments."
   (pcase action
     (:string (codex--app-server-submit-command payload))
     (:return (codex--app-server-send-input))
-    (:tab (codex--app-server-queue-input))
+    (:tab (codex--app-server-complete-or-queue))
     (:escape (codex--app-server-interrupt-turn))
     (:newline (newline))
     (:redraw (recenter -1))
@@ -1632,6 +1632,39 @@ arguments."
   (when codex--app-server-queued-turn-inputs
     (codex--app-server-submit-command
      (pop codex--app-server-queued-turn-inputs))))
+
+(defconst codex--app-server-slash-commands
+  '("/agent" "/approve" "/apps" "/clear" "/compact" "/copy" "/debug-config"
+    "/diff" "/exit" "/experimental" "/fast" "/feedback" "/fork" "/goal"
+    "/help" "/hooks" "/ide" "/init" "/keymap" "/logout" "/mcp" "/memories"
+    "/mention" "/model" "/new" "/permissions" "/personality" "/plan"
+    "/plugins" "/ps" "/quit" "/raw" "/resume" "/review" "/sandbox-add-read-dir"
+    "/side" "/skills" "/status" "/statusline" "/stop" "/theme" "/title" "/vim")
+  "Slash commands recognized by the app-server backend, used for completion.")
+
+(defun codex--app-server-complete-or-queue ()
+  "Complete a slash command when idle, or queue input while a turn runs.
+This mirrors the Codex CLI, where Tab completes the composer when idle
+and queues follow-up input while a turn is in progress."
+  (let ((text (string-trim-left (codex--app-server-input-text))))
+    (cond
+     (codex--app-server-turn-active-p (codex--app-server-queue-input))
+     ((string-prefix-p "/" text) (codex--app-server-complete-slash text))
+     (t (message "Nothing to complete")))))
+
+(defun codex--app-server-complete-slash (text)
+  "Complete the slash command TEXT in the input region."
+  (let* ((token (string-trim text))
+         (matches (seq-filter (lambda (cmd) (string-prefix-p token cmd))
+                              codex--app-server-slash-commands)))
+    (cond
+     ((null matches) (message "No matching command: %s" token))
+     ((= 1 (length matches)) (codex--app-server-replace-input (car matches)))
+     (t (let ((common (try-completion token matches)))
+          (codex--app-server-replace-input
+           (if (and (stringp common) (> (length common) (length token)))
+               common
+             (completing-read "Command: " matches nil t token))))))))
 
 (defun codex--app-server-queue-input ()
   "Queue the input region text for the next turn, like the CLI Tab key.

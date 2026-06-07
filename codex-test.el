@@ -1407,6 +1407,31 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (should-not (string-match-p "▶ Write code" text))
       (should (= 1 (how-many "^Plan$" (point-min) (point-max)))))))
 
+(ert-deftest codex-test-app-server-tab-completes-slash-when-idle ()
+  "TAB completes a slash-command prefix when no turn is active (CLI parity)."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-tab/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-turn-active-p nil)
+    (codex--app-server-setup-input-region)
+    (goto-char (point-max))
+    (insert "/resu")
+    (codex--app-server-complete-or-queue)
+    (should (equal (codex--app-server-input-text) "/resume"))))
+
+(ert-deftest codex-test-app-server-tab-queues-when-running ()
+  "TAB queues input while a turn is active (CLI parity)."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-tabq/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (setq-local codex--app-server-turn-active-p t)
+    (goto-char (point-max))
+    (insert "next msg")
+    (codex--app-server-complete-or-queue)
+    (should (member "next msg" codex--app-server-queued-turn-inputs))
+    (should (equal (codex--app-server-input-text) ""))))
+
 (ert-deftest codex-test-app-server-tab-queues-input-for-next-turn ()
   "Tab queues input during an active turn and flushes it on completion."
   (with-temp-buffer
