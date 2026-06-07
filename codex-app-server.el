@@ -1280,7 +1280,9 @@ the way the Codex CLI groups them onto one `└ Read FILE, FILE' line."
   (codex--app-server-insert (concat (codex--app-server-command-header item) "\n")
                             'codex-app-server-command-face)
   (let* ((id (alist-get 'id item))
-         (output (string-trim-right (or (alist-get 'aggregatedOutput item) "")))
+         (output (string-trim-right
+                  (codex--app-server-string-or-empty
+                   (alist-get 'aggregatedOutput item))))
          (lines (codex--app-server-collapse-output output)))
     (when lines
       (let ((start (codex--app-server-output-point)))
@@ -1290,6 +1292,12 @@ the way the Codex CLI groups them onto one `└ Read FILE, FILE' line."
           (let ((inhibit-read-only t))
             (put-text-property start (codex--app-server-output-point)
                                'codex-output-id id)))))))
+
+(defun codex--app-server-string-or-empty (value)
+  "Return VALUE when it is a string, otherwise return the empty string.
+App-server JSON null values decode as `:null', which optional string
+fields use to mean absent."
+  (if (stringp value) value ""))
 
 (defun codex--app-server-command-reads (item)
   "Return read-action file names for ITEM when it only reads files, else nil.

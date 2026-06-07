@@ -1139,6 +1139,24 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (should (= 1 (how-many "• Explored" (point-min) (point-max))))
       (should (string-match-p "  └ Read alpha.txt, beta.txt" text)))))
 
+(ert-deftest codex-test-app-server-renders-null-command-output ()
+  "A command with JSON null output renders its header without an error."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-null-output/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-full-outputs (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (codex--app-server-handle-message
+     '((method . "item/completed")
+       (params (item (type . "commandExecution") (id . "c-null")
+                     (command . "/bin/zsh -lc \"git status --short\"")
+                     (exitCode . 0)
+                     (aggregatedOutput . :null)))))
+    (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+      (should (string-match-p "• Ran git status --short" text))
+      (should-not (string-match-p "Malformed app-server message" text)))))
+
 (ert-deftest codex-test-app-server-folds-long-command-output ()
   "Long command output collapses to head + marker + last line, like the CLI."
   (with-temp-buffer
