@@ -1097,6 +1097,27 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (should (eq (get-text-property (1- (point)) 'face)
                 'codex-app-server-code-face))))
 
+(ert-deftest codex-test-app-server-read-command-summarized ()
+  "A file-read command is summarized as `Read FILE' with no content dump."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-read/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-full-outputs (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (codex--app-server-handle-message
+     '((method . "item/completed")
+       (params (item (type . "commandExecution") (id . "r1") (exitCode . 0)
+                     (command . "/bin/zsh -lc \"sed -n 1,200p SKILL.md\"")
+                     (commandActions . (((type . "read")
+                                         (name . "SKILL.md")
+                                         (path . "/x/SKILL.md"))))
+                     (aggregatedOutput . "line1\nline2\nSECRETCONTENT\nline4")))))
+    (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+      (should (string-match-p "• Read SKILL.md" text))
+      (should-not (string-match-p "SECRETCONTENT" text))
+      (should-not (string-match-p "sed -n" text)))))
+
 (ert-deftest codex-test-app-server-folds-long-command-output ()
   "Long command output collapses to head + marker + last line, like the CLI."
   (with-temp-buffer

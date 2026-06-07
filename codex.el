@@ -1837,19 +1837,37 @@ With no active turn, send the input immediately like Return."
   "Render a completed command ITEM as a collapsed block like the Codex CLI."
   (unless (gethash (alist-get 'id item) codex--app-server-command-items)
     (puthash (alist-get 'id item) t codex--app-server-command-items)
-    (codex--app-server-insert (concat (codex--app-server-command-header item) "\n")
-                              'codex-app-server-command-face)
-    (let* ((id (alist-get 'id item))
-           (output (string-trim-right (or (alist-get 'aggregatedOutput item) "")))
-           (lines (codex--app-server-collapse-output output)))
-      (when lines
-        (let ((start (codex--app-server-output-point)))
-          (codex--app-server-insert (codex--app-server-indent-output lines))
-          (unless (equal lines (split-string output "\n"))
-            (puthash id output codex--app-server-full-outputs)
-            (let ((inhibit-read-only t))
-              (put-text-property start (codex--app-server-output-point)
-                                 'codex-output-id id))))))))
+    (let ((reads (codex--app-server-command-reads item)))
+      (if reads
+          (codex--app-server-insert
+           (format "• Read %s\n" (string-join reads ", "))
+           'codex-app-server-command-face)
+        (codex--app-server-insert (concat (codex--app-server-command-header item) "\n")
+                                  'codex-app-server-command-face)
+        (let* ((id (alist-get 'id item))
+               (output (string-trim-right (or (alist-get 'aggregatedOutput item) "")))
+               (lines (codex--app-server-collapse-output output)))
+          (when lines
+            (let ((start (codex--app-server-output-point)))
+              (codex--app-server-insert (codex--app-server-indent-output lines))
+              (unless (equal lines (split-string output "\n"))
+                (puthash id output codex--app-server-full-outputs)
+                (let ((inhibit-read-only t))
+                  (put-text-property start (codex--app-server-output-point)
+                                     'codex-output-id id))))))))))
+
+(defun codex--app-server-command-reads (item)
+  "Return read-action file names for ITEM when it only reads files, else nil.
+The Codex CLI summarizes pure file reads as \"Read FILE\" without
+dumping the file contents."
+  (let ((actions (append (alist-get 'commandActions item) nil)))
+    (when (and actions
+               (cl-every (lambda (action)
+                           (equal (alist-get 'type action) "read"))
+                         actions))
+      (mapcar (lambda (action)
+                (or (alist-get 'name action) (alist-get 'path action)))
+              actions))))
 
 (defun codex--app-server-command-header (item)
   "Return the `• Ran COMMAND' header line for command ITEM."
