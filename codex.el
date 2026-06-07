@@ -770,6 +770,9 @@ recompiled with a larger SB_MAX value."
 (defvar-local codex--app-server-status-timer nil
   "Repeating timer that refreshes the app-server status while working.")
 
+(defvar-local codex--app-server-status-overlay nil
+  "Overlay showing the in-buffer working status line above the prompt.")
+
 (defvar-local codex--app-server-last-agent-message nil
   "Text of the most recent completed assistant message.")
 
@@ -1565,6 +1568,7 @@ arguments."
     (setq codex--app-server-turn-active-p t)
     (setq codex--app-server-turn-start-time (float-time))
     (codex--app-server-start-status-timer)
+    (codex--app-server-update-status-overlay)
     (force-mode-line-update)))
 
 (defun codex--app-server-turn-completed (_params)
@@ -1572,9 +1576,33 @@ arguments."
   (setq codex--app-server-turn-active-p nil)
   (setq codex--app-server-current-turn-id nil)
   (codex--app-server-stop-status-timer)
+  (codex--app-server-remove-status-overlay)
   (force-mode-line-update)
   (codex--app-server-ensure-trailing-newline)
   (codex--app-server-flush-turn-queue))
+
+(defun codex--app-server-working-text ()
+  "Return the CLI-style working status text for an active turn."
+  (format "• Working (%ds • esc to interrupt)"
+          (if codex--app-server-turn-start-time
+              (floor (- (float-time) codex--app-server-turn-start-time))
+            0)))
+
+(defun codex--app-server-update-status-overlay ()
+  "Show or refresh the in-buffer working status line above the prompt."
+  (codex--app-server-remove-status-overlay)
+  (when codex--app-server-turn-active-p
+    (let ((point (codex--app-server-output-point)))
+      (setq codex--app-server-status-overlay (make-overlay point point))
+      (overlay-put codex--app-server-status-overlay 'before-string
+                   (propertize (concat (codex--app-server-working-text) "\n")
+                               'face 'codex-app-server-status-face)))))
+
+(defun codex--app-server-remove-status-overlay ()
+  "Remove the in-buffer working status line, if any."
+  (when (overlayp codex--app-server-status-overlay)
+    (delete-overlay codex--app-server-status-overlay))
+  (setq codex--app-server-status-overlay nil))
 
 (defun codex--app-server-mode-line ()
   "Return the app-server status string for the mode line while working."
@@ -1614,10 +1642,12 @@ arguments."
           (run-at-time 1 1 #'codex--app-server-status-tick (current-buffer)))))
 
 (defun codex--app-server-status-tick (buffer)
-  "Refresh the mode line in BUFFER while a turn is active, else stop."
+  "Refresh the status in BUFFER while a turn is active, else stop."
   (if (and (buffer-live-p buffer)
            (buffer-local-value 'codex--app-server-turn-active-p buffer))
-      (with-current-buffer buffer (force-mode-line-update))
+      (with-current-buffer buffer
+        (codex--app-server-update-status-overlay)
+        (force-mode-line-update))
     (when (buffer-live-p buffer)
       (with-current-buffer buffer (codex--app-server-stop-status-timer)))))
 
@@ -3403,6 +3433,8 @@ If FORCE-PROMPT is non-nil, always prompt even if no instances exist."
   (codex--clear-vterm-multiline-buffer)
   (when (timerp (bound-and-true-p codex--app-server-status-timer))
     (cancel-timer codex--app-server-status-timer))
+  (when (overlayp (bound-and-true-p codex--app-server-status-overlay))
+    (delete-overlay codex--app-server-status-overlay))
   (codex--release-managed-advices)
   (codex--cleanup-directory-mapping))
 

@@ -1350,6 +1350,21 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (search-forward "hello")
       (should (< user-pos (match-beginning 0))))))
 
+(ert-deftest codex-test-app-server-working-status-overlay ()
+  "An in-buffer working status line appears during a turn and clears after."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-work/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (codex--app-server-turn-started '((turn (id . "t1"))))
+    (unwind-protect
+        (let ((status (overlay-get codex--app-server-status-overlay 'before-string)))
+          (should (overlayp codex--app-server-status-overlay))
+          (should (string-match-p "Working" status))
+          (should (string-match-p "esc to interrupt" status)))
+      (codex--app-server-turn-completed '((turn))))
+    (should-not codex--app-server-status-overlay)))
+
 (ert-deftest codex-test-app-server-status-mode-line ()
   "The mode line shows a working indicator with tokens during a turn."
   (with-temp-buffer
