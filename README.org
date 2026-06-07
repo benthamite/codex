@@ -10,7 +10,10 @@
 #+texinfo_dir_title: Codex: (codex)
 #+texinfo_dir_desc: Emacs integration for OpenAI Codex CLI
 
-This manual describes the features and customization options for the Emacs Lisp file =codex.el=.
+This manual describes the features and customization options for the Emacs
+package =codex.el=.  The public entry point remains =codex.el=; backend-specific
+implementation lives in =codex-app-server.el=, =codex-eat.el=, and
+=codex-vterm.el=.
 
 * Overview
 :PROPERTIES:

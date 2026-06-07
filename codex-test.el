@@ -1717,6 +1717,24 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (should (eq (get-text-property (1- (point)) 'face)
                 'codex-app-server-reasoning-face))))
 
+(ert-deftest codex-test-app-server-streams-markdown-progressively ()
+  "Markdown is fontified mid-stream, not only when the message completes."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-stream-md/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
+    (setq-local codex-app-server-render-markdown nil)
+    (codex--app-server-setup-input-region)
+    (codex--app-server-handle-message
+     '((method . "item/agentMessage/delta")
+       (params (itemId . "m1") (delta . "# Heading\nbody text"))))
+    ;; render now, as the throttle timer would, before item/completed arrives
+    (codex--app-server-render-streaming-markdown "m1")
+    (goto-char (point-min))
+    (search-forward "Heading")
+    (should (eq (get-text-property (1- (point)) 'face)
+                'codex-app-server-heading-face))))
+
 (ert-deftest codex-test-app-server-renders-markdown-hides-markup ()
   "Markdown rendering matches the CLI: inline markup hidden, block visible."
   (skip-unless (require 'markdown-mode nil t))

@@ -23,7 +23,10 @@
 @node Top
 @top codex.el: Emacs integration for OpenAI Codex CLI
 
-This manual describes the features and customization options for the Emacs Lisp file @samp{codex.el}.
+This manual describes the features and customization options for the Emacs
+package @samp{codex.el}.  The public entry point remains @samp{codex.el}; backend-specific
+implementation lives in @samp{codex-app-server.el}, @samp{codex-eat.el}, and
+@samp{codex-vterm.el}.
 
 @end ifnottex
 

@@ -21,7 +21,7 @@ test:
 compile:
 	$(EMACS) -Q --batch $(LOAD_PATH) \
 	  --eval '(setq byte-compile-error-on-warn t)' \
-	  -f batch-byte-compile codex.el
+	  -f batch-byte-compile codex.el codex-app-server.el codex-eat.el codex-vterm.el
 
 clean:
 	rm -f *.elc
