@@ -406,10 +406,15 @@ arguments."
         (codex--app-server-handle-line line)))))
 
 (defun codex--app-server-handle-line (line)
-  "Parse and handle one app-server JSON LINE."
+  "Parse and handle one app-server JSON LINE.
+JSON null decodes as nil rather than the default `:null' so that
+optional fields the server sends as null behave like absent fields: nil
+flows safely through `alist-get', `append', and the other list
+operations the handlers run, instead of raising `wrong-type-argument'."
   (condition-case err
       (codex--app-server-handle-message
-       (json-parse-string line :object-type 'alist :array-type 'list))
+       (json-parse-string line :object-type 'alist :array-type 'list
+                          :null-object nil))
     (error
      (codex--app-server-insert-status
       (format "Malformed app-server message: %s" (error-message-string err))))))
@@ -489,9 +494,16 @@ arguments."
       ((or "error" "configWarning" "deprecationNotice" "guardianWarning"
            "warning" "windows/worldWritableWarning")
        (codex--app-server-insert-status
-        (or (alist-get 'message params)
+        (or (codex--app-server-notification-message params)
             (format "Codex %s" (string-replace "/" " " method)))))
       (_ nil))))
+
+(defun codex--app-server-notification-message (params)
+  "Return the human-readable message in notification PARAMS, or nil.
+The server reports it as a top-level `message' for warnings but nests it
+under `error' as `message' for turn errors, so check both."
+  (or (alist-get 'message params)
+      (alist-get 'message (alist-get 'error params))))
 
 (defun codex--app-server-render-mcp-status (params)
   "Render an MCP server startup status line from PARAMS."
