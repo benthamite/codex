@@ -439,64 +439,79 @@ operations the handlers run, instead of raising `wrong-type-argument'."
                (alist-get 'result message)
                (alist-get 'error message)))))
 
+(defun codex--app-server-notification-thread-id (params)
+  "Return the thread id carried by app-server notification PARAMS."
+  (or (alist-get 'threadId params)
+      (alist-get 'threadId (alist-get 'turn params))
+      (alist-get 'id (alist-get 'thread params))
+      (alist-get 'threadId (alist-get 'item params))))
+
+(defun codex--app-server-current-thread-notification-p (params)
+  "Return non-nil when notification PARAMS belong in this buffer."
+  (let ((thread-id (codex--app-server-notification-thread-id params)))
+    (or (null thread-id)
+        (null codex--app-server-thread-id)
+        (equal thread-id codex--app-server-thread-id))))
+
 (defun codex--app-server-handle-notification (message)
   "Handle app-server notification MESSAGE."
   (let ((method (alist-get 'method message nil nil #'equal))
         (params (alist-get 'params message)))
-    (pcase method
-      ("thread/started" (codex--app-server-thread-started params))
-      ("turn/started" (codex--app-server-turn-started params))
-      ("turn/completed" (codex--app-server-turn-completed params))
-      ("item/agentMessage/delta"
-       (codex--app-server-render-agent-delta params))
-      ("item/reasoning/summaryTextDelta"
-       (codex--app-server-render-reasoning-delta params))
-      ("item/reasoning/summaryPartAdded"
-       (codex--app-server-render-reasoning-part-break params))
-      ("turn/plan/updated" (codex--app-server-render-plan params))
-      ("thread/tokenUsage/updated"
-       (codex--app-server-token-usage-updated params))
-      ("account/rateLimits/updated"
-       (codex--app-server-rate-limits-updated params))
-      ("hook/started" (codex--app-server-render-hook-event params ""))
-      ("hook/completed" (codex--app-server-render-hook-event params " Completed"))
-      ("item/completed" (codex--app-server-render-completed-item params))
-      ("thread/compacted"
-       (codex--app-server-insert-status "Conversation compacted"))
-      ("thread/name/updated"
-       (when-let* ((name (alist-get 'name params)))
-         (codex--app-server-insert-status (format "Thread renamed: %s" name))))
-      ("thread/goal/updated"
-       (when-let* ((goal (alist-get 'goal params)))
-         (codex--app-server-insert-status (format "Goal: %s" goal))))
-      ("thread/goal/cleared"
-       (codex--app-server-insert-status "Goal cleared"))
-      ("model/rerouted"
-       (codex--app-server-insert-status
-        (format "Model rerouted%s"
-                (if-let* ((to (alist-get 'model params))) (format " to %s" to) ""))))
-      ("mcpServer/startupStatus/updated"
-       (codex--app-server-render-mcp-status params))
-      ("thread/realtime/started"
-       (codex--app-server-insert-status "Realtime session started"))
-      ("thread/realtime/closed"
-       (setq codex--app-server-realtime-role nil)
-       (codex--app-server-insert-status "Realtime session closed"))
-      ("thread/realtime/error"
-       (codex--app-server-insert-status
-        (format "Realtime error: %s" (or (alist-get 'message params) "unknown"))))
-      ("thread/realtime/transcript/delta"
-       (codex--app-server-render-realtime-transcript params))
-      ("thread/realtime/transcript/done"
-       (codex--app-server-realtime-transcript-done))
-      ("thread/realtime/itemAdded"
-       (codex--app-server-render-history-item (alist-get 'item params)))
-      ((or "error" "configWarning" "deprecationNotice" "guardianWarning"
-           "warning" "windows/worldWritableWarning")
-       (codex--app-server-insert-status
-        (or (codex--app-server-notification-message params)
-            (format "Codex %s" (string-replace "/" " " method)))))
-      (_ nil))))
+    (when (codex--app-server-current-thread-notification-p params)
+      (pcase method
+        ("thread/started" (codex--app-server-thread-started params))
+        ("turn/started" (codex--app-server-turn-started params))
+        ("turn/completed" (codex--app-server-turn-completed params))
+        ("item/agentMessage/delta"
+         (codex--app-server-render-agent-delta params))
+        ("item/reasoning/summaryTextDelta"
+         (codex--app-server-render-reasoning-delta params))
+        ("item/reasoning/summaryPartAdded"
+         (codex--app-server-render-reasoning-part-break params))
+        ("turn/plan/updated" (codex--app-server-render-plan params))
+        ("thread/tokenUsage/updated"
+         (codex--app-server-token-usage-updated params))
+        ("account/rateLimits/updated"
+         (codex--app-server-rate-limits-updated params))
+        ("hook/started" (codex--app-server-render-hook-event params ""))
+        ("hook/completed" (codex--app-server-render-hook-event params " Completed"))
+        ("item/completed" (codex--app-server-render-completed-item params))
+        ("thread/compacted"
+         (codex--app-server-insert-status "Conversation compacted"))
+        ("thread/name/updated"
+         (when-let* ((name (alist-get 'name params)))
+           (codex--app-server-insert-status (format "Thread renamed: %s" name))))
+        ("thread/goal/updated"
+         (when-let* ((goal (alist-get 'goal params)))
+           (codex--app-server-insert-status (format "Goal: %s" goal))))
+        ("thread/goal/cleared"
+         (codex--app-server-insert-status "Goal cleared"))
+        ("model/rerouted"
+         (codex--app-server-insert-status
+          (format "Model rerouted%s"
+                  (if-let* ((to (alist-get 'model params))) (format " to %s" to) ""))))
+        ("mcpServer/startupStatus/updated"
+         (codex--app-server-render-mcp-status params))
+        ("thread/realtime/started"
+         (codex--app-server-insert-status "Realtime session started"))
+        ("thread/realtime/closed"
+         (setq codex--app-server-realtime-role nil)
+         (codex--app-server-insert-status "Realtime session closed"))
+        ("thread/realtime/error"
+         (codex--app-server-insert-status
+          (format "Realtime error: %s" (or (alist-get 'message params) "unknown"))))
+        ("thread/realtime/transcript/delta"
+         (codex--app-server-render-realtime-transcript params))
+        ("thread/realtime/transcript/done"
+         (codex--app-server-realtime-transcript-done))
+        ("thread/realtime/itemAdded"
+         (codex--app-server-render-history-item (alist-get 'item params)))
+        ((or "error" "configWarning" "deprecationNotice" "guardianWarning"
+             "warning" "windows/worldWritableWarning")
+         (codex--app-server-insert-status
+          (or (codex--app-server-notification-message params)
+              (format "Codex %s" (string-replace "/" " " method)))))
+        (_ nil)))))
 
 (defun codex--app-server-notification-message (params)
   "Return the human-readable message in notification PARAMS, or nil.

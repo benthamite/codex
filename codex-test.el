@@ -1045,6 +1045,43 @@ assertion in `eat--t-cur-left' on the following cursor move."
                  (string-match "my draft" text))))
     (should (equal (codex--app-server-input-text) "my draft"))))
 
+(ert-deftest codex-test-app-server-ignores-events-from-other-threads ()
+  "App-server buffers do not render child/sub-agent thread events."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-thread-filter/*" t)
+    (setq-local codex--app-server-thread-id "parent-thread")
+    (setq-local codex--app-server-current-turn-id "parent-turn")
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-full-outputs (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (codex--app-server-handle-message
+     '((method . "item/agentMessage/delta")
+       (params (threadId . "child-thread")
+               (turnId . "child-turn")
+               (itemId . "child-agent")
+               (delta . "child assistant text"))))
+    (codex--app-server-handle-message
+     '((method . "item/completed")
+       (params (threadId . "child-thread")
+               (item (type . "commandExecution")
+                     (id . "child-command")
+                     (threadId . "child-thread")
+                     (turnId . "child-turn")
+                     (command . "/bin/zsh -lc \"echo child command\"")
+                     (exitCode . 0)
+                     (aggregatedOutput . "child output")))))
+    (codex--app-server-handle-message
+     '((method . "turn/started")
+       (params (threadId . "child-thread")
+               (turn (id . "child-turn")))))
+    (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+      (should-not (string-match-p "child assistant text" text))
+      (should-not (string-match-p "child command" text))
+      (should-not (string-match-p "child output" text)))
+    (should (equal codex--app-server-thread-id "parent-thread"))
+    (should (equal codex--app-server-current-turn-id "parent-turn"))))
+
 (ert-deftest codex-test-app-server-input-region-sends-and-clears ()
   "Sending app-server input renders a user turn and clears the input."
   (with-temp-buffer
