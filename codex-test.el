@@ -1236,6 +1236,25 @@ assertion in `eat--t-cur-left' on the following cursor move."
               (should (string-match-p "FAKEDATA" (buffer-string)))))
         (delete-file file)))))
 
+(ert-deftest codex-test-app-server-paste-image-inserts-placeholder ()
+  "Pasting images inserts incrementing `[Image #N]' tokens, like the CLI."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-img/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-pending-images nil)
+    (codex--app-server-setup-input-region)
+    (goto-char (point-max))
+    (cl-letf (((symbol-function 'codex--app-server-clipboard-image-data)
+               (lambda () "\211PNG\r\n\032\nFAKE")))
+      (insert "first ")
+      (codex-app-server-paste-image)
+      (insert " second ")
+      (codex-app-server-paste-image))
+    (should (equal (codex--app-server-input-text)
+                   "first [Image #1] second [Image #2]"))
+    (dolist (file codex--app-server-pending-images)
+      (when (file-exists-p file) (delete-file file)))))
+
 (ert-deftest codex-test-app-server-input-vector-includes-mentions ()
   "Pending file mentions attach as mention input items, then clear."
   (with-temp-buffer

@@ -2548,13 +2548,26 @@ Its output arrives as a command-execution item like the CLI's \"!\"."
   (message "Image attached for next Codex turn: %s" path))
 
 (defun codex-app-server-paste-image ()
-  "Attach an image from the clipboard to the next app-server turn input."
+  "Attach a clipboard image and insert its composer placeholder.
+Like the Codex CLI, this inserts an `[Image #N]' token into the composer
+at point and attaches the image to the next turn's input."
   (interactive)
   (let ((file (codex--app-server-clipboard-image-file)))
     (if file
         (progn (push file codex--app-server-pending-images)
-               (message "Clipboard image attached for next Codex turn"))
+               (insert (format "[Image #%d]"
+                               (codex--app-server-next-image-number))))
       (user-error "No image found on the clipboard"))))
+
+(defun codex--app-server-next-image-number ()
+  "Return the next `[Image #N]' number for the current composer.
+Numbering restarts at 1 for each message, matching the Codex CLI, by
+counting the placeholders already present in the input region."
+  (let ((text (codex--app-server-input-text)) (highest 0) (pos 0))
+    (while (string-match "\\[Image #\\([0-9]+\\)\\]" text pos)
+      (setq highest (max highest (string-to-number (match-string 1 text)))
+            pos (match-end 0)))
+    (1+ highest)))
 
 (defun codex--app-server-clipboard-image-file ()
   "Save a clipboard image to a temporary PNG file and return its path, or nil."
