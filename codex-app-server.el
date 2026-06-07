@@ -797,7 +797,7 @@ arguments."
 
 (defun codex--app-server-codex-version (user-agent)
   "Return the Codex version parsed from USER-AGENT, or nil when absent."
-  (when (and user-agent
+  (when (and (stringp user-agent)
              (string-match "/\\([0-9]+\\.[0-9]+\\.[0-9]+\\)" user-agent))
     (match-string 1 user-agent)))
 

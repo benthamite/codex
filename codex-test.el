@@ -1023,6 +1023,7 @@ assertion in `eat--t-cur-left' on the following cursor move."
                   "codex.el/0.137.0 (Mac OS 26.4.1; arm64) xterm-256color")
                  "0.137.0"))
   (should (null (codex--app-server-codex-version nil)))
+  (should (null (codex--app-server-codex-version :null)))
   (should (null (codex--app-server-codex-version "no-version-here"))))
 
 (ert-deftest codex-test-app-server-output-renders-above-input-prompt ()
