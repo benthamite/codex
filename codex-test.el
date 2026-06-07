@@ -1616,6 +1616,45 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (codex--app-server-complete-or-queue))
     (should (equal (codex--app-server-input-text) "$skill-creator"))))
 
+(ert-deftest codex-test-app-server-skills-include-project-local ()
+  "Skill completion includes project-local `.claude/skills' entries."
+  (let* ((project (make-temp-file "codex-project-skills" t))
+         (skill-dir (expand-file-name ".claude/skills/org-note" project))
+         (codex-app-server-skill-directories nil)
+         (codex--app-server-skill-cache nil)
+         (codex--app-server-skill-cache-key nil))
+    (unwind-protect
+        (with-temp-buffer
+          (make-directory skill-dir t)
+          (with-temp-file (expand-file-name "SKILL.md" skill-dir)
+            (insert "---\nname: org-note\n---\n"))
+          (setq-local codex--buffer-directory project)
+          (should (member "org-note" (codex--app-server-skill-names))))
+      (delete-directory project t))))
+
+(ert-deftest codex-test-app-server-tab-completes-project-local-skill ()
+  "TAB completes a project-local skill reference."
+  (let* ((project (make-temp-file "codex-project-skill-tab" t))
+         (skill-dir (expand-file-name ".claude/skills/org-note" project))
+         (codex-app-server-skill-directories nil)
+         (codex--app-server-skill-cache nil)
+         (codex--app-server-skill-cache-key nil))
+    (unwind-protect
+        (with-temp-buffer
+          (make-directory skill-dir t)
+          (with-temp-file (expand-file-name "SKILL.md" skill-dir)
+            (insert "---\nname: org-note\n---\n"))
+          (rename-buffer "*codex:/tmp/app-server-project-skill-tab/*" t)
+          (setq-local codex--buffer-directory project)
+          (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+          (setq-local codex--app-server-turn-active-p nil)
+          (codex--app-server-setup-input-region)
+          (goto-char (point-max))
+          (insert "$org-")
+          (codex--app-server-complete-or-queue)
+          (should (equal (codex--app-server-input-text) "$org-note")))
+      (delete-directory project t))))
+
 (ert-deftest codex-test-app-server-tab-queues-when-running ()
   "TAB queues input while a turn is active (CLI parity)."
   (with-temp-buffer

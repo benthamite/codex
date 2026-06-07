@@ -1091,14 +1091,28 @@ and queues follow-up input while a turn is in progress."
             (when (file-directory-p dir)
               (list dir (file-attribute-modification-time
                          (file-attributes dir)))))
-          codex-app-server-skill-directories))
+          (codex--app-server-skill-directories)))
 
 (defun codex--app-server-read-skill-names ()
-  "Read skill names from `codex-app-server-skill-directories'."
+  "Read skill names from configured and project-local skill directories."
   (sort (delete-dups
          (delq nil (mapcan #'codex--app-server-skill-names-in-directory
-                           codex-app-server-skill-directories)))
+                           (codex--app-server-skill-directories))))
         #'string<))
+
+(defun codex--app-server-skill-directories ()
+  "Return skill directories visible to the current app-server session."
+  (delete-dups
+   (delq nil
+         (append (copy-sequence codex-app-server-skill-directories)
+                 (codex--app-server-project-skill-directories)))))
+
+(defun codex--app-server-project-skill-directories ()
+  "Return project-local skill directories for `codex--buffer-directory'."
+  (when-let* ((dir (or codex--buffer-directory default-directory)))
+    (let ((project (file-name-as-directory (expand-file-name dir))))
+      (mapcar (lambda (name) (expand-file-name name project))
+              '(".claude/skills" ".claude/programmatic-skills")))))
 
 (defun codex--app-server-skill-names-in-directory (directory)
   "Return skill names below DIRECTORY."
