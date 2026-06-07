@@ -1036,6 +1036,15 @@ Returns the buffer containing the terminal.")
 (declare-function viper-mode "viper")
 (defvar markdown-hide-markup)
 
+(defvar codex-app-server-mode-map (make-sparse-keymap)
+  "Keymap for `codex-app-server-mode'.
+Most bindings are installed dynamically by `codex--term-setup-keymap',
+since they depend on `codex-newline-keybinding-style' and are shared with
+the terminal backends.")
+
+(define-derived-mode codex-app-server-mode fundamental-mode "Codex"
+  "Major mode for Codex app-server session buffers.")
+
 (cl-defmethod codex--term-make ((_backend (eql app-server)) buffer-name
                                 program &optional switches)
   "Create an app-server Codex buffer named BUFFER-NAME.
@@ -1046,6 +1055,7 @@ arguments."
                                 "--listen" codex-app-server-listen-url)
                           switches)))
     (with-current-buffer buffer
+      (codex-app-server-mode)
       (let ((inhibit-read-only t))
         (erase-buffer))
       (setq-local codex--app-server-pending-output "")
@@ -3391,13 +3401,13 @@ cursor tracking from buffer position and tripping an assertion in
     (define-key map (kbd "C-g") #'codex-send-escape)
     (define-key map (kbd "C-l") #'codex-redraw)
     (define-key map (kbd "C-c C-o") #'codex-app-server-expand-output)
-    (define-key map (kbd "C-c C-v") #'codex-app-server-paste-image)
     (define-key map (kbd "M-<left>") #'codex-previous-agent)
     (define-key map (kbd "M-<right>") #'codex-next-agent)
     (define-key map (kbd "TAB") #'codex--terminal-send-tab)
     (define-key map [tab] #'codex--terminal-send-tab)
     (when (eq backend 'app-server)
       (define-key map (kbd "@") #'codex-app-server-insert-file-reference)
+      (define-key map (kbd "C-v") #'codex-app-server-paste-image)
       (define-key map (kbd "C-c C-e") #'codex-app-server-open-editor)
       (define-key map (kbd "M-p") #'codex-app-server-previous-input)
       (define-key map (kbd "M-n") #'codex-app-server-next-input)

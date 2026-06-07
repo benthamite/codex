@@ -1546,6 +1546,21 @@ assertion in `eat--t-cur-left' on the following cursor move."
                      (message . "rate limit exceeded")))))
     (should (string-match-p "Error: rate limit exceeded" (buffer-string)))))
 
+(ert-deftest codex-test-app-server-mode-is-major-mode ()
+  "Codex app-server buffers use `codex-app-server-mode', not fundamental."
+  (with-temp-buffer
+    (codex-app-server-mode)
+    (should (eq major-mode 'codex-app-server-mode))
+    (should (derived-mode-p 'codex-app-server-mode))))
+
+(ert-deftest codex-test-app-server-binds-paste-image-to-ctrl-v ()
+  "C-v attaches a clipboard image in app-server buffers, matching Codex."
+  (with-temp-buffer
+    (codex-app-server-mode)
+    (codex--term-setup-keymap 'app-server)
+    (should (eq (lookup-key (current-local-map) (kbd "C-v"))
+                #'codex-app-server-paste-image))))
+
 (ert-deftest codex-test-app-server-renders-reasoning-summary ()
   "Reasoning summary deltas render as dimmed bulleted text."
   (with-temp-buffer
