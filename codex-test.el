@@ -1505,7 +1505,7 @@ assertion in `eat--t-cur-left' on the following cursor move."
                 'codex-app-server-reasoning-face))))
 
 (ert-deftest codex-test-app-server-renders-markdown-hides-markup ()
-  "Completed messages render through `gfm-mode' with markup hidden."
+  "Markdown rendering matches the CLI: inline markup hidden, block visible."
   (skip-unless (require 'markdown-mode nil t))
   (with-temp-buffer
     (rename-buffer "*codex:/tmp/app-server-md2/*" t)
@@ -1519,14 +1519,20 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (codex--app-server-handle-message
        '((method . "item/completed")
          (params (item (type . "agentMessage") (id . "m1"))))))
+    ;; inline emphasis text is faced and its markers are hidden
     (goto-char (point-min))
     (search-forward "bold")
     (should (get-text-property (1- (point)) 'face))
     (goto-char (point-min))
     (search-forward "**")
-    (let ((marker-pos (- (point) 1)))
-      (should (or (get-text-property marker-pos 'invisible)
-                  (equal (get-text-property marker-pos 'display) ""))))))
+    (should (get-text-property (- (point) 1) 'invisible))
+    ;; block markup (the heading ##) stays VISIBLE, like the CLI
+    (goto-char (point-min))
+    (search-forward "## Head")
+    (let ((hash-pos (match-beginning 0)))
+      (should-not (equal (get-text-property hash-pos 'display) ""))
+      (should-not (get-text-property hash-pos 'invisible))
+      (should (get-text-property hash-pos 'face)))))
 
 (ert-deftest codex-test-app-server-process-filter-handles-json-lines ()
   "App-server filter parses newline-delimited JSON messages."

@@ -2055,12 +2055,16 @@ Uses `gfm-mode' when available, falling back to a built-in highlighter."
     (buffer-string)))
 
 (defun codex--app-server-transplant-markdown (rendered start)
-  "Copy display properties from RENDERED onto the buffer from START."
+  "Copy display properties from RENDERED onto the buffer from START.
+Like the Codex CLI, inline emphasis markup is hidden (via `invisible')
+while block markup such as heading and list markers stays visible, so
+the `display' property that `gfm-mode' uses to hide block markers is
+deliberately not copied."
   (let ((pos 0)
         (len (length rendered)))
     (while (< pos len)
       (let ((next (or (next-property-change pos rendered) len)))
-        (dolist (prop '(face invisible display composition))
+        (dolist (prop '(face invisible composition))
           (when-let* ((value (get-text-property pos prop rendered)))
             (put-text-property (+ start pos) (+ start next) prop value)))
         (setq pos next)))))
