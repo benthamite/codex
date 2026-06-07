@@ -2190,12 +2190,14 @@ the old-file number, added lines and context use the new-file number."
         (codex--app-server-fontify-matches "^-.*$" 'diff-removed start end)))))
 
 (defun codex--app-server-render-completed-tool-call (item)
-  "Render a completed MCP tool-call ITEM with a CLI-style bullet."
+  "Render a completed MCP tool-call ITEM like the CLI.
+Shows `• Called SERVER.TOOL(ARGS)' then the folded result under `└'."
   (codex--app-server-ensure-section-break)
   (codex--app-server-insert
    (concat codex--app-server-bullet "Called "
            (if-let* ((server (alist-get 'server item))) (concat server ".") "")
-           (or (alist-get 'tool item) "tool") "\n")
+           (or (alist-get 'tool item) "tool")
+           (codex--app-server-tool-arguments item) "\n")
    'codex-app-server-command-face)
   (let ((result (string-trim-right (codex--app-server-tool-result-text item))))
     (unless (string-empty-p result)
@@ -2203,14 +2205,33 @@ the old-file number, added lines and context use the new-file number."
        (codex--app-server-indent-output
         (codex--app-server-collapse-output result))))))
 
+(defun codex--app-server-tool-arguments (item)
+  "Return the `(ARGS-JSON)' suffix for MCP tool-call ITEM, or an empty string."
+  (if-let* ((args (alist-get 'arguments item)))
+      (format "(%s)" (codex--app-server-stringify args))
+    ""))
+
 (defun codex--app-server-tool-result-text (item)
   "Return a string rendering of MCP tool-call ITEM result or error."
   (let ((error (alist-get 'error item))
         (result (alist-get 'result item)))
     (cond (error (format "error: %s" error))
           ((stringp result) result)
-          (result (codex--app-server-stringify result))
+          (result (codex--app-server-tool-content-text result))
           (t ""))))
+
+(defun codex--app-server-tool-content-text (result)
+  "Return the joined text of MCP tool RESULT content, else its JSON.
+Like the CLI, this shows the textual result rather than the raw envelope."
+  (let ((content (append (alist-get 'content result) nil)))
+    (if content
+        (string-join
+         (delq nil (mapcar (lambda (part)
+                             (when (equal (alist-get 'type part) "text")
+                               (alist-get 'text part)))
+                           content))
+         "\n")
+      (codex--app-server-stringify result))))
 
 (defun codex--app-server-stringify (value)
   "Return a compact string representation of VALUE."

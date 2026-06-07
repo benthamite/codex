@@ -1629,6 +1629,27 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (search-forward "-four")
     (should (eq (get-text-property (1- (point)) 'face) 'diff-removed))))
 
+(ert-deftest codex-test-app-server-renders-mcp-tool-call ()
+  "An MCP tool call renders `• Called SERVER.TOOL(ARGS)' + result text, like the CLI."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-mcp/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-full-outputs (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (codex--app-server-handle-message
+     '((method . "item/completed")
+       (params (item (type . "mcpToolCall") (id . "m1") (status . "completed")
+                     (server . "node_repl") (tool . "js")
+                     (arguments (code . "1+1"))
+                     (result (content . (((type . "text") (text . "2")))))))))
+    (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+      (should (string-match-p "• Called node_repl.js(" text))
+      (should (string-match-p "\"code\":\"1\\+1\"" text))
+      (should (string-match-p "└ 2" text))
+      ;; the raw result envelope is not dumped
+      (should-not (string-match-p "structuredContent\\|\"content\":" text)))))
+
 (ert-deftest codex-test-app-server-renders-web-search ()
   "A web-search item renders as `• Searched the web for QUERY', like the CLI."
   (with-temp-buffer
