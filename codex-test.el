@@ -1098,7 +1098,7 @@ assertion in `eat--t-cur-left' on the following cursor move."
                 'codex-app-server-code-face))))
 
 (ert-deftest codex-test-app-server-folds-long-command-output ()
-  "Long command output is folded with a line-count marker, not dumped."
+  "Long command output collapses to head + marker + last line, like the CLI."
   (with-temp-buffer
     (rename-buffer "*codex:/tmp/app-server-cmd/*" t)
     (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
@@ -1111,14 +1111,15 @@ assertion in `eat--t-cur-left' on the following cursor move."
        `((method . "item/completed")
          (params (item (type . "commandExecution") (id . "c1")
                        (command . "/bin/zsh -lc \"seq 1 100\"")
-                       (exitCode . 0) (durationMs . 5)
+                       (exitCode . 0)
                        (aggregatedOutput . ,output))))))
     (let ((text (buffer-substring-no-properties (point-min) (point-max))))
-      (should (string-match-p "seq 1 100" text))
-      (should (string-match-p "^5$" text))
-      (should-not (string-match-p "^50$" text))
-      (should (string-match-p "… \\+95 lines" text))
-      (should (string-match-p "✓ succeeded in 5ms" text)))))
+      (should (string-match-p "• Ran seq 1 100" text))
+      (should (string-match-p "^  └ 1$" text))
+      (should (string-match-p "^    5$" text))
+      (should-not (string-match-p "^    50$" text))
+      (should (string-match-p "… \\+94 lines (C-c C-o to expand)" text))
+      (should (string-match-p "^    100$" text)))))
 
 (ert-deftest codex-test-app-server-input-vector-includes-images ()
   "Pending images attach as localImage input items, then clear."

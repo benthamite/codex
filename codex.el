@@ -140,11 +140,11 @@ a lightweight built-in highlighter is used."
   :type 'boolean
   :group 'codex-app-server)
 
-(defcustom codex-app-server-max-command-output-lines 10
-  "Maximum number of command output lines shown in app-server buffers.
-Like the Codex CLI, command output longer than this is folded and the
-remaining line count is shown as a \"… +N lines\" marker instead of
-printing the full output."
+(defcustom codex-app-server-max-command-output-lines 3
+  "Number of leading command output lines shown in app-server buffers.
+Like the Codex CLI, long command output is collapsed to these head
+lines, a \"… +N lines\" marker, and the final line.  The default of 3
+matches the Codex CLI."
   :type 'integer
   :group 'codex-app-server)
 
@@ -1834,41 +1834,50 @@ With no active turn, send the input immediately like Return."
       ("agentMessage" (codex--app-server-fontify-completed-message item)))))
 
 (defun codex--app-server-render-completed-command (item)
-  "Render a completed command ITEM as a folded command block."
+  "Render a completed command ITEM as a collapsed block like the Codex CLI."
   (unless (gethash (alist-get 'id item) codex--app-server-command-items)
     (puthash (alist-get 'id item) t codex--app-server-command-items)
-    (codex--app-server-insert-role "Command")
-    (codex--app-server-insert (codex--app-server-command-display item)
+    (codex--app-server-insert (concat (codex--app-server-command-header item) "\n")
                               'codex-app-server-command-face)
     (let* ((id (alist-get 'id item))
            (output (string-trim-right (or (alist-get 'aggregatedOutput item) "")))
-           (folded (codex--app-server-fold-output output)))
-      (unless (string-empty-p output)
+           (lines (codex--app-server-collapse-output output)))
+      (when lines
         (let ((start (codex--app-server-output-point)))
-          (codex--app-server-insert (concat "\n" folded))
-          (unless (string= folded output)
+          (codex--app-server-insert (codex--app-server-indent-output lines))
+          (unless (equal lines (split-string output "\n"))
             (puthash id output codex--app-server-full-outputs)
             (let ((inhibit-read-only t))
               (put-text-property start (codex--app-server-output-point)
-                                 'codex-output-id id))))))
-    (codex--app-server-insert (concat "\n" (codex--app-server-command-status item))
-                              'codex-app-server-status-face)))
+                                 'codex-output-id id))))))))
 
-(defun codex--app-server-command-status (item)
-  "Return a status summary line for command ITEM."
-  (let ((exit (alist-get 'exitCode item))
-        (ms (alist-get 'durationMs item)))
-    (concat (cond ((null exit) "done")
-                  ((eq exit 0) "✓ succeeded")
-                  (t (format "✗ exit %s" exit)))
-            (when (numberp ms)
-              (format " in %s" (codex--app-server-format-duration ms))))))
+(defun codex--app-server-command-header (item)
+  "Return the `• Ran COMMAND' header line for command ITEM."
+  (let ((command (codex--app-server-command-display item))
+        (exit (alist-get 'exitCode item)))
+    (if (and exit (not (eq exit 0)))
+        (format "✗ Ran %s (exit %s)" command exit)
+      (format "• Ran %s" command))))
 
-(defun codex--app-server-format-duration (ms)
-  "Return a human-readable duration for MS milliseconds."
-  (cond ((< ms 1000) (format "%dms" ms))
-        ((< ms 60000) (format "%.1fs" (/ ms 1000.0)))
-        (t (format "%dm%ds" (/ ms 60000) (/ (% ms 60000) 1000)))))
+(defun codex--app-server-collapse-output (output)
+  "Return display lines for command OUTPUT, collapsed like the CLI.
+Shows the first `codex-app-server-max-command-output-lines' lines, a
+\"… +N lines\" marker, and the final line when OUTPUT is long."
+  (unless (string-empty-p output)
+    (let* ((lines (split-string output "\n"))
+           (head codex-app-server-max-command-output-lines)
+           (total (length lines)))
+      (if (<= total (+ head 2))
+          lines
+        (append (seq-take lines head)
+                (list (format "… +%d lines (C-c C-o to expand)"
+                              (- total head 1)))
+                (last lines))))))
+
+(defun codex--app-server-indent-output (lines)
+  "Indent LINES with the CLI tree connector on the first line."
+  (concat "  └ " (car lines)
+          (mapconcat (lambda (line) (concat "\n    " line)) (cdr lines) "")))
 
 (defun codex--app-server-render-completed-filechange (item)
   "Render a completed file-change ITEM as folded, faced diffs."
