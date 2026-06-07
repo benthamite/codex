@@ -51,3 +51,22 @@ if ! grep -qx '\*codex:/tmp/project\*' "$args_file"; then
   printf 'Expected CODEX_BUFFER_NAME to be forwarded to emacsclient\n' >&2
   exit 1
 fi
+
+args_file="$tmp_dir/args-socket"
+output=$(printf '{}\n' | CODEX_BUFFER_NAME='*codex:/tmp/project*' \
+  CODEX_HOOK_WRAPPER_TEST_ARGS="$args_file" \
+  CODEX_EMACSCLIENT_SOCKET_DIR='/real/tmp/emacs501' \
+  "$repo_dir/bin/codex-hook-wrapper" Stop \
+  --emacsclient "$fake_emacsclient" \
+  --socket-name server 2>&1)
+
+if [ "$output" != "ok" ]; then
+  printf 'Expected response output from emacsclient, got: %s\n' "$output" >&2
+  exit 1
+fi
+
+if ! grep -qx -- '--socket-name' "$args_file" \
+  || ! grep -qx '/real/tmp/emacs501/server' "$args_file"; then
+  printf 'Expected relative socket name to resolve against socket dir\n' >&2
+  exit 1
+fi

@@ -58,6 +58,22 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
+resolve_local_socket_name() {
+    case "$socket_name" in
+        '' | /*)
+            return
+            ;;
+    esac
+    socket_dir=${CODEX_EMACSCLIENT_SOCKET_DIR:-}
+    if [ -z "$socket_dir" ]; then
+        darwin_tmp=$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || true)
+        [ -n "$darwin_tmp" ] && socket_dir="${darwin_tmp}emacs$(id -u)"
+    fi
+    [ -n "$socket_dir" ] && socket_name="${socket_dir%/}/$socket_name"
+}
+
+resolve_local_socket_name
+
 if [ -z "${CODEX_BUFFER_NAME:-}" ]; then
     cat >/dev/null || true
     exit 0
