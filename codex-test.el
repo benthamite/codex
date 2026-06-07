@@ -1082,6 +1082,36 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (should (equal codex--app-server-thread-id "parent-thread"))
     (should (equal codex--app-server-current-turn-id "parent-turn"))))
 
+(ert-deftest codex-test-app-server-separates-stderr-from-protocol-stream ()
+  "App-server stderr logs do not enter the JSON protocol renderer."
+  (let* ((script-body
+          (concat "#!/bin/sh\n"
+                  "printf '%s\\n' 'MCP codex_apps: ready' >&2\n"
+                  "printf '%s\\n' "
+                  "'{\"method\":\"mcpServer/startupStatus/updated\","
+                  "\"params\":{\"name\":\"codex_apps\",\"status\":\"ready\"}}'\n"))
+         (script (make-temp-file "codex-fake-app-server-" nil nil script-body))
+         (buffer-name " *codex-test-app-server-stderr*")
+         buffer)
+    (unwind-protect
+        (progn
+          (set-file-modes script #o700)
+          (setq buffer (codex--term-make 'app-server buffer-name script nil))
+          (while (process-live-p (buffer-local-value 'codex--app-server-process buffer))
+            (accept-process-output
+             (buffer-local-value 'codex--app-server-process buffer) 0.1))
+          (with-current-buffer buffer
+            (codex--app-server-drain-lines)
+            (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+              (should (string-match-p "MCP codex_apps: ready" text))
+              (should-not (string-match-p "Malformed app-server message" text)))))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (codex--term-cleanup 'app-server))
+        (kill-buffer buffer))
+      (when (file-exists-p script)
+        (delete-file script)))))
+
 (ert-deftest codex-test-app-server-input-region-sends-and-clears ()
   "Sending app-server input renders a user turn and clears the input."
   (with-temp-buffer

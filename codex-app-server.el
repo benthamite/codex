@@ -128,6 +128,9 @@ because per-tool hooks can be frequent."
 (defvar-local codex--app-server-process nil
   "App-server process associated with the current Codex buffer.")
 
+(defvar-local codex--app-server-stderr-buffer nil
+  "Hidden buffer receiving app-server standard error output.")
+
 (defvar-local codex--app-server-pending-output ""
   "Incomplete newline-delimited JSON output from app-server.")
 
@@ -275,6 +278,9 @@ the terminal backends.")
 PROGRAM is the Codex executable.  SWITCHES are app-server CLI
 arguments."
   (let* ((buffer (get-buffer-create buffer-name))
+         (stderr-buffer (generate-new-buffer
+                         (format " %s stderr"
+                                 (string-trim buffer-name "\\*"))))
          (command (append (list program "app-server"
                                 "--listen" codex-app-server-listen-url)
                           switches)))
@@ -282,7 +288,10 @@ arguments."
       (codex-app-server-mode)
       (let ((inhibit-read-only t))
         (erase-buffer))
+      (when (buffer-live-p codex--app-server-stderr-buffer)
+        (kill-buffer codex--app-server-stderr-buffer))
       (setq-local codex--app-server-pending-output "")
+      (setq-local codex--app-server-stderr-buffer stderr-buffer)
       (setq-local codex--app-server-output-marker nil)
       (setq-local codex--app-server-input-marker nil)
       (setq-local codex--app-server-queued-turn-inputs nil)
@@ -310,6 +319,7 @@ arguments."
                          :command command
                          :connection-type 'pipe
                          :coding 'utf-8-emacs
+                         :stderr stderr-buffer
                          :filter #'codex--app-server-process-filter
                          :sentinel #'codex--app-server-process-sentinel)))
       (with-current-buffer buffer
@@ -383,7 +393,10 @@ arguments."
   "Clean up app-server buffer-local state."
   (codex--app-server-cancel-markdown-render)
   (codex--app-server-stop-status-timer)
-  (codex--app-server-remove-status-overlay))
+  (codex--app-server-remove-status-overlay)
+  (when (buffer-live-p codex--app-server-stderr-buffer)
+    (kill-buffer codex--app-server-stderr-buffer))
+  (setq-local codex--app-server-stderr-buffer nil))
 
 (defun codex--app-server-process-filter (process output)
   "Handle newline-delimited app-server OUTPUT from PROCESS."
@@ -2365,7 +2378,10 @@ The Codex CLI shows one blank line between successive output items."
       (with-current-buffer buffer
         (unless (process-live-p process)
           (codex--app-server-insert-status
-           (format "Codex app-server %s" (string-trim event))))))))
+           (format "Codex app-server %s" (string-trim event)))
+          (when (buffer-live-p codex--app-server-stderr-buffer)
+            (kill-buffer codex--app-server-stderr-buffer))
+          (setq-local codex--app-server-stderr-buffer nil))))))
 
 
 (defun codex--app-server-launch-startup (action)
