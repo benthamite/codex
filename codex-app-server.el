@@ -784,20 +784,46 @@ under `error' as `message' for turn errors, so check both."
                             (append models nil)))
            (selection (completing-read "Codex model: " choices nil t))
            (model (cdr (assoc selection choices))))
-      (when model (codex--app-server-apply-model model)))))
+      (when model
+        (codex--app-server-apply-model
+         model (codex--app-server-prompt-model-effort model))))))
 
-(defun codex--app-server-apply-model (model)
-  "Apply MODEL to the current thread via `thread/settings/update'."
-  (let ((id (or (alist-get 'model model) (alist-get 'id model))))
+(defun codex--app-server-prompt-model-effort (model)
+  "Prompt for a reasoning effort supported by MODEL."
+  (when-let* ((efforts (codex--app-server-model-efforts model)))
+    (let ((default (or (and (member codex-reasoning-effort efforts)
+                            codex-reasoning-effort)
+                       (alist-get 'defaultReasoningEffort model)
+                       (car efforts))))
+      (completing-read "Reasoning effort: " efforts nil t nil nil default))))
+
+(defun codex--app-server-model-efforts (model)
+  "Return the reasoning efforts advertised for MODEL."
+  (delq nil
+        (mapcar (lambda (option)
+                  (alist-get 'reasoningEffort option))
+                (append (alist-get 'supportedReasoningEfforts model) nil))))
+
+(defun codex--app-server-apply-model (model &optional effort)
+  "Apply MODEL and optional EFFORT via `thread/settings/update'."
+  (let* ((id (or (alist-get 'model model) (alist-get 'id model)))
+         (params `((threadId . ,codex--app-server-thread-id) (model . ,id))))
+    (when effort
+      (setq params (append params `((effort . ,effort)))))
     (codex--app-server-send-request
      "thread/settings/update"
-     `((threadId . ,codex--app-server-thread-id) (model . ,id))
+     params
      (lambda (_result error)
        (if error
            (codex--app-server-insert-status
             (format "Model change failed: %S" error))
          (setq-local codex-model id)
-         (codex--app-server-insert-status (format "Model set to %s" id)))))))
+         (when effort
+           (setq-local codex-reasoning-effort effort))
+         (codex--app-server-insert-status
+          (if effort
+              (format "Model set to %s (%s reasoning)" id effort)
+            (format "Model set to %s" id))))))))
 
 (defun codex--app-server-copy-last-message ()
   "Copy the most recent assistant message text to the kill ring."
