@@ -23,6 +23,7 @@
 (declare-function codex--directory "codex")
 (declare-function codex--format-file-reference "codex"
                   (&optional file-name line-start line-end))
+(declare-function codex--find-session-transcript "codex" (session-id))
 (declare-function codex--launch-session "codex"
                   (dir backend buffer-name instance-name switches switch-after))
 (declare-function codex--read-optional-string "codex" (prompt initial-input))
@@ -248,6 +249,12 @@ because per-tool hooks can be frequent."
 (defvar-local codex--app-server-startup-action 'start
   "Startup action for this app-server buffer: \\='start, \\='resume, or \\='fork.")
 
+(defvar codex--app-server-pending-startup-session-id nil
+  "Session id for the next app-server resume-by-id startup.")
+
+(defvar-local codex--app-server-startup-session-id nil
+  "Session id for this app-server resume-by-id startup.")
+
 ;;;;; app-server backend implementation
 
 (declare-function gfm-mode "markdown-mode")
@@ -373,6 +380,8 @@ arguments."
   (setq-local mode-line-process '(:eval (codex--app-server-mode-line)))
   (setq-local codex--app-server-startup-action
               codex--app-server-pending-startup-action)
+  (setq-local codex--app-server-startup-session-id
+              codex--app-server-pending-startup-session-id)
   (setq-local codex--app-server-pending-images
               (mapcar #'expand-file-name codex-default-images))
   (setq-local codex--app-server-pending-mentions nil)
@@ -1900,6 +1909,9 @@ object such as the \"don't ask again\" execpolicy amendment."
        (setq codex--app-server-user-agent (alist-get 'userAgent result))
        (pcase codex--app-server-startup-action
          ('resume (codex--app-server-begin-resume "thread/resume"))
+         ('resume-session
+          (codex--app-server-begin-resume-session-id
+           codex--app-server-startup-session-id))
          ('fork (codex--app-server-begin-resume "thread/fork"))
          (_ (codex--app-server-send-thread-start)))))))
 
@@ -1955,6 +1967,17 @@ object such as the \"don't ask again\" execpolicy amendment."
         `((thread . ,(alist-get 'thread result))))
        (codex--app-server-render-history
         (alist-get 'data (alist-get 'initialTurnsPage result)))))))
+
+(defun codex--app-server-begin-resume-session-id (session-id)
+  "Resume SESSION-ID in the current app-server buffer."
+  (let ((file (codex--find-session-transcript session-id)))
+    (if (not file)
+        (codex--app-server-insert-status
+         (format "No Codex transcript found for session %s" session-id))
+      (codex--app-server-send-resume
+       "thread/resume"
+       `((id . ,session-id)
+         (path . ,file))))))
 
 (defun codex--app-server-send-thread-start ()
   "Send the app-server thread/start request."
@@ -2390,6 +2413,16 @@ The Codex CLI shows one blank line between successive output items."
          (instance-name (codex--session-instance-name dir))
          (buffer-name (codex--buffer-name-for-directory dir instance-name))
          (codex--app-server-pending-startup-action action))
+    (codex--launch-session dir 'app-server buffer-name instance-name
+                           (codex--build-backend-switches 'app-server nil) t)))
+
+(defun codex--app-server-launch-resume-session (session-id)
+  "Launch an app-server Codex session resuming SESSION-ID."
+  (let* ((dir (codex--directory))
+         (instance-name (codex--session-instance-name dir))
+         (buffer-name (codex--buffer-name-for-directory dir instance-name))
+         (codex--app-server-pending-startup-action 'resume-session)
+         (codex--app-server-pending-startup-session-id session-id))
     (codex--launch-session dir 'app-server buffer-name instance-name
                            (codex--build-backend-switches 'app-server nil) t)))
 

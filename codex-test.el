@@ -1380,6 +1380,26 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (should (member "thread/archive" methods))
       (should (member "thread/name/set" methods)))))
 
+(ert-deftest codex-test-app-server-begin-resume-session-id ()
+  "Resume a known session id through app-server without the terminal TUI."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-resume-id/*" t)
+    (setq-local codex--buffer-directory "/tmp/project/")
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (let (sent)
+      (cl-letf (((symbol-function 'codex--find-session-transcript)
+                 (lambda (session-id)
+                   (and (equal session-id "sid-123")
+                        "/tmp/session-sid-123.jsonl")))
+                ((symbol-function 'codex--app-server-send-request)
+                 (lambda (method params _cb)
+                   (setq sent (cons method params)))))
+        (codex--app-server-begin-resume-session-id "sid-123"))
+      (should (equal (car sent) "thread/resume"))
+      (should (equal (alist-get 'threadId (cdr sent)) "sid-123"))
+      (should (equal (alist-get 'path (cdr sent))
+                     "/tmp/session-sid-123.jsonl")))))
+
 (ert-deftest codex-test-app-server-reasoning-up-down ()
   "Reasoning up/down cycle the effort levels and clamp at the ends."
   (let ((codex-reasoning-effort nil))
