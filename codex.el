@@ -1769,18 +1769,73 @@ transcript file.  Interactively, prompt only when neither is known."
                            data '(transcript_path transcriptPath
                                                    transcript_file
                                                    transcriptFile))))
-    (when (and (stringp session-id) (not (string-empty-p session-id)))
-      (setq-local codex--session-id session-id))
-    (when (and (stringp transcript-file)
-               (file-exists-p (expand-file-name transcript-file)))
-      (setq-local codex--session-transcript-file
-                  (expand-file-name transcript-file))
+    (codex--record-session-metadata session-id transcript-file)))
+
+(defun codex--record-session-metadata (&optional session-id transcript-file)
+  "Record SESSION-ID and TRANSCRIPT-FILE for the current Codex buffer."
+  (let* ((file (codex--usable-transcript-file transcript-file))
+         (id (or (codex--nonempty-session-id session-id)
+                 (codex--session-id-from-transcript-file file))))
+    (when id
+      (setq-local codex--session-id id))
+    (when (and id (not file))
+      (setq file (codex--find-session-transcript id)))
+    (when file
+      (setq-local codex--session-transcript-file file)
       (when codex--session-id
-        (codex--cache-session-transcript codex--session-id
-                                         codex--session-transcript-file)))
-    (when (and codex--session-id (not codex--session-transcript-file))
-      (setq-local codex--session-transcript-file
-                  (codex--find-session-transcript codex--session-id)))))
+        (codex--cache-session-transcript codex--session-id file)))))
+
+(defun codex--current-session-identity ()
+  "Return the current Codex session identity, or nil when unavailable."
+  (let* ((file (codex--current-session-transcript-file))
+         (session-id (or (codex--nonempty-session-id codex--session-id)
+                         (and (boundp 'codex--app-server-thread-id)
+                              (codex--nonempty-session-id
+                               codex--app-server-thread-id))
+                         (codex--session-id-from-transcript-file file))))
+    (when session-id
+      (codex--record-session-metadata session-id file)
+      (list :id session-id :transcript-file codex--session-transcript-file))))
+
+(defun codex--current-session-id ()
+  "Return the current Codex session id, or signal when unavailable."
+  (or (plist-get (codex--current-session-identity) :id)
+      (user-error "Current Codex buffer has no session id")))
+
+(defun codex--current-session-transcript-file ()
+  "Return the current Codex transcript file, or nil when unavailable."
+  (or (codex--usable-transcript-file codex--session-transcript-file)
+      (codex--visible-session-transcript-file)))
+
+(defun codex--usable-transcript-file (file)
+  "Return expanded FILE when it names an existing JSONL transcript."
+  (when (and (stringp file) (not (string-empty-p file)))
+    (let ((expanded (expand-file-name file)))
+      (when (and (string-suffix-p ".jsonl" expanded)
+                 (file-exists-p expanded))
+        expanded))))
+
+(defun codex--nonempty-session-id (session-id)
+  "Return SESSION-ID when it is a nonempty string."
+  (when (and (stringp session-id) (not (string-empty-p session-id)))
+    session-id))
+
+(defun codex--session-id-from-transcript-file (file)
+  "Return the Codex session id encoded in transcript FILE."
+  (when (and (stringp file)
+             (string-match
+              "\\([[:xdigit:]]\\{8\\}-[[:xdigit:]]\\{4\\}-[[:xdigit:]]\\{4\\}-[[:xdigit:]]\\{4\\}-[[:xdigit:]]\\{12\\}\\)\\.jsonl\\'"
+              file))
+    (match-string 1 file)))
+
+(defun codex--visible-session-transcript-file ()
+  "Return a visible session transcript path from the current buffer."
+  (save-excursion
+    (goto-char (point-min))
+    (when (re-search-forward "^Session[ \t]+\\(.+\\.jsonl\\)$"
+                             (min (point-max) 5000) t)
+      (codex--usable-transcript-file
+       (string-trim (match-string-no-properties 1))))))
 
 (defun codex--hook-json-object (json-data)
   "Return JSON-DATA parsed as an alist, or nil when absent/unreadable."

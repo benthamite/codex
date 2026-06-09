@@ -1017,6 +1017,61 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (should (string-match-p "019e9dfd-abc" text))
       (should (string-match-p "myproj" text)))))
 
+(ert-deftest codex-test-app-server-thread-started-records-core-session-metadata ()
+  "App-server thread startup records the generic Codex session identity."
+  (let* ((dir (make-temp-file "codex-app-server-thread" t))
+         (file (expand-file-name
+                "rollout-2026-06-09T15-28-47-019eada4-ebff-7721-9df6-642202f1138f.jsonl"
+                dir)))
+    (unwind-protect
+        (with-temp-buffer
+          (with-temp-file file
+            (insert "{}\n"))
+          (setq-local codex--buffer-directory "/tmp/myproj/")
+          (codex--app-server-thread-started
+           `((thread
+              (id . "019eada4-ebff-7721-9df6-642202f1138f")
+              (path . ,file))))
+          (should (equal codex--session-id
+                         "019eada4-ebff-7721-9df6-642202f1138f"))
+          (should (equal codex--session-transcript-file file)))
+      (delete-directory dir t))))
+
+(ert-deftest codex-test-current-session-identity-uses-transcript-file ()
+  "Derive the Codex session identity from the known transcript file."
+  (let* ((dir (make-temp-file "codex-session-identity" t))
+         (file (expand-file-name
+                "rollout-2026-06-09T15-28-47-019eada4-ebff-7721-9df6-642202f1138f.jsonl"
+                dir)))
+    (unwind-protect
+        (with-temp-buffer
+          (with-temp-file file
+            (insert "{}\n"))
+          (setq-local codex--session-transcript-file file)
+          (should (equal (codex--current-session-identity)
+                         `(:id "019eada4-ebff-7721-9df6-642202f1138f"
+                           :transcript-file ,file))))
+      (delete-directory dir t))))
+
+(ert-deftest codex-test-current-session-identity-uses-visible-session-path ()
+  "Derive the Codex session identity from a visible Session header."
+  (let* ((dir (make-temp-file "codex-session-visible" t))
+         (file (expand-file-name
+                "rollout-2026-06-09T15-28-47-019eada4-ebff-7721-9df6-642202f1138f.jsonl"
+                dir)))
+    (unwind-protect
+        (with-temp-buffer
+          (with-temp-file file
+            (insert "{}\n"))
+          (insert "Codex 0.138.0\n")
+          (insert "Session " file "\n")
+          (setq-local codex--session-id nil)
+          (setq-local codex--session-transcript-file nil)
+          (should (equal (codex--current-session-identity)
+                         `(:id "019eada4-ebff-7721-9df6-642202f1138f"
+                           :transcript-file ,file))))
+      (delete-directory dir t))))
+
 (ert-deftest codex-test-app-server-header-version-extracted-from-user-agent ()
   "Codex version is extracted from the app-server user agent string."
   (should (equal (codex--app-server-codex-version

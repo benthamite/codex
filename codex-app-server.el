@@ -27,6 +27,8 @@
 (declare-function codex--launch-session "codex"
                   (dir backend buffer-name instance-name switches switch-after))
 (declare-function codex--read-optional-string "codex" (prompt initial-input))
+(declare-function codex--record-session-metadata "codex"
+                  (&optional session-id transcript-file))
 (declare-function codex--session-instance-name "codex"
                   (dir &optional force-prompt))
 (declare-function codex-cycle-permissions "codex")
@@ -552,9 +554,11 @@ under `error' as `message' for turn errors, so check both."
 (defun codex--app-server-thread-started (params)
   "Record app-server thread startup PARAMS and render the session header."
   (let* ((thread (alist-get 'thread params))
-         (thread-id (alist-get 'id thread)))
+         (thread-id (alist-get 'id thread))
+         (thread-path (alist-get 'path thread)))
     (unless (equal codex--app-server-thread-id thread-id)
       (setq codex--app-server-thread-id thread-id)
+      (codex--record-session-metadata thread-id thread-path)
       (codex--app-server-render-header thread)
       (codex--app-server-setup-input-region)
       (codex--app-server-flush-queued-commands))))
