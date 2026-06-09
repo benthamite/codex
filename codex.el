@@ -1022,7 +1022,9 @@ EXTRA-ARGS is an optional list of additional arguments appended
 after the subcommand and its flags.  When INSTANCE-NAME is
 non-nil, use it directly instead of prompting.
 Codex subcommands run as separate processes."
-  (let* ((backend (codex--subcommand-backend codex-terminal-backend))
+  (when (eq codex-terminal-backend 'app-server)
+    (user-error "Codex app-server sessions do not use terminal subcommands"))
+  (let* ((backend codex-terminal-backend)
          (dir (codex--directory))
          (instance-name (or instance-name
                             (codex--session-instance-name dir)))
@@ -1033,12 +1035,6 @@ Codex subcommands run as separate processes."
                            (when last-flag '("--last"))
                            extra-args)))
     (codex--launch-session dir backend buffer-name instance-name switches t)))
-
-(defun codex--subcommand-backend (backend)
-  "Return the terminal BACKEND to use for Codex subcommands."
-  (if (eq backend 'app-server)
-      'eat
-    backend))
 
 (defun codex--build-backend-switches (backend extra-switches)
   "Return Codex CLI switches for BACKEND and EXTRA-SWITCHES."

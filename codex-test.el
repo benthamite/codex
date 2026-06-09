@@ -2690,51 +2690,11 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
-(ert-deftest codex-test-app-server-subcommands-use-eat-fallback ()
-  "Resume and fork keep using the terminal backend while app-server is default."
-  (let ((codex-terminal-backend 'app-server)
-        (codex-optimize-window-resize nil)
-        (codex-display-window-fn (lambda (_buffer) nil))
-        (codex-program "codex")
-        (codex-use-alt-screen nil)
-        (codex-disable-terminal-resize-reflow t)
-        buffer
-        captured-backend
-        captured-switches)
-    (unwind-protect
-        (cl-letf (((symbol-function 'executable-find)
-                   (lambda (_program) t))
-                  ((symbol-function 'codex--directory)
-                   (lambda () "/tmp/"))
-                  ((symbol-function 'codex--find-codex-buffers-for-directory)
-                   (lambda (_dir) nil))
-                  ((symbol-function 'codex--prompt-for-instance-name)
-                   (lambda (&rest _) "resume-copy"))
-                  ((symbol-function 'codex--term-make)
-                   (lambda (backend _buffer-name _program switches)
-                     (setq captured-backend backend)
-                     (setq captured-switches switches)
-                     (setq buffer (generate-new-buffer
-                                   "*codex-test-subcommand-app-server*"))))
-                  ((symbol-function 'codex--term-configure)
-                   (lambda (&rest _args) nil))
-                  ((symbol-function 'codex--term-setup-keymap)
-                   (lambda (&rest _args) nil))
-                  ((symbol-function 'codex--term-customize-faces)
-                   (lambda (&rest _args) nil))
-                  ((symbol-function 'codex--propagate-font-to-eat-faces)
-                   (lambda () nil))
-                  ((symbol-function 'pop-to-buffer)
-                   (lambda (&rest _) nil)))
-          (codex--start-subcommand "resume" t)
-          (should (eq captured-backend 'eat))
-          (should (equal captured-switches
-                         '("--no-alt-screen"
-                           "--disable" "terminal_resize_reflow"
-                           "resume"
-                           "--last"))))
-      (when (buffer-live-p buffer)
-        (kill-buffer buffer)))))
+(ert-deftest codex-test-app-server-subcommands-error ()
+  "Terminal subcommands do not silently leave the app-server backend."
+  (let ((codex-terminal-backend 'app-server))
+    (should-error (codex--start-subcommand "resume" t)
+                  :type 'user-error)))
 
 (ert-deftest codex-test-edit-previous-message-sends-double-escape ()
   "Editing the previous message sends two escape key presses."

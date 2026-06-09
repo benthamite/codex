@@ -2442,10 +2442,12 @@ The Codex CLI shows one blank line between successive output items."
     (codex--launch-session dir 'app-server buffer-name instance-name
                            (codex--build-backend-switches 'app-server nil) t)))
 
-(defun codex--app-server-launch-resume-session (session-id)
-  "Launch an app-server Codex session resuming SESSION-ID."
+(defun codex--app-server-launch-resume-session (session-id &optional instance-name)
+  "Launch an app-server Codex session resuming SESSION-ID.
+When INSTANCE-NAME is non-nil, use it for the new buffer instead of
+prompting."
   (let* ((dir (codex--directory))
-         (instance-name (codex--session-instance-name dir))
+         (instance-name (or instance-name (codex--session-instance-name dir)))
          (buffer-name (codex--buffer-name-for-directory dir instance-name))
          (codex--app-server-pending-startup-action 'resume-session)
          (codex--app-server-pending-startup-session-id session-id))
