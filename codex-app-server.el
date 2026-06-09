@@ -297,8 +297,7 @@ arguments."
       (codex-app-server-mode)
       (let ((inhibit-read-only t))
         (erase-buffer))
-      (when (buffer-live-p codex--app-server-stderr-buffer)
-        (kill-buffer codex--app-server-stderr-buffer))
+      (codex--app-server-kill-stderr-buffer codex--app-server-stderr-buffer)
       (setq-local codex--app-server-pending-output "")
       (setq-local codex--app-server-stderr-buffer stderr-buffer)
       (setq-local codex--app-server-output-marker nil)
@@ -405,9 +404,18 @@ arguments."
   (codex--app-server-cancel-markdown-render)
   (codex--app-server-stop-status-timer)
   (codex--app-server-remove-status-overlay)
-  (when (buffer-live-p codex--app-server-stderr-buffer)
-    (kill-buffer codex--app-server-stderr-buffer))
+  (codex--app-server-kill-stderr-buffer codex--app-server-stderr-buffer)
   (setq-local codex--app-server-stderr-buffer nil))
+
+(defun codex--app-server-kill-stderr-buffer (buffer)
+  "Kill app-server stderr BUFFER without process prompts."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when-let* ((process (get-buffer-process buffer)))
+        (when (process-live-p process)
+          (delete-process process)))
+      (let ((kill-buffer-query-functions nil))
+        (kill-buffer buffer)))))
 
 (defun codex--app-server-process-filter (process output)
   "Handle newline-delimited app-server OUTPUT from PROCESS."
@@ -2432,8 +2440,8 @@ The Codex CLI shows one blank line between successive output items."
         (unless (process-live-p process)
           (codex--app-server-insert-status
            (format "Codex app-server %s" (string-trim event)))
-          (when (buffer-live-p codex--app-server-stderr-buffer)
-            (kill-buffer codex--app-server-stderr-buffer))
+          (codex--app-server-kill-stderr-buffer
+           codex--app-server-stderr-buffer)
           (setq-local codex--app-server-stderr-buffer nil))))))
 
 

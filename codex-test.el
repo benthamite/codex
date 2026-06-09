@@ -1167,6 +1167,24 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (when (file-exists-p script)
         (delete-file script)))))
 
+(ert-deftest codex-test-app-server-kills-stderr-buffer-process ()
+  "App-server stderr cleanup kills live stderr processes."
+  (let* ((buffer (generate-new-buffer " *codex-test-stderr-cleanup*"))
+         (process (make-process :name "codex-test-stderr-cleanup"
+                                :buffer buffer
+                                :command '("sh" "-c" "sleep 30")
+                                :connection-type 'pipe)))
+    (unwind-protect
+        (progn
+          (should (process-live-p process))
+          (codex--app-server-kill-stderr-buffer buffer)
+          (should-not (buffer-live-p buffer))
+          (should-not (process-live-p process)))
+      (when (process-live-p process)
+        (delete-process process))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
 (ert-deftest codex-test-app-server-input-region-sends-and-clears ()
   "Sending app-server input renders a user turn and clears the input."
   (with-temp-buffer
