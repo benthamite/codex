@@ -2433,10 +2433,12 @@ The Codex CLI shows one blank line between successive output items."
           (setq-local codex--app-server-stderr-buffer nil))))))
 
 
-(defun codex--app-server-launch-startup (action)
-  "Launch an app-server Codex session performing ACTION on startup."
+(defun codex--app-server-launch-startup (action &optional instance-name)
+  "Launch an app-server Codex session performing ACTION on startup.
+When INSTANCE-NAME is non-nil, use it for the new buffer instead of
+prompting."
   (let* ((dir (codex--directory))
-         (instance-name (codex--session-instance-name dir))
+         (instance-name (or instance-name (codex--session-instance-name dir)))
          (buffer-name (codex--buffer-name-for-directory dir instance-name))
          (codex--app-server-pending-startup-action action))
     (codex--launch-session dir 'app-server buffer-name instance-name
