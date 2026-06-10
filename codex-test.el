@@ -1825,6 +1825,25 @@ assertion in `eat--t-cur-left' on the following cursor move."
           (should (member "org-note" (codex--app-server-skill-names))))
       (delete-directory project t))))
 
+(ert-deftest codex-test-app-server-skills-include-ancestor-codex-local ()
+  "Skill completion includes ancestor-local `.codex/skills' entries."
+  (let* ((root (make-temp-file "codex-ancestor-skills" t))
+         (project (expand-file-name "projects/email-triage" root))
+         (skill-dir (expand-file-name ".codex/skills/meeting-debrief" root))
+         (codex-app-server-skill-directories nil)
+         (codex--app-server-skill-cache nil)
+         (codex--app-server-skill-cache-key nil))
+    (unwind-protect
+        (with-temp-buffer
+          (make-directory project t)
+          (make-directory skill-dir t)
+          (with-temp-file (expand-file-name "SKILL.md" skill-dir)
+            (insert "---\nname: meeting-debrief\n---\n"))
+          (setq-local codex--buffer-directory project)
+          (should (member "meeting-debrief"
+                          (codex--app-server-skill-names))))
+      (delete-directory root t))))
+
 (ert-deftest codex-test-app-server-tab-completes-project-local-skill ()
   "TAB completes a project-local skill reference."
   (let* ((project (make-temp-file "codex-project-skill-tab" t))

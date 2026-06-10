@@ -1185,9 +1185,23 @@ and queues follow-up input while a turn is in progress."
 (defun codex--app-server-project-skill-directories ()
   "Return project-local skill directories for `codex--buffer-directory'."
   (when-let* ((dir (or codex--buffer-directory default-directory)))
-    (let ((project (file-name-as-directory (expand-file-name dir))))
-      (mapcar (lambda (name) (expand-file-name name project))
-              '(".claude/skills" ".claude/programmatic-skills")))))
+    (mapcan #'codex--app-server-skill-directory-candidates
+            (codex--app-server-directory-ancestors dir))))
+
+(defun codex--app-server-directory-ancestors (directory)
+  "Return DIRECTORY and its parents as absolute directory names."
+  (let ((dir (file-name-as-directory (expand-file-name directory)))
+        parents)
+    (while (not (member dir parents))
+      (push dir parents)
+      (setq dir (file-name-directory (directory-file-name dir))))
+    (nreverse parents)))
+
+(defun codex--app-server-skill-directory-candidates (directory)
+  "Return skill directory candidates below DIRECTORY."
+  (mapcar (lambda (name) (expand-file-name name directory))
+          '(".claude/skills" ".claude/programmatic-skills"
+            ".codex/skills" ".codex/programmatic-skills")))
 
 (defun codex--app-server-skill-names-in-directory (directory)
   "Return skill names below DIRECTORY."
