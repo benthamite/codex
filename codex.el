@@ -290,6 +290,22 @@ changes."
   :type 'hook
   :group 'codex)
 
+(defcustom codex-command-submitted-hook nil
+  "Abnormal hook run before input is submitted to a Codex session.
+Each function is called with one argument, the session buffer, with
+that buffer current.  The hook runs for programmatic submissions via
+`codex--send-command-to-buffer', for interactive Return presses via
+`codex--terminal-send-return', for `:return' TUI actions, and for
+every turn the app-server backend submits through
+`codex--app-server-submit-command', including queued turns flushed
+after a turn completes and prompts sent from the compose buffer.  A
+single submission may run the hook more than once: the eat backend
+also schedules deferred Return events, and app-server programmatic
+sends pass through two chokepoints.  Hook functions must be
+idempotent."
+  :type 'hook
+  :group 'codex)
+
 (defcustom codex-process-environment-functions nil
   "Abnormal hook for setting up environment variables for Codex.
 Functions receive two arguments: the Codex buffer name and the directory.
@@ -620,6 +636,7 @@ SWITCHES is an optional list of command-line arguments."
 (defun codex--terminal-send-return ()
   "Send Return to the current Codex terminal buffer."
   (interactive)
+  (codex--run-command-submitted-hook)
   (codex--term-send-action codex-terminal-backend :return))
 
 (defun codex--terminal-insert-newline ()
@@ -929,6 +946,7 @@ After sending the command, move point to the end of the buffer."
 (defun codex--send-command-to-buffer (cmd buffer)
   "Send command CMD to Codex BUFFER and submit it."
   (when (buffer-live-p buffer)
+    (codex--run-command-submitted-hook buffer)
     (let ((window (or (get-buffer-window buffer)
                       (display-buffer buffer))))
       (if window
@@ -938,6 +956,13 @@ After sending the command, move point to the end of the buffer."
         (with-current-buffer buffer
           (codex--term-submit-command codex-terminal-backend cmd))))
     buffer))
+
+(defun codex--run-command-submitted-hook (&optional buffer)
+  "Run `codex-command-submitted-hook' for BUFFER or the current buffer."
+  (let ((target (or buffer (current-buffer))))
+    (when (buffer-live-p target)
+      (with-current-buffer target
+        (run-hook-with-args 'codex-command-submitted-hook target)))))
 
 (defun codex--build-cli-args ()
   "Build CLI arguments from current customization settings.
@@ -1509,6 +1534,8 @@ shortcuts rather than Emacs key bindings.")
 (defun codex--send-tui-action (action)
   "Send one TUI ACTION in the current Codex buffer.
 ACTION is either a keyword or a list of the form (KEYWORD PAYLOAD)."
+  (when (eq (if (listp action) (car action) action) :return)
+    (codex--run-command-submitted-hook))
   (if (listp action)
       (codex--term-send-action codex-terminal-backend (car action) (cadr action))
     (codex--term-send-action codex-terminal-backend action)))

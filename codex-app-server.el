@@ -29,6 +29,7 @@
 (declare-function codex--read-optional-string "codex" (prompt initial-input))
 (declare-function codex--record-session-metadata "codex"
                   (&optional session-id transcript-file))
+(declare-function codex--run-command-submitted-hook "codex" (&optional buffer))
 (declare-function codex--session-instance-name "codex"
                   (dir &optional force-prompt))
 (declare-function codex-cycle-permissions "codex")
@@ -2073,6 +2074,7 @@ object such as the \"don't ask again\" execpolicy amendment."
   "Submit COMMAND to the current app-server thread.
 Slash commands are dispatched locally, a leading \"!\" runs a shell
 command, and everything else is sent to the model as a turn."
+  (codex--run-command-submitted-hook)
   (let ((trimmed (string-trim-left command)))
     (cond
      ((string-prefix-p "/" trimmed)

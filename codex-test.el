@@ -3490,6 +3490,60 @@ When only :inherit remains, the face is removed entirely."
          (result (codex--strip-low-contrast-fg face 3.0)))
     (should (eq result face))))
 
+(ert-deftest codex-test-command-submitted-hook-runs-on-buffer-submit ()
+  "Run the submitted hook with the target buffer on programmatic sends."
+  (let ((buf (generate-new-buffer "*codex:/tmp/project/*"))
+        observed)
+    (unwind-protect
+        (cl-letf (((symbol-function 'codex--term-submit-command)
+                   (lambda (&rest _) nil))
+                  ((symbol-function 'get-buffer-window)
+                   (lambda (&rest _) nil))
+                  ((symbol-function 'display-buffer)
+                   (lambda (&rest _) nil)))
+          (let ((codex-command-submitted-hook
+                 (list (lambda (buffer)
+                         (should (eq (current-buffer) buf))
+                         (push buffer observed)))))
+            (codex--send-command-to-buffer "hello" buf))
+          (should (equal observed (list buf))))
+      (kill-buffer buf))))
+
+(ert-deftest codex-test-command-submitted-hook-runs-on-return-actions ()
+  "Run the submitted hook on Return and :return TUI actions only."
+  (with-temp-buffer
+    (let (observed)
+      (cl-letf (((symbol-function 'codex--term-send-action)
+                 (lambda (&rest _) nil)))
+        (let ((codex-command-submitted-hook
+               (list (lambda (_buffer) (push t observed)))))
+          (codex--terminal-send-return)
+          (codex--send-tui-action :return)
+          (codex--send-tui-action :tab)))
+      (should (= (length observed) 2)))))
+
+(ert-deftest codex-test-command-submitted-hook-runs-on-app-server-submit ()
+  "Run the submitted hook once from the app-server submit chokepoint."
+  (let ((buf (generate-new-buffer "*codex:/tmp/project/*"))
+        observed)
+    (unwind-protect
+        (cl-letf (((symbol-function 'codex--app-server-record-input)
+                   (lambda (&rest _) nil))
+                  ((symbol-function 'codex--app-server-insert-message)
+                   (lambda (&rest _) nil))
+                  ((symbol-function 'codex--app-server-ensure-trailing-newline)
+                   (lambda (&rest _) nil))
+                  ((symbol-function 'codex--app-server-send-turn-input)
+                   (lambda (&rest _) nil)))
+          (let ((codex-command-submitted-hook
+                 (list (lambda (buffer)
+                         (should (eq (current-buffer) buf))
+                         (push buffer observed)))))
+            (with-current-buffer buf
+              (codex--app-server-submit-command "hello")))
+          (should (equal observed (list buf))))
+      (kill-buffer buf))))
+
 (provide 'codex-test)
 
 ;;; codex-test.el ends here
