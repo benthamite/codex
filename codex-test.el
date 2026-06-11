@@ -2788,6 +2788,110 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (should-error (codex--start-subcommand "resume" t)
                   :type 'user-error)))
 
+(ert-deftest codex-test-start-session-uses-explicit-parameters ()
+  "Start sessions from explicit directory, instance, and backend."
+  (let (captured)
+    (cl-letf (((symbol-function 'codex--launch-session)
+               (lambda (dir backend buffer-name instance-name _switches
+                            switch-after)
+                 (setq captured (list dir backend buffer-name instance-name
+                                      switch-after))
+                 (generate-new-buffer " *codex-test-session*"))))
+      (let ((buffer (codex-start-session :directory "/tmp/project"
+                                         :instance-name "tests"
+                                         :terminal-backend 'eat)))
+        (unwind-protect
+            (progn
+              (should (equal (nth 0 captured) "/tmp/project/"))
+              (should (eq (nth 1 captured) 'eat))
+              (should (equal (nth 2 captured)
+                             (format "*codex:%s:tests*"
+                                     (abbreviate-file-name
+                                      (file-truename "/tmp/project/")))))
+              (should (equal (nth 3 captured) "tests"))
+              (should (eq (nth 4 captured) t))
+              (should (buffer-live-p buffer)))
+          (kill-buffer buffer))))))
+
+(ert-deftest codex-test-start-session-resume-uses-terminal-subcommand ()
+  "Resume by id through `codex resume <id>' on terminal backends."
+  (let ((codex-program-switches '("--search"))
+        (codex-use-alt-screen t)
+        (codex-model nil)
+        (codex-profile nil)
+        (codex-reasoning-effort nil)
+        (codex-full-auto nil)
+        (codex-sandbox-mode nil)
+        (codex-approval-policy nil)
+        (codex-default-images nil)
+        (codex-disable-terminal-resize-reflow nil)
+        captured-switches)
+    (cl-letf (((symbol-function 'codex--launch-session)
+               (lambda (_dir _backend _buffer-name _instance switches _switch)
+                 (setq captured-switches switches)
+                 (generate-new-buffer " *codex-test-session*"))))
+      (kill-buffer (codex-start-session :directory "/tmp/project"
+                                        :instance-name "default"
+                                        :terminal-backend 'eat
+                                        :resume-id "abc123")))
+    (should (equal captured-switches '("--search" "resume" "abc123")))))
+
+(ert-deftest codex-test-start-session-initial-prompt-is-cli-arg-on-eat ()
+  "Pass the initial prompt as a CLI argument on terminal backends."
+  (let ((codex-program-switches nil)
+        (codex-use-alt-screen t)
+        (codex-model nil)
+        (codex-profile nil)
+        (codex-reasoning-effort nil)
+        (codex-full-auto nil)
+        (codex-sandbox-mode nil)
+        (codex-approval-policy nil)
+        (codex-default-images nil)
+        (codex-disable-terminal-resize-reflow nil)
+        captured-switches sent)
+    (cl-letf (((symbol-function 'codex--launch-session)
+               (lambda (_dir _backend _buffer-name _instance switches _switch)
+                 (setq captured-switches switches)
+                 (generate-new-buffer " *codex-test-session*")))
+              ((symbol-function 'codex--send-command-to-buffer)
+               (lambda (cmd buffer) (setq sent cmd) buffer)))
+      (kill-buffer (codex-start-session :directory "/tmp/project"
+                                        :instance-name "default"
+                                        :terminal-backend 'eat
+                                        :initial-prompt "fix the bug")))
+    (should (equal captured-switches '("fix the bug")))
+    (should-not sent)))
+
+(ert-deftest codex-test-start-session-app-server-submits-initial-prompt ()
+  "Submit the initial prompt through the app-server queue after launch."
+  (let (sent)
+    (cl-letf (((symbol-function 'codex--launch-session)
+               (lambda (&rest _)
+                 (generate-new-buffer " *codex-test-session*")))
+              ((symbol-function 'codex--send-command-to-buffer)
+               (lambda (cmd buffer) (setq sent cmd) buffer)))
+      (kill-buffer (codex-start-session :directory "/tmp/project"
+                                        :instance-name "default"
+                                        :terminal-backend 'app-server
+                                        :initial-prompt "hello")))
+    (should (equal sent "hello"))))
+
+(ert-deftest codex-test-start-session-app-server-resume-sets-pending-startup ()
+  "Resume app-server sessions through the pending startup variables."
+  (let (captured-action captured-id)
+    (cl-letf (((symbol-function 'codex--launch-session)
+               (lambda (&rest _)
+                 (setq captured-action codex--app-server-pending-startup-action)
+                 (setq captured-id
+                       codex--app-server-pending-startup-session-id)
+                 (generate-new-buffer " *codex-test-session*"))))
+      (kill-buffer (codex-start-session :directory "/tmp/project"
+                                        :instance-name "default"
+                                        :terminal-backend 'app-server
+                                        :resume-id "abc123")))
+    (should (eq captured-action 'resume-session))
+    (should (equal captured-id "abc123"))))
+
 (ert-deftest codex-test-edit-previous-message-sends-double-escape ()
   "Editing the previous message sends two escape key presses."
   (let ((buf (generate-new-buffer "*codex:/tmp/project/*"))

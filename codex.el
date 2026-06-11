@@ -59,6 +59,8 @@ Emacs.  The \\='eat and \\='vterm backends run the terminal TUI."
   :group 'codex)
 
 (defvar codex-app-server-program-switches)
+(defvar codex--app-server-pending-startup-action)
+(defvar codex--app-server-pending-startup-session-id)
 
 (defcustom codex-use-alt-screen nil
   "Whether to use Codex's alt-screen TUI.
@@ -838,11 +840,9 @@ If SIMPLE-FORMAT is non-nil, use simplified display names."
   "Generate the Codex buffer name based on project or current buffer file.
 If INSTANCE-NAME is provided, include it in the buffer name."
   (let ((dir (codex--directory)))
-    (if dir
-        (if instance-name
-            (format "*codex:%s:%s*" (abbreviate-file-name (file-truename dir)) instance-name)
-          (format "*codex:%s*" (abbreviate-file-name (file-truename dir))))
-      (error "Cannot determine Codex directory - no `default-directory'!"))))
+    (unless dir
+      (error "Cannot determine Codex directory - no `default-directory'!"))
+    (codex--buffer-name-for-directory dir instance-name)))
 
 (defun codex--valid-instance-name-p (instance-name)
   "Return non-nil if INSTANCE-NAME is safe to encode in a Codex buffer name."
@@ -1006,13 +1006,9 @@ If FORCE-SWITCH-TO-BUFFER is non-nil, always switch to the Codex buffer."
                   (read-directory-name "Project directory: ")
                 (codex--directory)))
          (switch-after (or (equal arg '(4)) force-switch-to-buffer))
-         (instance-name (codex--session-instance-name dir force-prompt))
-         (buffer-name (codex--buffer-name-for-directory dir instance-name))
-         (switches (codex--build-backend-switches
-                    codex-terminal-backend
-                    extra-switches)))
-    (codex--launch-session dir codex-terminal-backend buffer-name
-                           instance-name switches switch-after)))
+         (instance-name (codex--session-instance-name dir force-prompt)))
+    (codex--start-session-buffer dir codex-terminal-backend instance-name
+                                 extra-switches nil nil switch-after)))
 
 (defun codex--start-subcommand (subcommand &optional last-flag extra-args
                                                        instance-name)
@@ -1035,6 +1031,70 @@ Codex subcommands run as separate processes."
                            (when last-flag '("--last"))
                            extra-args)))
     (codex--launch-session dir backend buffer-name instance-name switches t)))
+
+;;;###autoload
+(cl-defun codex-start-session (&key directory instance-name initial-prompt
+                                    resume-id terminal-backend)
+  "Start a Codex session from explicit parameters and return its buffer.
+DIRECTORY is the project directory, defaulting to `codex--directory'.
+INSTANCE-NAME names the session instance; when nil, derive one the way
+`codex' does, prompting only when instances already exist in DIRECTORY.
+INITIAL-PROMPT is submitted as the first user message.  RESUME-ID
+resumes the session with that id instead of starting fresh.
+TERMINAL-BACKEND overrides `codex-terminal-backend' for this session;
+because that variable is buffer-local in session buffers, calling this
+function from inside a session buffer reuses that session's backend."
+  (let* ((dir (file-name-as-directory
+               (expand-file-name (or directory (codex--directory)))))
+         (backend (or terminal-backend codex-terminal-backend))
+         (instance (or instance-name (codex--session-instance-name dir))))
+    (codex--start-session-buffer dir backend instance nil resume-id
+                                 initial-prompt t)))
+
+(defun codex--start-session-buffer (dir backend instance extra-switches
+                                        resume-id initial-prompt switch-after)
+  "Launch a Codex session and return its buffer.
+DIR, BACKEND, and INSTANCE identify the session.  EXTRA-SWITCHES are
+appended CLI switches.  RESUME-ID resumes that session id.
+INITIAL-PROMPT is the opening user message.  SWITCH-AFTER non-nil pops
+to the new buffer."
+  (let* ((buffer-name (codex--buffer-name-for-directory dir instance))
+         (prompt-arg (and initial-prompt
+                          (not resume-id)
+                          (not (eq backend 'app-server))))
+         (switches (codex--start-session-switches
+                    backend extra-switches resume-id
+                    (and prompt-arg initial-prompt)))
+         (codex--app-server-pending-startup-action
+          (if (and resume-id (eq backend 'app-server))
+              'resume-session
+            codex--app-server-pending-startup-action))
+         (codex--app-server-pending-startup-session-id
+          (if (and resume-id (eq backend 'app-server))
+              resume-id
+            codex--app-server-pending-startup-session-id))
+         (buffer (codex--launch-session dir backend buffer-name instance
+                                        switches switch-after)))
+    (when (and initial-prompt (not prompt-arg))
+      (codex--send-command-to-buffer initial-prompt buffer))
+    buffer))
+
+(defun codex--start-session-switches (backend extra-switches resume-id
+                                              initial-prompt)
+  "Return CLI switches for BACKEND, EXTRA-SWITCHES, RESUME-ID, INITIAL-PROMPT."
+  (cond
+   ((eq backend 'app-server)
+    (codex--build-backend-switches 'app-server extra-switches))
+   (resume-id
+    (append codex-program-switches
+            (codex--build-cli-args)
+            (list "resume" resume-id)
+            extra-switches))
+   (t
+    (codex--build-backend-switches
+     backend
+     (append extra-switches
+             (when initial-prompt (list initial-prompt)))))))
 
 (defun codex--build-backend-switches (backend extra-switches)
   "Return Codex CLI switches for BACKEND and EXTRA-SWITCHES."
@@ -1059,8 +1119,10 @@ Codex subcommands run as separate processes."
 
 (defun codex--buffer-name-for-directory (dir instance-name)
   "Return the Codex buffer name for DIR and INSTANCE-NAME."
-  (let ((default-directory dir))
-    (codex--buffer-name instance-name)))
+  (let ((truename (abbreviate-file-name (file-truename dir))))
+    (if instance-name
+        (format "*codex:%s:%s*" truename instance-name)
+      (format "*codex:%s*" truename))))
 
 (defun codex--launch-session (dir backend buffer-name instance-name switches
                                   switch-after)
