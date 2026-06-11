@@ -687,6 +687,12 @@ U+00A0.")
 (defconst codex--prompt-marker-regexp "[›❯>]"
   "Regexp matching current and legacy Codex prompt marker glyphs.")
 
+(defconst codex--prompt-scan-chars 4000
+  "How many trailing buffer characters to scan for a live prompt line.
+Bounding the scan to roughly one screenful keeps prompt echoes and
+`>'-prefixed lines scrolled above the live screen from masquerading as
+pending input.")
+
 (defun codex--setup-prompt-autosuggestions ()
   "Set up prompt autosuggestion styling in the current Codex buffer."
   (when (and codex-enable-prompt-autosuggestions
@@ -801,6 +807,86 @@ The suffix starts after CURSOR and ends before LINE-END."
        (not (string-match-p "\n" candidate))
        (or (member candidate codex-prompt-autosuggestion-placeholders)
            (member candidate (codex--prompt-autosuggestion-history)))))
+
+(defun codex--terminal-prompt-input ()
+  "Return pending prompt input in the current terminal buffer, or nil."
+  (if-let* ((cursor (codex--terminal-cursor-position)))
+      (codex--prompt-input-at-position cursor)
+    (codex--trailing-prompt-input)))
+
+(defun codex--prompt-input-at-position (position)
+  "Return meaningful composer input around POSITION, or nil.
+POSITION is the terminal cursor.  When the line containing POSITION
+carries no prompt marker it is treated as a continuation row of a
+multi-line composer: the scan walks upward through the contiguous run
+of non-blank lines for the nearest marker line, and the composer
+content spans that marker line through the line containing POSITION.
+Content on rows below POSITION is not collected."
+  (save-excursion
+    (goto-char position)
+    (when-let* ((input-start (codex--composer-input-start))
+                (input-end (codex--prompt-suffix-end input-start
+                                                     (line-end-position))))
+      (codex--meaningful-prompt-input
+       (buffer-substring-no-properties input-start input-end)))))
+
+(defun codex--composer-input-start ()
+  "Return the input start of the composer block at point, or nil.
+Check the current line for a prompt marker, then walk upward through
+contiguous non-blank lines; the first marker line found supplies the
+input start (just after the marker and its padding).  Blank lines and
+the buffer start bound the walk, so transcript text separated from the
+composer by a blank row is never joined to it."
+  (save-excursion
+    (catch 'start
+      (while t
+        (when-let* ((start (codex--prompt-input-start
+                            (line-beginning-position) (line-end-position))))
+          (throw 'start start))
+        (when (= (line-beginning-position) (point-min))
+          (throw 'start nil))
+        (forward-line -1)
+        (when (codex--blank-line-p)
+          (throw 'start nil))))))
+
+(defun codex--blank-line-p ()
+  "Return non-nil when the line at point is empty or only padding."
+  (save-excursion
+    (goto-char (line-beginning-position))
+    (looking-at-p (format "[%s]*$" codex--prompt-leading-space-chars))))
+
+(defun codex--trailing-prompt-input ()
+  "Return meaningful input from the trailing screenful's prompt line.
+Search backward from the end of the buffer, but only within the last
+`codex--prompt-scan-chars' characters, so prompt echoes scrolled above
+the live screen cannot match.  A `>'-prefixed transcript line inside
+the trailing screenful can still be mistaken for a prompt; the
+cursor-based path is authoritative when terminal state is available."
+  (save-excursion
+    (goto-char (point-max))
+    (when (re-search-backward (codex--prompt-line-regexp)
+                              (max (point-min)
+                                   (- (point-max) codex--prompt-scan-chars))
+                              t)
+      (codex--meaningful-prompt-input (match-string-no-properties 1)))))
+
+(defun codex--prompt-line-regexp ()
+  "Return a regexp matching a prompt line, capturing its input."
+  (format "^[%s]*%s[%s]*\\([^\n]*\\)$"
+          codex--prompt-leading-space-chars
+          codex--prompt-marker-regexp
+          codex--prompt-leading-space-chars))
+
+(defun codex--meaningful-prompt-input (input)
+  "Return trimmed INPUT unless it is empty or placeholder text.
+Trimming strips newlines and the characters in
+`codex--prompt-leading-space-chars', including the no-break space that
+eat uses to pad prompt columns."
+  (let* ((trim-regexp (format "[%s\n\r]+" codex--prompt-leading-space-chars))
+         (trimmed (string-trim input trim-regexp trim-regexp)))
+    (unless (or (string-empty-p trimmed)
+                (codex--known-prompt-autosuggestion-p trimmed))
+      trimmed)))
 
 (defun codex--prompt-autosuggestion-history ()
   "Return cached Codex prompt history entries, newest first."

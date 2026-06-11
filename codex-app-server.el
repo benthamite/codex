@@ -874,6 +874,17 @@ under `error' as `message' for turn errors, so check both."
       (buffer-substring-no-properties codex--app-server-input-marker (point-max))
     ""))
 
+(defun codex--app-server-prompt-input ()
+  "Return meaningful pending input in the app-server buffer, or nil."
+  (let ((text (string-trim (codex--app-server-input-text))))
+    (unless (string-empty-p text)
+      text)))
+
+(defun codex--app-server-input-active-p ()
+  "Return non-nil when this buffer has a live app-server input region."
+  (and (markerp codex--app-server-input-marker)
+       (marker-position codex--app-server-input-marker)))
+
 (defun codex--app-server-clear-input ()
   "Delete the text in the app-server input region."
   (when (and (markerp codex--app-server-input-marker)

@@ -3544,6 +3544,123 @@ When only :inherit remains, the face is removed entirely."
           (should (equal observed (list buf))))
       (kill-buffer buf))))
 
+(ert-deftest codex-test-prompt-input-terminal-pending-text ()
+  "Report pending terminal prompt input."
+  (let ((buf (generate-new-buffer "*codex:/tmp/project/*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (insert "› fix the failing test\n\n  gpt-5.5 medium · /tmp"))
+          (should (equal (codex-prompt-input buf) "fix the failing test")))
+      (kill-buffer buf))))
+
+(ert-deftest codex-test-prompt-input-terminal-empty-prompt ()
+  "Return nil for an empty terminal prompt."
+  (let ((buf (generate-new-buffer "*codex:/tmp/project/*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (insert "› \n\n  gpt-5.5 medium · /tmp"))
+          (should-not (codex-prompt-input buf)))
+      (kill-buffer buf))))
+
+(ert-deftest codex-test-prompt-input-matches-heavy-and-legacy-glyphs ()
+  "Recognize the `❯' and legacy `>' prompt glyphs."
+  (let ((buf (generate-new-buffer "*codex:/tmp/project/*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (insert "❯ git status"))
+          (should (equal (codex-prompt-input buf) "git status"))
+          (with-current-buffer buf
+            (erase-buffer)
+            (insert "> legacy input"))
+          (should (equal (codex-prompt-input buf) "legacy input")))
+      (kill-buffer buf))))
+
+(ert-deftest codex-test-prompt-input-ignores-placeholder ()
+  "Return nil when the prompt shows placeholder autosuggestion text."
+  (let ((buf (generate-new-buffer "*codex:/tmp/project/*")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'codex--known-prompt-autosuggestion-p)
+                   (lambda (input)
+                     (string= input "Summarize recent commits"))))
+          (with-current-buffer buf
+            (insert "› Summarize recent commits"))
+          (should-not (codex-prompt-input buf)))
+      (kill-buffer buf))))
+
+(ert-deftest codex-test-prompt-input-cursor-path-single-line ()
+  "Report single-line input on the cursor's prompt line, trimming NBSP."
+  (let ((buf (generate-new-buffer "*codex:/tmp/project/*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (insert "transcript output\n\n› git status  ")
+          (let ((cursor (point)))
+            (cl-letf (((symbol-function 'codex--terminal-cursor-position)
+                       (lambda () cursor)))
+              (should (equal (codex-prompt-input buf) "git status")))))
+      (kill-buffer buf))))
+
+(ert-deftest codex-test-prompt-input-cursor-path-multi-line ()
+  "Report multi-line composer content when the cursor sits on a continuation row."
+  (let ((buf (generate-new-buffer "*codex:/tmp/project/*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (insert "› first line\nsecond line")
+          (let ((cursor (point)))
+            (cl-letf (((symbol-function 'codex--terminal-cursor-position)
+                       (lambda () cursor)))
+              (should (equal (codex-prompt-input buf)
+                             "first line\nsecond line")))))
+      (kill-buffer buf))))
+
+(ert-deftest codex-test-prompt-input-cursor-path-blank-line-bounds-composer ()
+  "Do not join the cursor line to a prompt line across a blank line."
+  (let ((buf (generate-new-buffer "*codex:/tmp/project/*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (insert "› earlier prompt\n\nplain status text")
+          (let ((cursor (point)))
+            (cl-letf (((symbol-function 'codex--terminal-cursor-position)
+                       (lambda () cursor)))
+              (should-not (codex-prompt-input buf)))))
+      (kill-buffer buf))))
+
+(ert-deftest codex-test-prompt-input-cursor-path-empty-prompt ()
+  "Return nil when the cursor's prompt line holds only padding."
+  (let ((buf (generate-new-buffer "*codex:/tmp/project/*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (insert "transcript output\n\n›  ")
+          (let ((cursor (point)))
+            (cl-letf (((symbol-function 'codex--terminal-cursor-position)
+                       (lambda () cursor)))
+              (should-not (codex-prompt-input buf)))))
+      (kill-buffer buf))))
+
+(ert-deftest codex-test-prompt-input-fallback-ignores-scrolled-prompt-echo ()
+  "Ignore prompt echoes scrolled above the trailing screenful."
+  (let ((buf (generate-new-buffer "*codex:/tmp/project/*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (insert "› stale echo\n")
+            (insert (make-string 4500 ?x)))
+          (should-not (codex-prompt-input buf)))
+      (kill-buffer buf))))
+
+(ert-deftest codex-test-prompt-input-app-server-input-region ()
+  "Report pending app-server input after the input marker."
+  (let ((buf (generate-new-buffer "*codex:/tmp/project/*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (insert "› earlier message\n")
+          (setq-local codex--app-server-input-marker (copy-marker (point)))
+          (insert "queued reply")
+          (should (equal (codex-prompt-input buf) "queued reply")))
+      (kill-buffer buf))))
+
 (provide 'codex-test)
 
 ;;; codex-test.el ends here

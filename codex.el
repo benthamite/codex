@@ -61,6 +61,9 @@ Emacs.  The \\='eat and \\='vterm backends run the terminal TUI."
 (defvar codex-app-server-program-switches)
 (defvar codex--app-server-pending-startup-action)
 (defvar codex--app-server-pending-startup-session-id)
+(declare-function codex--app-server-input-active-p "codex-app-server" ())
+(declare-function codex--app-server-prompt-input "codex-app-server" ())
+(declare-function codex--terminal-prompt-input "codex-eat" ())
 
 (defcustom codex-use-alt-screen nil
   "Whether to use Codex's alt-screen TUI.
@@ -963,6 +966,19 @@ After sending the command, move point to the end of the buffer."
     (when (buffer-live-p target)
       (with-current-buffer target
         (run-hook-with-args 'codex-command-submitted-hook target)))))
+
+(defun codex-prompt-input (&optional buffer)
+  "Return pending prompt input text in BUFFER, or nil when empty.
+BUFFER defaults to the current buffer.  App-server buffers report the
+text after the input marker; terminal buffers parse the prompt line
+using `codex--prompt-marker-regexp'.  Placeholder autosuggestion text
+counts as empty."
+  (let ((target (or buffer (current-buffer))))
+    (when (buffer-live-p target)
+      (with-current-buffer target
+        (if (codex--app-server-input-active-p)
+            (codex--app-server-prompt-input)
+          (codex--terminal-prompt-input))))))
 
 (defun codex--build-cli-args ()
   "Build CLI arguments from current customization settings.
