@@ -74,6 +74,7 @@ Commands
 
 Functions
 
+* Session API functions::
 * Notification functions::
 * Hook handling::
 
@@ -322,12 +323,15 @@ The user option @code{codex-default-images} is a list of image file paths to att
 @section Emacs hooks
 
 @vindex codex-start-hook
+@vindex codex-command-submitted-hook
 @vindex codex-process-environment-functions
 @vindex codex-event-hook
 @vindex codex-transcript-catch-up-on-stop
 @vindex codex-transcript-sessions-directory
 
 The hook @code{codex-start-hook} runs after a Codex instance starts.  Use it to perform additional setup in the Codex buffer, such as enabling minor modes or customizing keybindings.
+
+The abnormal hook @code{codex-command-submitted-hook} runs before input is submitted to a Codex session; each function receives the session buffer, with that buffer current, and must be idempotent because a single submission may run the hook more than once.
 
 The abnormal hook @code{codex-process-environment-functions} lets you inject environment variables into the Codex process.  Each function receives two arguments: the Codex buffer name and the project directory.  Each function should return a list of strings in @code{"VAR=VALUE"} format.
 
@@ -512,9 +516,23 @@ The command @code{codex-redraw} asks the Codex TUI to repaint and then forces th
 @chapter Functions
 
 @menu
+* Session API functions::
 * Notification functions::
 * Hook handling::
 @end menu
+
+@node Session API functions
+@section Session API functions
+
+@findex codex-start-session
+@findex codex-prompt-input
+@findex codex-session-identity
+
+The function @code{codex-start-session} starts a Codex session from explicit keyword parameters (@code{:directory}, @code{:instance-name}, @code{:initial-prompt}, @code{:resume-id}, @code{:terminal-backend}) and returns its buffer.
+
+The function @code{codex-prompt-input} returns the pending prompt input text in a Codex session buffer, or nil when the prompt is empty.
+
+The function @code{codex-session-identity} returns a session buffer's identity as a plist with keys @code{:directory}, @code{:instance}, @code{:session-id}, and @code{:terminal-backend}, or nil for buffers that are not Codex sessions.
 
 @node Notification functions
 @section Notification functions

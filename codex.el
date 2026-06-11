@@ -980,6 +980,22 @@ counts as empty."
             (codex--app-server-prompt-input)
           (codex--terminal-prompt-input))))))
 
+(defun codex-session-identity (&optional buffer)
+  "Return session identity for BUFFER as a plist, or nil.
+BUFFER defaults to the current buffer and must be a Codex session
+buffer.  The plist has keys `:directory', `:instance', `:session-id',
+and `:terminal-backend'.  `:session-id' is nil until the session id is
+known.  Directory and instance come from the buffer-local values set by
+`codex--initialize-terminal-buffer', falling back to buffer-name
+parsing only when those are unset."
+  (let ((target (or buffer (current-buffer))))
+    (when (and (buffer-live-p target) (codex--buffer-p target))
+      (with-current-buffer target
+        (list :directory (codex--buffer-directory-for target)
+              :instance (codex--buffer-instance-name-for target)
+              :session-id (plist-get (codex--current-session-identity) :id)
+              :terminal-backend codex-terminal-backend)))))
+
 (defun codex--build-cli-args ()
   "Build CLI arguments from current customization settings.
 Returns a list of strings to pass as command-line arguments."

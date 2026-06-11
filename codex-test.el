@@ -3661,6 +3661,40 @@ When only :inherit remains, the face is removed entirely."
           (should (equal (codex-prompt-input buf) "queued reply")))
       (kill-buffer buf))))
 
+(ert-deftest codex-test-session-identity-reads-buffer-locals ()
+  "Build session identity from buffer-local state, not name scraping."
+  (let ((buf (generate-new-buffer "*codex:/tmp/project/:tests*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq-local codex--buffer-directory "/tmp/project/")
+          (setq-local codex--buffer-instance-name "tests")
+          (setq-local codex-terminal-backend 'eat)
+          (cl-letf (((symbol-function 'codex--current-session-identity)
+                     (lambda () '(:id "abc123" :transcript-file nil))))
+            (should (equal (codex-session-identity buf)
+                           '(:directory "/tmp/project/"
+                             :instance "tests"
+                             :session-id "abc123"
+                             :terminal-backend eat)))))
+      (kill-buffer buf))))
+
+(ert-deftest codex-test-session-identity-nil-session-id-allowed ()
+  "Report identity with a nil session id before the id is known."
+  (let ((buf (generate-new-buffer "*codex:/tmp/project/:tests*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (cl-letf (((symbol-function 'codex--current-session-identity)
+                     (lambda () nil)))
+            (should-not (plist-get (codex-session-identity buf) :session-id))
+            (should (equal (plist-get (codex-session-identity buf) :instance)
+                           "tests"))))
+      (kill-buffer buf))))
+
+(ert-deftest codex-test-session-identity-nil-for-non-codex-buffer ()
+  "Return nil for buffers that are not Codex sessions."
+  (with-temp-buffer
+    (should-not (codex-session-identity (current-buffer)))))
+
 (provide 'codex-test)
 
 ;;; codex-test.el ends here

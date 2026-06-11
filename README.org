@@ -242,12 +242,15 @@ The user option ~codex-default-images~ is a list of image file paths to attach a
 :END:
 
 #+vindex: codex-start-hook
+#+vindex: codex-command-submitted-hook
 #+vindex: codex-process-environment-functions
 #+vindex: codex-event-hook
 #+vindex: codex-transcript-catch-up-on-stop
 #+vindex: codex-transcript-sessions-directory
 
 The hook ~codex-start-hook~ runs after a Codex instance starts.  Use it to perform additional setup in the Codex buffer, such as enabling minor modes or customizing keybindings.
+
+The abnormal hook ~codex-command-submitted-hook~ runs before input is submitted to a Codex session; each function receives the session buffer, with that buffer current, and must be idempotent because a single submission may run the hook more than once.
 
 The abnormal hook ~codex-process-environment-functions~ lets you inject environment variables into the Codex process.  Each function receives two arguments: the Codex buffer name and the project directory.  Each function should return a list of strings in ~"VAR=VALUE"~ format.
 
@@ -441,6 +444,21 @@ The command ~codex-redraw~ asks the Codex TUI to repaint and then forces the Ema
 :PROPERTIES:
 :CUSTOM_ID: h:functions
 :END:
+
+** Session API functions
+:PROPERTIES:
+:CUSTOM_ID: h:session-api-functions
+:END:
+
+#+findex: codex-start-session
+#+findex: codex-prompt-input
+#+findex: codex-session-identity
+
+The function ~codex-start-session~ starts a Codex session from explicit keyword parameters (~:directory~, ~:instance-name~, ~:initial-prompt~, ~:resume-id~, ~:terminal-backend~) and returns its buffer.
+
+The function ~codex-prompt-input~ returns the pending prompt input text in a Codex session buffer, or nil when the prompt is empty.
+
+The function ~codex-session-identity~ returns a session buffer's identity as a plist with keys ~:directory~, ~:instance~, ~:session-id~, and ~:terminal-backend~, or nil for buffers that are not Codex sessions.
 
 ** Notification functions
 :PROPERTIES:
