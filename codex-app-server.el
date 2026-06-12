@@ -18,6 +18,7 @@
 (defvar codex-profile)
 (defvar codex-reasoning-effort)
 (defvar codex-sandbox-mode)
+(defvar codex-hooks-config-path)
 (defvar codex--session-transcript-file)
 (declare-function codex--buffer-name-for-directory "codex" (dir instance-name))
 (declare-function codex--build-backend-switches "codex" (backend extra-switches))
@@ -90,7 +91,7 @@
   :type '(repeat string)
   :group 'codex-app-server)
 
-(defcustom codex-app-server-prompt-string "\n❯ "
+(defcustom codex-app-server-prompt-string "\n› "
   "Prompt shown before the editable input region in app-server buffers.
 The string marks where typed input begins; output renders above it."
   :type 'string
@@ -900,17 +901,29 @@ under `error' as `message' for turn errors, so check both."
    'codex-app-server-header-face))
 
 (defun codex--app-server-header-text (thread)
-  "Return the app-server session header text from THREAD metadata."
-  (let ((version (codex--app-server-codex-version codex--app-server-user-agent))
-        (model (codex--app-server-header-model thread))
-        (directory (codex--app-server-header-directory))
-        (thread-id (alist-get 'id thread))
-        (path (alist-get 'path thread)))
-    (concat (format "Codex%s · %s · %s\n"
-                    (if version (concat " " version) "") model directory)
-            (format "Thread %s\n" thread-id)
-            (if path (format "Session %s\n" (abbreviate-file-name path)) "")
-            (make-string 48 ?─) "\n")))
+  "Return the Codex TUI-style session header text from THREAD metadata."
+  (let* ((metadata (codex--app-server-transcript-header-metadata
+                    codex--session-transcript-file))
+         (version (or (alist-get 'cli_version metadata)
+                      (codex--app-server-codex-version
+                       codex--app-server-user-agent)))
+         (model (codex--app-server-header-model-label thread metadata))
+         (effort (codex--app-server-header-effort metadata))
+         (tier (codex--app-server-config-string "service_tier"))
+         (directory (codex--app-server-header-directory-label metadata)))
+    (concat "\n"
+            (codex--app-server-header-border ?╭ ?╮) "\n"
+            (codex--app-server-header-box-line
+             (format ">_ OpenAI Codex%s"
+                     (if version (format " (v%s)" version) "")))
+            (codex--app-server-header-box-line "")
+            (codex--app-server-header-box-line
+             (codex--app-server-header-model-line model effort tier))
+            (codex--app-server-header-box-line
+             (format "directory: %s" directory))
+            (codex--app-server-header-border ?╰ ?╯) "\n"
+            "\n"
+            "  Tip: [tui.keymap] in ~/.codex/config.toml lets you rebind supported shortcuts.\n")))
 
 (defun codex--app-server-codex-version (user-agent)
   "Return the Codex version parsed from USER-AGENT, or nil when absent."
@@ -918,13 +931,109 @@ under `error' as `message' for turn errors, so check both."
              (string-match "/\\([0-9]+\\.[0-9]+\\.[0-9]+\\)" user-agent))
     (match-string 1 user-agent)))
 
-(defun codex--app-server-header-model (thread)
-  "Return the model label for the app-server header from THREAD metadata."
-  (or codex-model (alist-get 'modelProvider thread) "default"))
+(defconst codex--app-server-header-inner-width 51
+  "Interior width of the Codex TUI startup banner.")
 
-(defun codex--app-server-header-directory ()
+(defconst codex--app-server-header-text-width 49
+  "Text width inside a Codex TUI startup banner line.")
+
+(defun codex--app-server-header-border (left right)
+  "Return a Codex TUI banner border from LEFT to RIGHT."
+  (concat (string left)
+          (make-string codex--app-server-header-inner-width ?─)
+          (string right)))
+
+(defun codex--app-server-header-box-line (text)
+  "Return one Codex TUI banner line containing TEXT."
+  (concat "│ "
+          (codex--app-server-pad-to-width
+           text codex--app-server-header-text-width)
+          " │\n"))
+
+(defun codex--app-server-pad-to-width (text width)
+  "Return TEXT truncated or padded with spaces to display WIDTH."
+  (let* ((truncated (truncate-string-to-width (or text "") width))
+         (padding (- width (string-width truncated))))
+    (concat truncated (make-string (max 0 padding) ?\s))))
+
+(defun codex--app-server-header-model-line (model effort tier)
+  "Return the Codex TUI model status line for MODEL, EFFORT, and TIER."
+  (concat "model:     " (or model "default")
+          (if effort (concat " " effort) "")
+          (if tier (concat "   " tier) "")
+          "   /model to change"))
+
+(defun codex--app-server-header-model-label (_thread metadata)
+  "Return the model label for the app-server header from METADATA."
+  (or codex-model
+      (alist-get 'model metadata)
+      (codex--app-server-config-string "model")
+      "default"))
+
+(defun codex--app-server-header-effort (metadata)
+  "Return the reasoning effort label for the app-server header."
+  (or codex-reasoning-effort
+      (alist-get 'reasoning_effort metadata)
+      (alist-get 'effort metadata)
+      (codex--app-server-config-string "model_reasoning_effort")))
+
+(defun codex--app-server-header-directory-label (metadata)
   "Return the abbreviated working directory for the app-server header."
-  (abbreviate-file-name (or codex--buffer-directory default-directory)))
+  (abbreviate-file-name
+   (or (alist-get 'cwd metadata) codex--buffer-directory default-directory)))
+
+(defun codex--app-server-transcript-header-metadata (file)
+  "Return header metadata parsed from transcript FILE."
+  (let (metadata)
+    (when (and (stringp file) (file-readable-p file))
+      (with-temp-buffer
+        (insert-file-contents file)
+        (dolist (line (split-string (buffer-string) "\n" t))
+          (when-let* ((entry (ignore-errors
+                               (json-parse-string line
+                                                  :object-type 'alist
+                                                  :array-type 'list)))
+                      (payload (alist-get 'payload entry)))
+            (pcase (alist-get 'type entry)
+              ("session_meta"
+               (dolist (key '(cli_version cwd model_provider))
+                 (when-let* ((value (alist-get key payload)))
+                   (unless (alist-get key metadata)
+                     (push (cons key value) metadata)))))
+              ("turn_context"
+               (dolist (pair `((model . ,(alist-get 'model payload))
+                               (effort . ,(alist-get 'effort payload))
+                               (reasoning_effort
+                                . ,(alist-get
+                                    'reasoning_effort
+                                    (alist-get
+                                     'settings
+                                     (alist-get 'collaboration_mode
+                                                payload))))))
+                 (when-let* ((value (cdr pair)))
+                   (unless (alist-get (car pair) metadata)
+                     (push (cons (car pair) value) metadata))))))))))
+    metadata))
+
+(defun codex--app-server-config-string (key)
+  "Return top-level string value KEY from the Codex config.toml."
+  (when (and (boundp 'codex-hooks-config-path)
+             (stringp codex-hooks-config-path))
+    (let ((file (expand-file-name codex-hooks-config-path)))
+      (when (file-readable-p file)
+        (with-temp-buffer
+          (insert-file-contents file)
+          (goto-char (point-min))
+          (let ((limit (or (save-excursion
+                             (when (re-search-forward
+                                    "^[[:space:]]*\\[" nil t)
+                               (match-beginning 0)))
+                           (point-max))))
+            (when (re-search-forward
+                   (format "^[[:space:]]*%s[[:space:]]*=[[:space:]]*\"\\([^\"]+\\)\""
+                           (regexp-quote key))
+                   limit t)
+              (match-string 1))))))))
 
 (defun codex--app-server-turn-started (params)
   "Record app-server turn startup PARAMS and begin the status indicator."

@@ -1002,26 +1002,63 @@ assertion in `eat--t-cur-left' on the following cursor move."
                              (point-min)
                              (point-max)))))))
 
-(ert-deftest codex-test-app-server-header-renders-session-metadata ()
-  "App-server renders a session header from thread metadata on start."
-  (with-temp-buffer
-    (rename-buffer "*codex:/tmp/app-server-header/*" t)
-    (setq-local codex--buffer-directory "/tmp/myproj/")
-    (setq-local codex--app-server-user-agent
-                "codex.el/0.137.0 (Mac OS 26.4.1; arm64) xterm-256color")
-    (let ((codex-model "gpt-5-codex"))
-      (codex--app-server-handle-message
-       '((method . "thread/started")
-         (params
-          (thread
-           (id . "019e9dfd-abc")
-           (modelProvider . "openai")
-           (path . "/home/me/.codex/sessions/x/rollout-y.jsonl"))))))
-    (let ((text (buffer-substring-no-properties (point-min) (point-max))))
-      (should (string-match-p "0\\.137\\.0" text))
-      (should (string-match-p "gpt-5-codex" text))
-      (should (string-match-p "019e9dfd-abc" text))
-      (should (string-match-p "myproj" text)))))
+(ert-deftest codex-test-app-server-header-renders-cli-banner ()
+  "App-server renders the Codex TUI startup banner from session metadata."
+  (let ((file (make-temp-file "codex-header" nil ".jsonl"))
+        (config (make-temp-file "codex-config" nil ".toml")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert (json-encode
+                     '((type . "session_meta")
+                       (payload
+                        (cli_version . "0.139.0")
+                        (cwd . "/Users/me/My Drive/Epoch")
+                        (model_provider . "openai"))))
+                    "\n")
+            (insert (json-encode
+                     '((type . "turn_context")
+                       (payload
+                        (model . "gpt-5.5")
+                        (effort . "high")
+                        (collaboration_mode
+                         (settings
+                          (reasoning_effort . "high")))))))
+                    "\n"))
+          (with-temp-file config
+            (insert "model = \"gpt-5.5\"\n")
+            (insert "model_reasoning_effort = \"high\"\n")
+            (insert "service_tier = \"fast\"\n"))
+          (with-temp-buffer
+            (rename-buffer "*codex:/tmp/app-server-header/*" t)
+            (setq-local codex--buffer-directory "/Users/me/My Drive/Epoch")
+            (setq-local codex--app-server-user-agent
+                        "codex.el/0.139.0 (Mac OS 26.4.1; arm64) dumb")
+            (setq-local codex--app-server-thread-id nil)
+            (let ((codex-hooks-config-path config))
+              (codex--app-server-thread-started
+               `((thread
+                  (id . "019e9dfd-abc")
+                  (modelProvider . "openai")
+                  (path . ,file)))))
+            (let ((text (buffer-substring-no-properties
+                         (point-min) (point-max))))
+              (should (string-prefix-p
+                       (concat
+                        "\n"
+                        "╭───────────────────────────────────────────────────╮\n"
+                        "│ >_ OpenAI Codex (v0.139.0)                        │\n"
+                        "│                                                   │\n"
+                        "│ model:     gpt-5.5 high   fast   /model to change │\n"
+                        "│ directory: /Users/me/My Drive/Epoch               │\n"
+                        "╰───────────────────────────────────────────────────╯\n"
+                        "\n"
+                        "  Tip: [tui.keymap] in ~/.codex/config.toml lets you rebind supported shortcuts.\n")
+                       text))
+              (should-not (string-match-p "^Thread " text))
+              (should-not (string-match-p "^Session " text)))))
+      (delete-file file)
+      (delete-file config)))
 
 (ert-deftest codex-test-app-server-thread-started-records-core-session-metadata ()
   "App-server thread startup records the generic Codex session identity."
@@ -1101,8 +1138,8 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (let ((text (buffer-substring-no-properties (point-min) (point-max))))
       (should (string-match-p "streamed answer" text))
       (should (< (string-match "streamed answer" text)
-                 (string-match "❯" text)))
-      (should (< (string-match "❯" text)
+                 (string-match "›" text)))
+      (should (< (string-match "›" text)
                  (string-match "my draft" text))))
     (should (equal (codex--app-server-input-text) "my draft"))))
 
@@ -1354,7 +1391,7 @@ assertion in `eat--t-cur-left' on the following cursor move."
         (codex--app-server-submit-command "!echo hi"))
       (should (equal (car sent) "thread/shellCommand"))
       (should (equal (alist-get 'command (cdr sent)) "echo hi")))
-    (should-not (string-match-p "› " (buffer-string)))))
+    (should-not (string-match-p "› !echo hi" (buffer-string)))))
 
 (ert-deftest codex-test-app-server-file-reference ()
   "Inserting a file reference prepends @ and the chosen path."
