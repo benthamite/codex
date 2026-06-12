@@ -2550,6 +2550,26 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
+(ert-deftest codex-test-start-uses-default-backend-not-buffer-local ()
+  "Normal Codex startup uses the user option default backend."
+  (let ((old-default (default-value 'codex-terminal-backend))
+        captured-backend)
+    (unwind-protect
+        (with-temp-buffer
+          (setq-default codex-terminal-backend 'app-server)
+          (setq-local codex-terminal-backend 'eat)
+          (cl-letf (((symbol-function 'codex--directory)
+                     (lambda () "/tmp/"))
+                    ((symbol-function 'codex--session-instance-name)
+                     (lambda (&rest _) "default"))
+                    ((symbol-function 'codex--start-session-buffer)
+                     (lambda (_dir backend _instance _extra-switches
+                                  _resume-id _initial-prompt _switch-after)
+                       (setq captured-backend backend))))
+            (codex--start nil nil)
+            (should (eq captured-backend 'app-server))))
+      (setq-default codex-terminal-backend old-default))))
+
 (ert-deftest codex-test-prompt-autosuggestion-context-placeholder ()
   "Prompt autosuggestion context recognizes Codex placeholders."
   (let ((suggestion "Summarize recent commits"))

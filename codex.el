@@ -1065,7 +1065,8 @@ If FORCE-SWITCH-TO-BUFFER is non-nil, always switch to the Codex buffer."
                 (codex--directory)))
          (switch-after (or (equal arg '(4)) force-switch-to-buffer))
          (instance-name (codex--session-instance-name dir force-prompt)))
-    (codex--start-session-buffer dir codex-terminal-backend instance-name
+    (codex--start-session-buffer dir (default-value 'codex-terminal-backend)
+                                 instance-name
                                  extra-switches nil nil switch-after)))
 
 (defun codex--start-subcommand (subcommand &optional last-flag extra-args
