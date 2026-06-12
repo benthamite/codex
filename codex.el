@@ -49,6 +49,13 @@
   :type '(repeat string)
   :group 'codex)
 
+(defvar codex--terminal-backend-standard-before-defcustom nil
+  "Standard value for `codex-terminal-backend' before the current load.")
+
+(setq codex--terminal-backend-standard-before-defcustom
+      (when (boundp 'codex-terminal-backend)
+        (get 'codex-terminal-backend 'standard-value)))
+
 (defcustom codex-terminal-backend 'eat
   "Backend to use for Codex.
 The \\='eat and \\='vterm backends run the terminal TUI.  The
@@ -63,8 +70,16 @@ Emacs."
   "Return non-nil when `codex-terminal-backend' has the old default."
   (and (eq codex-terminal-backend 'app-server)
        (eq (default-value 'codex-terminal-backend) 'app-server)
+       (codex--terminal-backend-previous-default-p 'app-server)
        (not (get 'codex-terminal-backend 'customized-value))
        (not (get 'codex-terminal-backend 'saved-value))))
+
+(defun codex--terminal-backend-previous-default-p (backend)
+  "Return non-nil when BACKEND was the previous standard backend."
+  (eq (condition-case nil
+          (eval (car codex--terminal-backend-standard-before-defcustom) t)
+        (error nil))
+      backend))
 
 (defun codex--migrate-terminal-backend-default ()
   "Reset the old implicit `codex-terminal-backend' default to eat."

@@ -129,11 +129,14 @@
   "Reload migration resets the old implicit app-server backend default."
   (let ((old-default (default-value 'codex-terminal-backend))
         (old-value codex-terminal-backend)
+        (old-prior-standard codex--terminal-backend-standard-before-defcustom)
         (old-plist (copy-sequence (symbol-plist 'codex-terminal-backend))))
     (unwind-protect
         (progn
           (setq-default codex-terminal-backend 'app-server)
           (setq codex-terminal-backend 'app-server)
+          (setq codex--terminal-backend-standard-before-defcustom
+                '((quote app-server)))
           (put 'codex-terminal-backend 'customized-value nil)
           (put 'codex-terminal-backend 'saved-value nil)
           (codex--migrate-terminal-backend-default)
@@ -141,6 +144,7 @@
           (should (eq codex-terminal-backend 'eat)))
       (setq-default codex-terminal-backend old-default)
       (setq codex-terminal-backend old-value)
+      (setq codex--terminal-backend-standard-before-defcustom old-prior-standard)
       (setplist 'codex-terminal-backend old-plist))))
 
 (ert-deftest codex-test-migrate-terminal-backend-preserves-customized-app-server ()
@@ -159,6 +163,27 @@
           (should (eq codex-terminal-backend 'app-server)))
       (setq-default codex-terminal-backend old-default)
       (setq codex-terminal-backend old-value)
+      (setplist 'codex-terminal-backend old-plist))))
+
+(ert-deftest codex-test-migrate-terminal-backend-preserves-preload-setq ()
+  "Reload migration preserves app-server set before codex.el is loaded."
+  (let ((old-default (default-value 'codex-terminal-backend))
+        (old-value codex-terminal-backend)
+        (old-prior-standard codex--terminal-backend-standard-before-defcustom)
+        (old-plist (copy-sequence (symbol-plist 'codex-terminal-backend))))
+    (unwind-protect
+        (progn
+          (setq-default codex-terminal-backend 'app-server)
+          (setq codex-terminal-backend 'app-server)
+          (setq codex--terminal-backend-standard-before-defcustom nil)
+          (put 'codex-terminal-backend 'customized-value nil)
+          (put 'codex-terminal-backend 'saved-value nil)
+          (codex--migrate-terminal-backend-default)
+          (should (eq (default-value 'codex-terminal-backend) 'app-server))
+          (should (eq codex-terminal-backend 'app-server)))
+      (setq-default codex-terminal-backend old-default)
+      (setq codex-terminal-backend old-value)
+      (setq codex--terminal-backend-standard-before-defcustom old-prior-standard)
       (setplist 'codex-terminal-backend old-plist))))
 
 ;;;; CLI argument building tests
