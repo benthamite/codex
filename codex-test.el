@@ -1562,22 +1562,25 @@ assertion in `eat--t-cur-left' on the following cursor move."
               (should (string-match-p "FAKEDATA" (buffer-string)))))
         (delete-file file)))))
 
-(ert-deftest codex-test-app-server-paste-image-inserts-placeholder ()
-  "Pasting images inserts incrementing `[Image #N]' tokens, like the CLI."
+(ert-deftest codex-test-app-server-paste-image-keeps-composer-text ()
+  "Pasting images attaches them without inserting editable tokens."
   (with-temp-buffer
     (rename-buffer "*codex:/tmp/app-server-img/*" t)
     (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
     (setq-local codex--app-server-pending-images nil)
     (codex--app-server-setup-input-region)
-    (goto-char (point-max))
+    (goto-char codex--app-server-input-marker)
     (cl-letf (((symbol-function 'codex--app-server-clipboard-image-data)
                (lambda () "\211PNG\r\n\032\nFAKE")))
       (insert "first ")
+      (let ((input-point (point)))
+        (goto-char (point-max))
+        (codex-app-server-paste-image)
+        (should (equal (codex--app-server-input-text) "first "))
+        (should (equal (point) input-point)))
       (codex-app-server-paste-image)
-      (insert " second ")
-      (codex-app-server-paste-image))
-    (should (equal (codex--app-server-input-text)
-                   "first [Image #1] second [Image #2]"))
+      (should (equal (codex--app-server-input-text) "first ")))
+    (should (= 2 (length codex--app-server-pending-images)))
     (dolist (file codex--app-server-pending-images)
       (when (file-exists-p file) (delete-file file)))))
 
