@@ -119,6 +119,48 @@
              (lambda (_prompt _initial-input) "")))
     (should-not (codex--read-optional-string "Prompt: " "initial"))))
 
+;;;; Customization defaults
+
+(ert-deftest codex-test-terminal-backend-defaults-to-eat ()
+  "Test that new sessions use the terminal TUI backend by default."
+  (should (eq (default-value 'codex-terminal-backend) 'eat)))
+
+(ert-deftest codex-test-migrate-terminal-backend-resets-implicit-app-server ()
+  "Reload migration resets the old implicit app-server backend default."
+  (let ((old-default (default-value 'codex-terminal-backend))
+        (old-value codex-terminal-backend)
+        (old-plist (copy-sequence (symbol-plist 'codex-terminal-backend))))
+    (unwind-protect
+        (progn
+          (setq-default codex-terminal-backend 'app-server)
+          (setq codex-terminal-backend 'app-server)
+          (put 'codex-terminal-backend 'customized-value nil)
+          (put 'codex-terminal-backend 'saved-value nil)
+          (codex--migrate-terminal-backend-default)
+          (should (eq (default-value 'codex-terminal-backend) 'eat))
+          (should (eq codex-terminal-backend 'eat)))
+      (setq-default codex-terminal-backend old-default)
+      (setq codex-terminal-backend old-value)
+      (setplist 'codex-terminal-backend old-plist))))
+
+(ert-deftest codex-test-migrate-terminal-backend-preserves-customized-app-server ()
+  "Reload migration preserves an explicit Custom app-server backend."
+  (let ((old-default (default-value 'codex-terminal-backend))
+        (old-value codex-terminal-backend)
+        (old-plist (copy-sequence (symbol-plist 'codex-terminal-backend))))
+    (unwind-protect
+        (progn
+          (setq-default codex-terminal-backend 'app-server)
+          (setq codex-terminal-backend 'app-server)
+          (put 'codex-terminal-backend 'customized-value '((quote app-server)))
+          (put 'codex-terminal-backend 'saved-value nil)
+          (codex--migrate-terminal-backend-default)
+          (should (eq (default-value 'codex-terminal-backend) 'app-server))
+          (should (eq codex-terminal-backend 'app-server)))
+      (setq-default codex-terminal-backend old-default)
+      (setq codex-terminal-backend old-value)
+      (setplist 'codex-terminal-backend old-plist))))
+
 ;;;; CLI argument building tests
 
 (ert-deftest codex-test-build-cli-args-defaults ()

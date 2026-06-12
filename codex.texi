@@ -105,7 +105,7 @@ The main capabilities of @samp{codex.el} can be grouped thematically:
 @item
 @strong{Sending commands and context} --- send freeform commands, send commands annotated with file and line context, send the active region or entire buffer, send file paths and images, and ask Codex to fix errors at point.
 @item
-@strong{Native rendering and terminal backends} --- render new Codex sessions from app-server protocol events so assistant messages, Markdown tables, and post-table text are not dependent on terminal screen history; keep the Eat and vterm terminal TUI backends available when needed.
+@strong{Terminal and native rendering backends} --- run new Codex sessions through the Eat terminal TUI by default for compatibility; keep the app-server renderer available when assistant messages, Markdown tables, and post-table text should not depend on terminal screen history.
 @item
 @strong{Window and buffer management} --- toggle the Codex window, switch between instances, select from all running instances, and toggle read-only mode.
 @item
@@ -116,7 +116,7 @@ The main capabilities of @samp{codex.el} can be grouped thematically:
 @strong{Model and configuration} --- change the model, reasoning effort, sandbox mode, approval policy, and profile on the fly through transient infixes.
 @end itemize
 
-The package requires Emacs 28.1 or later, @samp{transient} 0.9.3 or later, @samp{inheritenv}, and @samp{eat}.  The default backend is @samp{app-server}, which talks to the Codex app-server protocol and renders conversation events directly in Emacs.  You can still use the terminal TUI through @samp{eat}, or through @samp{vterm} by installing it separately and setting @code{codex-terminal-backend} to @code{vterm}.
+The package requires Emacs 28.1 or later, @samp{transient} 0.9.3 or later, @samp{inheritenv}, and @samp{eat}.  The default backend is @samp{eat}, which runs the Codex terminal TUI@.  You can use the native app-server renderer by setting @code{codex-terminal-backend} to @code{app-server}, or use @samp{vterm} by installing it separately and setting @code{codex-terminal-backend} to @code{vterm}.
 
 The development repository is on @uref{https://github.com/benthamite/codex, GitHub}.
 
@@ -160,7 +160,7 @@ The user option @code{codex-program} specifies the path to the Codex binary.  Th
 
 The user option @code{codex-program-switches} is a list of extra CLI flags to pass to terminal Codex sessions.  The default value is @code{nil}.  Use this for terminal-backend flags that you always want applied but that are not covered by the dedicated user options below.
 
-The user option @code{codex-terminal-backend} selects the Codex backend.  The choices are @code{app-server} (the default), @code{eat}, and @code{vterm}.  The @samp{app-server} backend starts @code{codex app-server --listen stdio://}, parses its newline-delimited JSON-RPC event stream from standard output, and renders assistant messages directly in the Emacs buffer.  Standard error is kept out of the protocol renderer and its side buffer is cleaned up with the app-server process, so CLI status logs do not appear as malformed app-server messages or leave process prompts behind when a session exits.  This avoids terminal redraw and scrollback loss for wide Markdown tables.  The @samp{eat} and @samp{vterm} choices run the Codex terminal TUI instead.  On the @samp{app-server} backend, @code{codex-resume} and @code{codex-fork} work natively: they list previous threads with @samp{thread/list}, prompt for one, resume or fork it through @samp{thread/resume} or @samp{thread/fork}, and replay the prior conversation history into the buffer.
+The user option @code{codex-terminal-backend} selects the Codex backend.  The choices are @code{eat} (the default), @code{app-server}, and @code{vterm}.  The @samp{eat} and @samp{vterm} choices run the Codex terminal TUI@.  The @samp{app-server} backend starts @code{codex app-server --listen stdio://}, parses its newline-delimited JSON-RPC event stream from standard output, and renders assistant messages directly in the Emacs buffer.  Standard error is kept out of the protocol renderer and its side buffer is cleaned up with the app-server process, so CLI status logs do not appear as malformed app-server messages or leave process prompts behind when a session exits.  This avoids terminal redraw and scrollback loss for wide Markdown tables.  On the @samp{app-server} backend, @code{codex-resume} and @code{codex-fork} work natively: they list previous threads with @samp{thread/list}, prompt for one, resume or fork it through @samp{thread/resume} or @samp{thread/fork}, and replay the prior conversation history into the buffer.
 
 When an @samp{app-server} session connects, codex.el renders a session header showing the Codex version when the server reports it, the model or provider, the working directory, the thread id, and the session transcript path.  The header replaces the terminal TUI's startup banner, which is not emitted over the app-server protocol.  App-server notifications are rendered only when they belong to the buffer's current thread, so sub-agent or side-thread events do not leak command output into the parent thread's buffer.
 

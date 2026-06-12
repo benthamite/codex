@@ -49,14 +49,30 @@
   :type '(repeat string)
   :group 'codex)
 
-(defcustom codex-terminal-backend 'app-server
+(defcustom codex-terminal-backend 'eat
   "Backend to use for Codex.
-The \\='app-server backend renders Codex protocol events directly in
-Emacs.  The \\='eat and \\='vterm backends run the terminal TUI."
-  :type '(radio (const :tag "Native app-server renderer" app-server)
-                (const :tag "Eat terminal emulator" eat)
+The \\='eat and \\='vterm backends run the terminal TUI.  The
+\\='app-server backend renders Codex protocol events directly in
+Emacs."
+  :type '(radio (const :tag "Eat terminal emulator" eat)
+                (const :tag "Native app-server renderer" app-server)
                 (const :tag "Vterm terminal emulator" vterm))
   :group 'codex)
+
+(defun codex--legacy-implicit-terminal-backend-p ()
+  "Return non-nil when `codex-terminal-backend' has the old default."
+  (and (eq codex-terminal-backend 'app-server)
+       (eq (default-value 'codex-terminal-backend) 'app-server)
+       (not (get 'codex-terminal-backend 'customized-value))
+       (not (get 'codex-terminal-backend 'saved-value))))
+
+(defun codex--migrate-terminal-backend-default ()
+  "Reset the old implicit `codex-terminal-backend' default to eat."
+  (when (codex--legacy-implicit-terminal-backend-p)
+    (setq-default codex-terminal-backend 'eat)
+    (setq codex-terminal-backend 'eat)))
+
+(codex--migrate-terminal-backend-default)
 
 (defvar codex-app-server-program-switches)
 (defvar codex--app-server-pending-startup-action)

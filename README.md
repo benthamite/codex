@@ -51,10 +51,11 @@ Requires Emacs 28.1 or later.
 ## Quick start
 
 After installing the package and the Codex CLI, you can start a session with
-`M-x codex`. New sessions use the native `app-server` backend by default, so
-assistant messages and Markdown tables are rendered from structured Codex events
-instead of terminal screen history. Set `codex-terminal-backend` to `eat` or
-`vterm` if you want the terminal TUI backend.
+`M-x codex`. New sessions use the `eat` terminal backend by default for
+compatibility with the Codex CLI TUI. Set `codex-terminal-backend` to
+`app-server` if you want assistant messages and Markdown tables rendered from
+structured Codex events instead of terminal screen history, or to `vterm` if you
+prefer the vterm terminal backend.
 
 ```emacs-lisp
 ;; Optional: bind the command map to a prefix of your choice.
