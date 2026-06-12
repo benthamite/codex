@@ -8,6 +8,7 @@
 (require 'json)
 (require 'seq)
 (require 'subr-x)
+(require 'url-util)
 
 ;;;; Forward declarations
 (defvar codex-approval-policy)
@@ -1925,20 +1926,56 @@ event."
 
 (defun codex--app-server-render-transcript-agent (text)
   "Render transcript agent TEXT."
+  (setq text (codex--app-server-transcript-cli-text text))
   (setq codex--app-server-last-agent-message text)
-  (let ((start (codex--app-server-insert-message
-                codex--app-server-bullet
-                (codex--app-server-wrap-transcript-message
-                 text codex--app-server-bullet))))
+  (codex--app-server-ensure-section-break)
+  (codex--app-server-insert codex--app-server-bullet 'codex-app-server-role-face)
+  (let ((start (codex--app-server-output-point)))
+    (codex--app-server-insert
+     (codex--app-server-wrap-transcript-message
+      text codex--app-server-bullet))
     (codex--app-server-fontify-markdown
      start (codex--app-server-output-point))))
 
+(defun codex--app-server-transcript-cli-text (text)
+  "Return transcript TEXT normalized to the CLI's visible transcript form."
+  (setq text
+        (replace-regexp-in-string
+         "\\[\\([^]\n]+\\)\\](\\([^)\n]+\\))"
+         (lambda (match)
+           (save-match-data
+             (if (string-match "\\`\\[\\([^]\n]+\\)\\](\\([^)\n]+\\))\\'" match)
+                 (codex--app-server-transcript-link-display
+                  (match-string 1 match)
+                  (match-string 2 match))
+               match)))
+         text t t))
+  (replace-regexp-in-string ":\\(\n\\)- " ":\n\n- " text t))
+
+(defun codex--app-server-transcript-link-display (label target)
+  "Return the CLI transcript display for Markdown link LABEL and TARGET."
+  (let* ((decoded (url-unhex-string target))
+         (path (if (string-prefix-p "file://" decoded)
+                   (substring decoded 7)
+                 decoded)))
+    (if (file-name-absolute-p path)
+        (file-relative-name path default-directory)
+      label)))
+
 (defun codex--app-server-wrap-transcript-message (text prefix)
   "Return transcript TEXT hard-wrapped for a message with PREFIX."
-  (mapconcat (lambda (line)
-               (codex--app-server-wrap-transcript-line line prefix))
-             (split-string text "\n")
-             "\n"))
+  (let ((first t))
+    (mapconcat
+     (lambda (line)
+       (let ((wrapped (codex--app-server-wrap-transcript-line line prefix)))
+         (prog1
+             (cond
+              (first wrapped)
+              ((string-empty-p wrapped) "")
+              (t (concat "  " wrapped)))
+           (setq first nil))))
+     (split-string text "\n")
+     "\n")))
 
 (defun codex--app-server-wrap-transcript-line (line prefix)
   "Return transcript LINE hard-wrapped for a message with PREFIX."
@@ -1947,20 +1984,61 @@ event."
          (next-width (max 1 (- width 2)))
          (words (split-string line "[ \t]+" t))
          (current "")
+         (current-width 0)
          lines)
     (dolist (word words)
-      (let ((limit (if lines next-width first-width))
+      (let* ((word-width
+              (codex--app-server-transcript-visible-token-width word))
+             (limit (if lines next-width first-width))
+             (candidate-width (if (string-empty-p current)
+                                  word-width
+                                (+ current-width 1 word-width)))
             (candidate (if (string-empty-p current)
                            word
                          (concat current " " word))))
         (if (or (string-empty-p current)
-                (<= (string-width candidate) limit))
-            (setq current candidate)
-          (push current lines)
-          (setq current word))))
+                (<= candidate-width limit))
+            (setq current candidate
+                  current-width candidate-width)
+          (if-let* ((split (and (not (string-empty-p current))
+                                (codex--app-server-split-transcript-token
+                                 word (- limit current-width 1)))))
+              (progn
+                (push (concat current " " (car split)) lines)
+                (setq current (cdr split)
+                      current-width
+                      (codex--app-server-transcript-visible-token-width
+                       current)))
+            (push current lines)
+            (setq current word
+                  current-width word-width)))))
     (when (or lines (not (string-empty-p current)))
       (push current lines))
     (string-join (nreverse lines) "\n  ")))
+
+(defun codex--app-server-split-transcript-token (token max-width)
+  "Split TOKEN at the last CLI-visible separator within MAX-WIDTH."
+  (let (best)
+    (when (> max-width 0)
+      (dotimes (idx (length token))
+        (let ((end (1+ idx)))
+          (when (and (memq (aref token idx) '(?- ?/))
+                     (< end (length token))
+                     (<= (codex--app-server-transcript-visible-token-width
+                          (substring token 0 end))
+                         max-width))
+            (setq best end)))))
+    (when best
+      (cons (substring token 0 best)
+            (substring token best)))))
+
+(defun codex--app-server-transcript-visible-token-width (token)
+  "Return TOKEN width after inline Markdown markup is hidden."
+  (string-width
+   (replace-regexp-in-string
+    "`" ""
+    (replace-regexp-in-string
+     "\\[\\([^]\n]+\\)\\](\\([^)\n]+\\))" "\\1" token t))))
 
 (defun codex--app-server-render-transcript-separator ()
   "Render the CLI separator shown between transcript tool groups."

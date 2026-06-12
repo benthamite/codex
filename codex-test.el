@@ -1631,6 +1631,64 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (should (equal (buffer-substring-no-properties (point-min) (point-max))
                    "• alpha beta gamma delta\n  epsilon zeta eta"))))
 
+(ert-deftest codex-test-app-server-transcript-history-wraps-visible-markdown ()
+  "Transcript replay wraps inline Markdown by its visible width."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-transcript-markdown-wrap/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
+    (cl-letf (((symbol-function 'codex--app-server-separator-width)
+               (lambda () 18)))
+      (codex--app-server-render-transcript-agent
+       "alpha beta `gamma`"))
+    (should (equal (buffer-substring-no-properties (point-min) (point-max))
+                   "• alpha beta `gamma`"))))
+
+(ert-deftest codex-test-app-server-transcript-history-renders-file-link-targets ()
+  "Transcript replay renders file links like the CLI transcript view."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-transcript-file-link/*" t)
+    (let ((default-directory "/Users/pablostafforini/My Drive/Epoch/"))
+      (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+      (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
+      (codex--app-server-render-transcript-agent
+       "Updated [2026-06-11.gdoc](/Users/pablostafforini/My%20Drive/Epoch/meetings/maria/2026-06-11.gdoc)."))
+    (should (equal (buffer-substring-no-properties (point-min) (point-max))
+                   "• Updated meetings/maria/2026-06-11.gdoc."))))
+
+(ert-deftest codex-test-app-server-transcript-history-indents-agent-paragraphs ()
+  "Transcript replay stores continuation paragraphs with CLI indentation."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-transcript-paragraphs/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
+    (codex--app-server-render-transcript-agent "First paragraph.\n\nSecond paragraph.")
+    (should (equal (buffer-substring-no-properties (point-min) (point-max))
+                   "• First paragraph.\n\n  Second paragraph."))))
+
+(ert-deftest codex-test-app-server-transcript-history-breaks-path-tokens ()
+  "Transcript replay breaks path-like tokens at CLI-visible separators."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-transcript-path-wrap/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
+    (cl-letf (((symbol-function 'codex--app-server-separator-width)
+               (lambda () 42)))
+      (codex--app-server-render-transcript-agent
+       "Path projects/cybersecurity-policy/cybersecurity-readings.org"))
+    (should (equal (buffer-substring-no-properties (point-min) (point-max))
+                   "• Path projects/cybersecurity-policy/\n  cybersecurity-readings.org"))))
+
+(ert-deftest codex-test-app-server-transcript-history-spaces-before-lists ()
+  "Transcript replay leaves the CLI Markdown gap before a following list."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-transcript-list-gap/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
+    (codex--app-server-render-transcript-agent "Candidate:\n- Harden")
+    (should (equal (buffer-substring-no-properties (point-min) (point-max))
+                   "• Candidate:\n\n  - Harden"))))
+
 (ert-deftest codex-test-app-server-transcript-history-pads-user-prompts ()
   "Transcript replay stores user prompts as padded terminal rows."
   (with-temp-buffer
