@@ -18,6 +18,7 @@
 (defvar codex-profile)
 (defvar codex-reasoning-effort)
 (defvar codex-sandbox-mode)
+(defvar codex--session-transcript-file)
 (declare-function codex--buffer-name-for-directory "codex" (dir instance-name))
 (declare-function codex--build-backend-switches "codex" (backend extra-switches))
 (declare-function codex--directory "codex")
@@ -1719,6 +1720,67 @@ Like the CLI, this shows the textual result rather than the raw envelope."
     (dolist (item (append (alist-get 'items turn) nil))
       (codex--app-server-render-history-item item))))
 
+(defun codex--app-server-render-resumed-history (turns)
+  "Render resumed history from the transcript, falling back to TURNS."
+  (unless (codex--app-server-render-transcript-history
+           codex--session-transcript-file)
+    (codex--app-server-render-history turns)))
+
+(defun codex--app-server-render-transcript-history (file)
+  "Render user-visible session transcript FILE.
+Return non-nil when FILE supplied at least one displayable transcript
+event."
+  (when (and (stringp file) (file-exists-p file))
+    (let ((rendered nil))
+      (dolist (event (codex--app-server-transcript-events file) rendered)
+        (setq rendered t)
+        (pcase (car event)
+          ('user (codex--app-server-render-transcript-user (cdr event)))
+          ('agent (codex--app-server-render-transcript-agent (cdr event))))))))
+
+(defun codex--app-server-transcript-events (file)
+  "Return user-visible transcript events from JSONL FILE."
+  (let (events)
+    (with-temp-buffer
+      (insert-file-contents file)
+      (dolist (line (split-string (buffer-string) "\n" t))
+        (when-let* ((entry (ignore-errors
+                             (json-parse-string line
+                                                :object-type 'alist
+                                                :array-type 'list)))
+                    ((equal (alist-get 'type entry) "event_msg"))
+                    (payload (alist-get 'payload entry))
+                    (event (codex--app-server-transcript-event payload)))
+          (push event events))))
+    (nreverse events)))
+
+(defun codex--app-server-transcript-event (payload)
+  "Return a renderable transcript event from PAYLOAD, or nil."
+  (pcase (alist-get 'type payload)
+    ("user_message"
+     (codex--app-server-transcript-event-with-text
+      'user (alist-get 'message payload)))
+    ("agent_message"
+     (codex--app-server-transcript-event-with-text
+      'agent (alist-get 'message payload)))))
+
+(defun codex--app-server-transcript-event-with-text (role text)
+  "Return a transcript event with ROLE and TEXT when TEXT is meaningful."
+  (when (and (stringp text) (not (string-blank-p text)))
+    (cons role text)))
+
+(defun codex--app-server-render-transcript-user (text)
+  "Render transcript user TEXT."
+  (codex--app-server-insert-message codex--app-server-user-prefix text))
+
+(defun codex--app-server-render-transcript-agent (text)
+  "Render transcript agent TEXT."
+  (setq codex--app-server-last-agent-message text)
+  (let ((start (codex--app-server-insert-message
+                codex--app-server-bullet text)))
+    (codex--app-server-fontify-markdown
+     start (codex--app-server-output-point))))
+
 (defun codex--app-server-render-history-item (item)
   "Render a single historical ITEM during resume."
   (pcase (alist-get 'type item)
@@ -2029,7 +2091,7 @@ object such as the \"don't ask again\" execpolicy amendment."
           (format "Codex resume failed: %S" error))
        (codex--app-server-thread-started
         `((thread . ,(alist-get 'thread result))))
-       (codex--app-server-render-history
+       (codex--app-server-render-resumed-history
         (alist-get 'data (alist-get 'initialTurnsPage result)))))))
 
 (defun codex--app-server-begin-resume-session-id (session-id)

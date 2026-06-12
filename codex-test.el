@@ -1479,6 +1479,48 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (should (equal (alist-get 'path (cdr sent))
                      "/tmp/session-sid-123.jsonl")))))
 
+(ert-deftest codex-test-app-server-resume-renders-transcript-history ()
+  "Resume replays JSONL user-visible transcript text before lossy turn items."
+  (let ((file (make-temp-file "codex-app-server-transcript" nil ".jsonl")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert (json-encode
+                     '((type . "event_msg")
+                       (payload
+                        (type . "user_message")
+                        (message . "$meeting-debrief"))))
+                    "\n")
+            (insert (json-encode
+                     '((type . "event_msg")
+                       (payload
+                        (type . "agent_message")
+                        (message . "Using meeting-debrief now.")
+                        (phase . "commentary"))))
+                    "\n"))
+          (with-temp-buffer
+            (rename-buffer "*codex:/tmp/app-server-transcript/*" t)
+            (setq-local codex--app-server-agent-items
+                        (make-hash-table :test 'equal))
+            (setq-local codex--app-server-command-items
+                        (make-hash-table :test 'equal))
+            (let ((response
+                   `((thread (id . "sid-123") (path . ,file))
+                     (initialTurnsPage
+                      (data . (((items . (((type . "agentMessage")
+                                           (text . "lossy final only")))))))))))
+              (cl-letf (((symbol-function 'codex--app-server-send-request)
+                         (lambda (_method _params callback)
+                           (funcall callback response nil))))
+                (codex--app-server-send-resume
+                 "thread/resume" `((id . "sid-123") (path . ,file)))))
+            (let ((text (buffer-substring-no-properties
+                         (point-min) (point-max))))
+              (should (string-match-p "› \\$meeting-debrief" text))
+              (should (string-match-p "• Using meeting-debrief now\\." text))
+              (should-not (string-match-p "lossy final only" text)))))
+      (delete-file file))))
+
 (ert-deftest codex-test-app-server-reasoning-up-down ()
   "Reasoning up/down cycle the effort levels and clamp at the ends."
   (let ((codex-reasoning-effort nil))
