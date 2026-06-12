@@ -1631,6 +1631,16 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (should (equal (buffer-substring-no-properties (point-min) (point-max))
                    "• alpha beta gamma delta\n  epsilon zeta eta"))))
 
+(ert-deftest codex-test-app-server-transcript-history-pads-user-prompts ()
+  "Transcript replay stores user prompts as padded terminal rows."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-transcript-user-pad/*" t)
+    (cl-letf (((symbol-function 'codex--app-server-separator-width)
+               (lambda () 10)))
+      (codex--app-server-render-transcript-user "$cmd"))
+    (should (equal (buffer-substring-no-properties (point-min) (point-max))
+                   "          \n› $cmd    \n          "))))
+
 (ert-deftest codex-test-app-server-reasoning-up-down ()
   "Reasoning up/down cycle the effort levels and clamp at the ends."
   (let ((codex-reasoning-effort nil))

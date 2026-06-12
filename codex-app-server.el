@@ -1907,7 +1907,21 @@ event."
 
 (defun codex--app-server-render-transcript-user (text)
   "Render transcript user TEXT."
-  (codex--app-server-insert-message codex--app-server-user-prefix text))
+  (codex--app-server-ensure-section-break)
+  (let ((blank (make-string (codex--app-server-separator-width) ?\s)))
+    (codex--app-server-insert (concat blank "\n"))
+    (codex--app-server-insert
+     (codex--app-server-pad-terminal-row
+      (concat codex--app-server-user-prefix text))
+     'codex-app-server-role-face)
+    (codex--app-server-insert (concat "\n" blank))))
+
+(defun codex--app-server-pad-terminal-row (text)
+  "Return TEXT padded to the transcript terminal row width."
+  (let ((padding (- (codex--app-server-separator-width) (string-width text))))
+    (if (> padding 0)
+        (concat text (make-string padding ?\s))
+      text)))
 
 (defun codex--app-server-render-transcript-agent (text)
   "Render transcript agent TEXT."
