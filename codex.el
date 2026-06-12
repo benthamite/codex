@@ -1299,8 +1299,7 @@ first, falling back to the global default face attribute."
   "Default notification function that displays a message and pulses the modeline.
 TITLE is the notification title.  MESSAGE is the notification body."
   (message "%s: %s" title message)
-  (codex--pulse-modeline)
-  (message "%s: %s" title message))
+  (codex--pulse-modeline))
 
 (defun codex--notify (_terminal)
   "Notify the user that Codex has finished and is awaiting input.

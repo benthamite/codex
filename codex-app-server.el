@@ -1928,7 +1928,7 @@ event."
   "Return the visible width for a transcript separator."
   (if-let* ((window (get-buffer-window (current-buffer) t)))
       (max 48 (window-body-width window))
-    48))
+    (max 48 (window-body-width))))
 
 (defun codex--app-server-render-history-item (item)
   "Render a single historical ITEM during resume."

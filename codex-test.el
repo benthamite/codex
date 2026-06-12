@@ -1612,6 +1612,12 @@ assertion in `eat--t-cur-left' on the following cursor move."
                        text)))))
       (delete-file file))))
 
+(ert-deftest codex-test-app-server-separator-width-falls-back-to-selected-window ()
+  "Transcript separators use the active window width when buffer is hidden."
+  (with-temp-buffer
+    (should (= (codex--app-server-separator-width)
+               (max 48 (window-body-width))))))
+
 (ert-deftest codex-test-app-server-reasoning-up-down ()
   "Reasoning up/down cycle the effort levels and clamp at the ends."
   (let ((codex-reasoning-effort nil))
@@ -2331,6 +2337,18 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (cl-progv '(flycheck-mode) '(t)
         (should (equal (codex--format-errors-at-point)
                        "current buffer: Project-level problem"))))))
+
+(ert-deftest codex-test-default-notification-echoes-once ()
+  "Echo the notification a single time alongside the modeline pulse."
+  (let (echoes pulsed)
+    (cl-letf (((symbol-function 'message)
+               (lambda (fmt &rest args)
+                 (push (apply #'format fmt args) echoes)))
+              ((symbol-function 'codex--pulse-modeline)
+               (lambda () (setq pulsed t))))
+      (codex-default-notification "Codex Ready" "Waiting for your response"))
+    (should (equal echoes '("Codex Ready: Waiting for your response")))
+    (should pulsed)))
 
 (ert-deftest codex-test-handle-hook-from-emacsclient ()
   "Test safe hook dispatch via `server-eval-args-left'."
