@@ -5,10 +5,12 @@
 
 ;;; Code:
 (require 'cl-lib)
+(require 'face-remap)
 (require 'json)
 (require 'seq)
 (require 'subr-x)
 (require 'url-util)
+(require 'completion-preview nil t)
 
 ;;;; Forward declarations
 (defvar codex-approval-policy)
@@ -40,6 +42,9 @@
 (declare-function codex-new-instance "codex" (&optional arg))
 (declare-function codex-resume "codex" (arg))
 (declare-function codex-select-buffer "codex")
+(declare-function completion-preview--show "completion-preview")
+(declare-function completion-preview-mode "completion-preview" (&optional arg))
+(defvar completion-preview-minimum-symbol-length)
 
 ;;;; Customization
 (defgroup codex-app-server nil
@@ -171,6 +176,9 @@ because per-tool hooks can be frequent."
 (defvar-local codex--app-server-composer-placeholder-timer nil
   "Legacy timer for older idle composer placeholder rotation.")
 
+(defvar-local codex--app-server-completion-preview-face-cookies nil
+  "Face-remap cookies for app-server completion preview faces.")
+
 (defvar-local codex--app-server-current-turn-id nil
   "Current app-server turn id.")
 
@@ -298,7 +306,8 @@ the terminal backends.")
 (define-derived-mode codex-app-server-mode fundamental-mode "Codex"
   "Major mode for Codex app-server session buffers."
   (add-hook 'completion-at-point-functions
-            #'codex--app-server-completion-at-point nil t))
+            #'codex--app-server-completion-at-point nil t)
+  (codex--app-server-enable-completion-preview))
 
 (defconst codex--app-server-bullet "• "
   "Prefix the Codex CLI shows before agent output items.")
@@ -643,7 +652,6 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
     (let* ((start (point))
            (blank (make-string (codex--app-server-separator-width) ?\s))
            (prompt codex--app-server-user-prefix)
-           (placeholder (codex--app-server-composer-placeholder))
            (warning (codex--app-server-weekly-limit-warning))
            (status (codex--app-server-composer-status-line)))
       (when warning
@@ -655,8 +663,10 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
       (put-text-property (1- (point)) (point) 'rear-nonsticky t)
       (setq codex--app-server-output-marker (copy-marker start t))
       (setq codex--app-server-input-marker (copy-marker (point) nil))
-      (codex--app-server-insert-input-decoration placeholder blank status)
-      (goto-char codex--app-server-input-marker))))
+      (codex--app-server-insert-input-decoration blank status)
+      (goto-char codex--app-server-input-marker)
+      (codex--app-server-enable-completion-preview)
+      (codex--app-server-show-idle-completion-preview))))
 
 (defun codex--app-server-ensure-input-block-break ()
   "Ensure a blank-line break before the input block."
@@ -671,14 +681,10 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
        start (point)
        '(read-only t face codex-app-server-status-face front-sticky t)))))
 
-(defun codex--app-server-insert-input-decoration (placeholder blank status)
-  "Insert idle input decoration with PLACEHOLDER, BLANK, and STATUS."
+(defun codex--app-server-insert-input-decoration (blank status)
+  "Insert input footer decoration with BLANK and STATUS."
   (let ((decoration-start (point)))
-    (insert (concat (substring (codex--app-server-pad-terminal-row
-                                (concat codex--app-server-user-prefix
-                                        placeholder))
-                               (length codex--app-server-user-prefix))
-                    "\n" blank "\n" status))
+    (insert (concat "\n" blank "\n" status))
     (add-text-properties
      decoration-start (point)
      '(read-only t face codex-app-server-status-face
@@ -693,6 +699,33 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
   (nth (mod codex--app-server-composer-placeholder-index
             (length codex--app-server-composer-placeholders))
        codex--app-server-composer-placeholders))
+
+(defun codex--app-server-enable-completion-preview ()
+  "Enable native inline completion preview for app-server buffers."
+  (when (fboundp 'completion-preview-mode)
+    (setq-local completion-preview-minimum-symbol-length nil)
+    (codex--app-server-remap-completion-preview-faces)
+    (completion-preview-mode 1)))
+
+(defun codex--app-server-remap-completion-preview-faces ()
+  "Use the Codex autosuggestion face for completion preview text."
+  (unless codex--app-server-completion-preview-face-cookies
+    (setq codex--app-server-completion-preview-face-cookies
+          (mapcar (lambda (face)
+                    (face-remap-add-relative
+                     face 'codex-prompt-autosuggestion-face))
+                  '(completion-preview
+                    completion-preview-common
+                    completion-preview-exact)))))
+
+(defun codex--app-server-show-idle-completion-preview ()
+  "Show the idle composer suggestion through native completion preview."
+  (when (and (fboundp 'completion-preview--show)
+             (codex--app-server-input-active-p)
+             (string-empty-p (codex--app-server-input-text)))
+    (when-let ((window (get-buffer-window (current-buffer) t)))
+      (with-selected-window window
+        (completion-preview--show)))))
 
 (defun codex--app-server-start-composer-placeholder-timer ()
   "Preserve compatibility without rotating idle composer suggestions."
@@ -711,19 +744,19 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
       (codex--app-server-stop-composer-placeholder-timer))))
 
 (defun codex--app-server-refresh-input-decoration ()
-  "Refresh idle input decoration without changing pending user text."
+  "Refresh input footer decoration without changing pending user text."
   (when (and (codex--app-server-input-active-p)
              (string-empty-p (codex--app-server-input-text)))
     (let ((inhibit-read-only t)
           (blank (make-string (codex--app-server-separator-width) ?\s))
-          (placeholder (codex--app-server-composer-placeholder))
           (status (codex--app-server-composer-status-line)))
       (save-excursion
         (goto-char (codex--app-server-input-decoration-start-position))
         (delete-region (point) (codex--app-server-input-decoration-end-position))
-        (codex--app-server-insert-input-decoration placeholder blank status))
+        (codex--app-server-insert-input-decoration blank status))
       (when (>= (point) (codex--app-server-input-decoration-start-position))
-        (goto-char codex--app-server-input-marker)))))
+        (goto-char codex--app-server-input-marker))
+      (codex--app-server-show-idle-completion-preview))))
 
 (defun codex--app-server-composer-status-line ()
   "Return the CLI status line for the idle app-server composer."
@@ -1419,9 +1452,18 @@ and queues follow-up input while a turn is in progress."
   (let ((text (string-trim-left (codex--app-server-input-text))))
     (cond
      (codex--app-server-turn-active-p (codex--app-server-queue-input))
+     ((string-empty-p text) (codex--app-server-accept-idle-suggestion))
      ((string-prefix-p "/" text) (codex--app-server-complete-slash text))
      ((string-prefix-p "$" text) (codex--app-server-complete-skill text))
      (t (message "Nothing to complete")))))
+
+(defun codex--app-server-accept-idle-suggestion ()
+  "Accept the idle app-server composer suggestion."
+  (if (and (bound-and-true-p completion-preview-active-mode)
+           (fboundp 'completion-preview-insert))
+      (completion-preview-insert)
+    (codex--app-server-replace-input
+     (codex--app-server-composer-placeholder))))
 
 (defun codex--app-server-complete-slash (text)
   "Complete the slash command TEXT in the input region."
@@ -1463,6 +1505,10 @@ and queues follow-up input while a turn is in progress."
              (>= (point) codex--app-server-input-marker)
              (not codex--app-server-turn-active-p))
     (cond
+     ((and (= (point) codex--app-server-input-marker)
+           (string-empty-p (codex--app-server-input-text)))
+      (list (point) (point) (list (codex--app-server-composer-placeholder))
+            :exclusive 'no))
      ((codex--app-server-completion-bounds "$")
       (pcase-let ((`(,start . ,end)
                    (codex--app-server-completion-bounds "$")))

@@ -1160,7 +1160,7 @@ assertion in `eat--t-cur-left' on the following cursor move."
         (codex--app-server-setup-input-region)))
     (should (equal (buffer-substring-no-properties (point-min) (point-max))
                    (concat "                              \n"
-                           "› Explain this codebase       \n"
+                           "› \n"
                            "                              \n"
                            "  gpt-5.5 xhigh fast · ~/My Drive/Epoch")))
     (should (equal (codex--app-server-input-text) ""))))
@@ -1194,26 +1194,76 @@ assertion in `eat--t-cur-left' on the following cursor move."
             (codex--app-server-setup-input-region))
           (should-not codex--app-server-composer-placeholder-timer)
           (let ((text (buffer-substring-no-properties (point-min) (point-max))))
-            (should (string-match-p "^› Explain this codebase" text)))
+            (should (string-match-p "^› $" text))
+            (should-not (string-match-p "Explain this codebase" text)))
           (should (equal (codex--app-server-input-text) "")))
       (when (process-live-p process)
         (delete-process process)))))
 
-(ert-deftest codex-test-app-server-composer-placeholder-keeps-draft ()
-  "Placeholder refresh does not rewrite the composer while text is pending."
+(ert-deftest codex-test-app-server-idle-suggestion-is-a-completion-candidate ()
+  "The idle suggestion is completion metadata, not inserted text."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-composer-capf/*" t)
+    (cl-letf (((symbol-function 'codex--app-server-separator-width)
+               (lambda () 40))
+              ((symbol-function 'codex--app-server-composer-status-line)
+               (lambda () "  gpt-5.5 high fast · /tmp")))
+      (save-window-excursion
+        (switch-to-buffer (current-buffer))
+        (codex-app-server-mode)
+        (codex--app-server-setup-input-region)
+        (goto-char codex--app-server-input-marker)
+        (pcase-let ((`(,start ,end ,collection . ,_)
+                     (codex--app-server-completion-at-point)))
+          (should (= start (point)))
+          (should (= end (point)))
+          (should (member "Explain this codebase"
+                          (all-completions "" collection))))
+        (when (fboundp 'completion-preview-mode)
+          (should completion-preview-active-mode))))
+    (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+      (should-not (string-match-p "Explain this codebase" text)))
+    (should (equal (codex--app-server-input-text) ""))))
+
+(ert-deftest codex-test-app-server-idle-suggestion-uses-autosuggestion-face ()
+  "The idle suggestion uses Codex's gray autosuggestion face."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-composer-face/*" t)
+    (codex-app-server-mode)
+    (should (assq 'completion-preview face-remapping-alist))
+    (should (assq 'completion-preview-common face-remapping-alist))
+    (should (assq 'completion-preview-exact face-remapping-alist))))
+
+(ert-deftest codex-test-app-server-tab-accepts-idle-suggestion ()
+  "TAB accepts the idle composer suggestion when the input is empty."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-composer-tab-idle/*" t)
+    (cl-letf (((symbol-function 'codex--app-server-separator-width)
+               (lambda () 40))
+              ((symbol-function 'codex--app-server-composer-status-line)
+               (lambda () "  gpt-5.5 high fast · /tmp")))
+      (codex-app-server-mode)
+      (codex--app-server-setup-input-region)
+      (codex--term-send-action 'app-server :tab))
+    (should (equal (codex--app-server-input-text)
+                   "Explain this codebase"))))
+
+(ert-deftest codex-test-app-server-idle-suggestion-disappears-when-typing ()
+  "Typing makes the idle completion inapplicable."
   (with-temp-buffer
     (rename-buffer "*codex:/tmp/app-server-composer-draft/*" t)
     (cl-letf (((symbol-function 'codex--app-server-separator-width)
                (lambda () 40))
               ((symbol-function 'codex--app-server-composer-status-line)
                (lambda () "  gpt-5.5 high fast · /tmp")))
+      (codex-app-server-mode)
       (codex--app-server-setup-input-region)
       (goto-char codex--app-server-input-marker)
-      (insert "draft")
-      (codex--app-server-refresh-input-decoration))
+      (insert "draft"))
     (let ((text (buffer-substring-no-properties (point-min) (point-max))))
-      (should (string-match-p "^› draftExplain this codebase" text))
-      (should-not (string-match-p "^› draftSummarize recent commits" text)))
+      (should (string-match-p "^› draft$" text))
+      (should-not (string-match-p "Explain this codebase" text))
+      (should-not (codex--app-server-completion-at-point)))
     (should (equal (codex--app-server-input-text) "draft"))))
 
 (ert-deftest codex-test-app-server-ignores-events-from-other-threads ()
