@@ -1063,11 +1063,29 @@ If FORCE-SWITCH-TO-BUFFER is non-nil, always switch to the Codex buffer."
   (let* ((dir (if (equal arg '(16))
                   (read-directory-name "Project directory: ")
                 (codex--directory)))
-         (switch-after (or (equal arg '(4)) force-switch-to-buffer))
-         (instance-name (codex--session-instance-name dir force-prompt)))
-    (codex--start-session-buffer dir (default-value 'codex-terminal-backend)
-                                 instance-name
-                                 extra-switches nil nil switch-after)))
+         (switch-after (or (equal arg '(4)) force-switch-to-buffer)))
+    (if-let ((buffer (and (not force-prompt)
+                          (not extra-switches)
+                          (codex--sole-existing-session-buffer dir))))
+        (codex--display-existing-session-buffer buffer switch-after)
+      (let ((instance-name (codex--session-instance-name dir force-prompt)))
+        (codex--start-session-buffer dir (default-value 'codex-terminal-backend)
+                                     instance-name
+                                     extra-switches nil nil switch-after)))))
+
+(defun codex--sole-existing-session-buffer (dir)
+  "Return the sole active Codex buffer for DIR, or nil."
+  (let ((buffers (codex--find-codex-buffers-for-directory dir)))
+    (when (= (length buffers) 1)
+      (car buffers))))
+
+(defun codex--display-existing-session-buffer (buffer switch-after)
+  "Display existing Codex BUFFER and return it.
+When SWITCH-AFTER is non-nil, select BUFFER."
+  (if switch-after
+      (pop-to-buffer buffer)
+    (funcall codex-display-window-fn buffer))
+  buffer)
 
 (defun codex--start-subcommand (subcommand &optional last-flag extra-args
                                                        instance-name)

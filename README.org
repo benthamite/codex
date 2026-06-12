@@ -321,7 +321,7 @@ The command ~codex-resume~ resumes a previous Codex session.  On the =app-server
 
 The command ~codex-fork~ forks a previous session by running ~codex fork~.  Like ~codex-resume~, it only prompts for an instance name when other instances exist, and accepts a prefix argument for ~--last~.
 
-The command ~codex-new-instance~ creates a new Codex instance and always prompts for an instance name, even if no other instances are running.  This is useful when you want to name your instance from the start.  It accepts the same prefix argument conventions as ~codex~.
+The command ~codex-new-instance~ creates a new Codex instance and always prompts for an instance name, even if no other instances are running.  This is useful when you want to name your instance from the start, or when ~codex~ would otherwise reuse the sole running instance for the directory.  It accepts the same prefix argument conventions as ~codex~.
 
 The command ~codex-kill~ kills the Codex instance associated with the current directory.  If multiple instances are running for the directory, you are prompted to select one.  If ~codex-confirm-kill~ is non-nil (the default), confirmation is required.
 

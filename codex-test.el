@@ -3084,6 +3084,40 @@ assertion in `eat--t-cur-left' on the following cursor move."
             (should (eq captured-backend 'app-server))))
       (setq-default codex-terminal-backend old-default))))
 
+(ert-deftest codex-test-start-reuses-sole-existing-session ()
+  "Starting Codex reuses the sole running session for the directory."
+  (let ((existing-buffer (generate-new-buffer "*codex:/tmp/project/*"))
+        launched-buffer
+        launched prompted displayed)
+    (unwind-protect
+        (with-current-buffer existing-buffer
+          (setq-local codex--buffer-directory (file-truename "/tmp/project/"))
+          (cl-letf (((symbol-function 'codex--directory)
+                     (lambda () "/tmp/project/"))
+                    ((symbol-function 'codex--find-codex-buffers-for-directory)
+                     (lambda (_dir) (list existing-buffer)))
+                    ((symbol-function 'codex--prompt-for-instance-name)
+                     (lambda (&rest _)
+                       (setq prompted t)
+                       "prompted"))
+                    ((symbol-function 'codex--start-session-buffer)
+                     (lambda (&rest _)
+                       (setq launched t)
+                       (setq launched-buffer
+                             (generate-new-buffer " *codex-test-launched*"))))
+                    ((symbol-function 'codex-display-buffer-same-window)
+                     (lambda (buffer)
+                       (setq displayed buffer))))
+            (let ((codex-display-window-fn #'codex-display-buffer-same-window))
+              (should (eq (codex--start nil nil) existing-buffer))
+              (should-not prompted)
+              (should-not launched)
+              (should (eq displayed existing-buffer)))))
+      (when (buffer-live-p existing-buffer)
+        (kill-buffer existing-buffer))
+      (when (buffer-live-p launched-buffer)
+        (kill-buffer launched-buffer)))))
+
 (ert-deftest codex-test-prompt-autosuggestion-context-placeholder ()
   "Prompt autosuggestion context recognizes Codex placeholders."
   (let ((suggestion "Summarize recent commits"))
