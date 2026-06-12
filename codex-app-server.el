@@ -1913,9 +1913,40 @@ event."
   "Render transcript agent TEXT."
   (setq codex--app-server-last-agent-message text)
   (let ((start (codex--app-server-insert-message
-                codex--app-server-bullet text)))
+                codex--app-server-bullet
+                (codex--app-server-wrap-transcript-message
+                 text codex--app-server-bullet))))
     (codex--app-server-fontify-markdown
      start (codex--app-server-output-point))))
+
+(defun codex--app-server-wrap-transcript-message (text prefix)
+  "Return transcript TEXT hard-wrapped for a message with PREFIX."
+  (mapconcat (lambda (line)
+               (codex--app-server-wrap-transcript-line line prefix))
+             (split-string text "\n")
+             "\n"))
+
+(defun codex--app-server-wrap-transcript-line (line prefix)
+  "Return transcript LINE hard-wrapped for a message with PREFIX."
+  (let* ((width (codex--app-server-separator-width))
+         (first-width (max 1 (- width (string-width prefix))))
+         (next-width (max 1 (- width 2)))
+         (words (split-string line "[ \t]+" t))
+         (current "")
+         lines)
+    (dolist (word words)
+      (let ((limit (if lines next-width first-width))
+            (candidate (if (string-empty-p current)
+                           word
+                         (concat current " " word))))
+        (if (or (string-empty-p current)
+                (<= (string-width candidate) limit))
+            (setq current candidate)
+          (push current lines)
+          (setq current word))))
+    (when (or lines (not (string-empty-p current)))
+      (push current lines))
+    (string-join (nreverse lines) "\n  ")))
 
 (defun codex--app-server-render-transcript-separator ()
   "Render the CLI separator shown between transcript tool groups."

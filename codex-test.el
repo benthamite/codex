@@ -1618,6 +1618,19 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (should (= (codex--app-server-separator-width)
                (max 48 (window-body-width))))))
 
+(ert-deftest codex-test-app-server-transcript-history-wraps-agent-messages ()
+  "Transcript replay stores agent messages as terminal-width rows."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-transcript-wrap/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
+    (cl-letf (((symbol-function 'codex--app-server-separator-width)
+               (lambda () 30)))
+      (codex--app-server-render-transcript-agent
+       "alpha beta gamma delta epsilon zeta eta"))
+    (should (equal (buffer-substring-no-properties (point-min) (point-max))
+                   "• alpha beta gamma delta\n  epsilon zeta eta"))))
+
 (ert-deftest codex-test-app-server-reasoning-up-down ()
   "Reasoning up/down cycle the effort levels and clamp at the ends."
   (let ((codex-reasoning-effort nil))
