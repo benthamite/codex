@@ -255,6 +255,12 @@ because per-tool hooks can be frequent."
 (defvar-local codex--app-server-status-overlay nil
   "Overlay showing the in-buffer working status line above the prompt.")
 
+(defvar-local codex--app-server-mcp-statuses nil
+  "Alist of MCP server names to startup statuses for the current thread.")
+
+(defvar-local codex--app-server-mcp-start-time nil
+  "Float time when MCP server startup progress began.")
+
 (defvar-local codex--app-server-last-agent-message nil
   "Text of the most recent completed assistant message.")
 
@@ -343,6 +349,8 @@ arguments."
       (setq-local codex--app-server-token-usage nil)
       (setq-local codex--app-server-rate-limit nil)
       (setq-local codex--app-server-weekly-rate-limit nil)
+      (setq-local codex--app-server-mcp-statuses nil)
+      (setq-local codex--app-server-mcp-start-time nil)
       (setq-local codex--app-server-plan-start nil)
       (setq-local codex--app-server-plan-end nil)
       (setq-local codex--app-server-queue-start nil)
@@ -596,8 +604,22 @@ under `error' as `message' for turn errors, so check both."
   "Render an MCP server startup status line from PARAMS."
   (when-let* ((name (alist-get 'name params))
               (status (alist-get 'status params)))
+    (codex--app-server-record-mcp-status name status)
     (when (member status '("failed" "error"))
-      (codex--app-server-insert-status (format "MCP %s: %s" name status)))))
+      (codex--app-server-insert-status (format "MCP %s: %s" name status)))
+    (codex--app-server-update-status-overlay)
+    (codex--app-server-refresh-status-timer)))
+
+(defun codex--app-server-record-mcp-status (name status)
+  "Record MCP server NAME startup STATUS."
+  (if-let* ((cell (assoc name codex--app-server-mcp-statuses)))
+      (setcdr cell status)
+    (setq codex--app-server-mcp-statuses
+          (append codex--app-server-mcp-statuses
+                  (list (cons name status)))))
+  (when (and (equal status "starting")
+             (not codex--app-server-mcp-start-time))
+    (setq codex--app-server-mcp-start-time (float-time))))
 
 (defun codex--app-server-thread-started (params &optional defer-input)
   "Record app-server thread startup PARAMS and render the session header.
@@ -1216,8 +1238,8 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
   "Record that the active app-server turn completed and flush queued input."
   (setq codex--app-server-turn-active-p nil)
   (setq codex--app-server-current-turn-id nil)
-  (codex--app-server-stop-status-timer)
-  (codex--app-server-remove-status-overlay)
+  (codex--app-server-update-status-overlay)
+  (codex--app-server-refresh-status-timer)
   (force-mode-line-update)
   (codex--app-server-ensure-trailing-newline)
   (codex--app-server-flush-turn-queue))
@@ -1232,12 +1254,33 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
 (defun codex--app-server-update-status-overlay ()
   "Show or refresh the in-buffer working status line above the prompt."
   (codex--app-server-remove-status-overlay)
-  (when codex--app-server-turn-active-p
+  (when-let* ((text (or (and codex--app-server-turn-active-p
+                             (codex--app-server-working-text))
+                        (codex--app-server-mcp-startup-text))))
     (let ((point (codex--app-server-output-point)))
       (setq codex--app-server-status-overlay (make-overlay point point))
       (overlay-put codex--app-server-status-overlay 'before-string
-                   (propertize (concat (codex--app-server-working-text) "\n")
+                   (propertize (concat text "\n")
                                'face 'codex-app-server-status-face)))))
+
+(defun codex--app-server-mcp-startup-text ()
+  "Return the CLI-style MCP startup status text, or nil."
+  (when-let* ((starting (codex--app-server-mcp-starting-names)))
+    (format "• Starting MCP servers (%d/%d): %s (%ds • esc to interrupt)"
+            (- (length codex--app-server-mcp-statuses) (length starting))
+            (length codex--app-server-mcp-statuses)
+            (string-join starting ", ")
+            (if codex--app-server-mcp-start-time
+                (floor (- (float-time) codex--app-server-mcp-start-time))
+              0))))
+
+(defun codex--app-server-mcp-starting-names ()
+  "Return MCP server names whose startup status is still starting."
+  (delq nil
+        (mapcar (lambda (entry)
+                  (when (equal (cdr entry) "starting")
+                    (car entry)))
+                codex--app-server-mcp-statuses)))
 
 (defun codex--app-server-remove-status-overlay ()
   "Remove the in-buffer working status line, if any."
@@ -1288,12 +1331,21 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
 (defun codex--app-server-status-tick (buffer)
   "Refresh the status in BUFFER while a turn is active, else stop."
   (if (and (buffer-live-p buffer)
-           (buffer-local-value 'codex--app-server-turn-active-p buffer))
+           (with-current-buffer buffer
+             (or codex--app-server-turn-active-p
+                 (codex--app-server-mcp-startup-text))))
       (with-current-buffer buffer
         (codex--app-server-update-status-overlay)
         (force-mode-line-update))
     (when (buffer-live-p buffer)
       (with-current-buffer buffer (codex--app-server-stop-status-timer)))))
+
+(defun codex--app-server-refresh-status-timer ()
+  "Start or stop the status timer based on transient status."
+  (if (or codex--app-server-turn-active-p
+          (codex--app-server-mcp-startup-text))
+      (codex--app-server-start-status-timer)
+    (codex--app-server-stop-status-timer)))
 
 (defun codex--app-server-stop-status-timer ()
   "Cancel the app-server status refresh timer."

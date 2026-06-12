@@ -2089,6 +2089,43 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (codex--app-server-turn-completed '((turn))))
     (should-not codex--app-server-status-overlay)))
 
+(ert-deftest codex-test-app-server-mcp-startup-status-overlay ()
+  "MCP startup progress appears above the composer while servers start."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-mcp-startup/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (codex--app-server-handle-message
+     '((method . "mcpServer/startupStatus/updated")
+       (params (name . "node_repl") (status . "starting"))))
+    (codex--app-server-handle-message
+     '((method . "mcpServer/startupStatus/updated")
+       (params (name . "codex_apps") (status . "ready"))))
+    (codex--app-server-handle-message
+     '((method . "mcpServer/startupStatus/updated")
+       (params (name . "asana") (status . "starting"))))
+    (should (overlayp codex--app-server-status-overlay))
+    (let ((status (overlay-get codex--app-server-status-overlay
+                               'before-string)))
+      (should (string-match-p "Starting MCP servers (1/3)" status))
+      (should (string-match-p "node_repl, asana" status))
+      (should (string-match-p "esc to interrupt" status)))))
+
+(ert-deftest codex-test-app-server-mcp-startup-status-clears-on-ready ()
+  "MCP startup progress clears once every server is ready."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-mcp-ready/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (codex--app-server-handle-message
+     '((method . "mcpServer/startupStatus/updated")
+       (params (name . "asana") (status . "starting"))))
+    (should (overlayp codex--app-server-status-overlay))
+    (codex--app-server-handle-message
+     '((method . "mcpServer/startupStatus/updated")
+       (params (name . "asana") (status . "ready"))))
+    (should-not codex--app-server-status-overlay)))
+
 (ert-deftest codex-test-app-server-status-mode-line ()
   "The mode line shows a working indicator with tokens during a turn."
   (with-temp-buffer
