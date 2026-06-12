@@ -159,6 +159,12 @@ because per-tool hooks can be frequent."
 (defvar-local codex--app-server-input-marker nil
   "Marker at the start of the editable app-server input region.")
 
+(defvar-local codex--app-server-input-decoration-start nil
+  "Marker at the start of app-server input composer decoration.")
+
+(defvar-local codex--app-server-input-decoration-end nil
+  "Marker at the end of app-server input composer decoration.")
+
 (defvar-local codex--app-server-current-turn-id nil
   "Current app-server turn id.")
 
@@ -306,6 +312,8 @@ arguments."
       (setq-local codex--app-server-stderr-buffer stderr-buffer)
       (setq-local codex--app-server-output-marker nil)
       (setq-local codex--app-server-input-marker nil)
+      (setq-local codex--app-server-input-decoration-start nil)
+      (setq-local codex--app-server-input-decoration-end nil)
       (setq-local codex--app-server-queued-turn-inputs nil)
       (setq-local codex--app-server-plan-start nil)
       (setq-local codex--app-server-plan-end nil)
@@ -579,15 +587,50 @@ under `error' as `message' for turn errors, so check both."
   "Render the app-server input prompt and initialize input markers."
   (let ((inhibit-read-only t))
     (goto-char (point-max))
-    (let ((start (point)))
-      (insert codex-app-server-prompt-string)
+    (let* ((start (point))
+           (blank (make-string (codex--app-server-separator-width) ?\s))
+           (prompt codex--app-server-user-prefix)
+           (placeholder (codex--app-server-composer-placeholder))
+           (status (codex--app-server-composer-status-line)))
+      (insert (concat blank "\n"))
+      (insert prompt)
       (add-text-properties start (point)
                            '(read-only t face codex-app-server-status-face))
-      (when (> (point) start)
-        (put-text-property (1- (point)) (point) 'rear-nonsticky t))
+      (put-text-property (1- (point)) (point) 'rear-nonsticky t)
       (setq codex--app-server-output-marker (copy-marker start t))
       (setq codex--app-server-input-marker (copy-marker (point) nil))
-      (goto-char (point-max)))))
+      (let ((decoration-start (point)))
+        (insert (concat (substring (codex--app-server-pad-terminal-row
+                                    (concat prompt placeholder))
+                                   (length prompt))
+                        "\n" blank "\n" status))
+        (add-text-properties
+         decoration-start (point)
+         '(read-only t face codex-app-server-status-face
+                     codex-app-server-input-decoration t front-sticky nil))
+        (put-text-property (1- (point)) (point) 'rear-nonsticky t)
+        (setq codex--app-server-input-decoration-start
+              (copy-marker decoration-start t))
+        (setq codex--app-server-input-decoration-end (copy-marker (point) nil)))
+      (goto-char codex--app-server-input-marker))))
+
+(defun codex--app-server-composer-placeholder ()
+  "Return the CLI placeholder text for the idle app-server composer."
+  "Summarize recent commits")
+
+(defun codex--app-server-composer-status-line ()
+  "Return the CLI status line for the idle app-server composer."
+  (let* ((metadata (codex--app-server-transcript-header-metadata
+                    codex--session-transcript-file))
+         (model (codex--app-server-header-model-label nil metadata))
+         (effort (codex--app-server-header-effort metadata))
+         (tier (codex--app-server-config-string "service_tier"))
+         (directory (directory-file-name
+                     (codex--app-server-header-directory-label metadata))))
+    (concat "  " model
+            (if effort (concat " " effort) "")
+            (if tier (concat " " tier) "")
+            " · " directory)))
 
 (defun codex--app-server-send-input ()
   "Send the app-server input region text as a Codex turn or slash command."
@@ -874,8 +917,28 @@ under `error' as `message' for turn errors, so check both."
   "Return the text currently in the app-server input region."
   (if (and (markerp codex--app-server-input-marker)
            (marker-position codex--app-server-input-marker))
-      (buffer-substring-no-properties codex--app-server-input-marker (point-max))
+      (concat
+       (buffer-substring-no-properties
+        codex--app-server-input-marker
+        (codex--app-server-input-decoration-start-position))
+       (buffer-substring-no-properties
+        (codex--app-server-input-decoration-end-position)
+        (point-max)))
     ""))
+
+(defun codex--app-server-input-decoration-start-position ()
+  "Return the start of app-server input decoration, or `point-max'."
+  (if (and (markerp codex--app-server-input-decoration-start)
+           (marker-position codex--app-server-input-decoration-start))
+      (marker-position codex--app-server-input-decoration-start)
+    (point-max)))
+
+(defun codex--app-server-input-decoration-end-position ()
+  "Return the end of app-server input decoration, or `point-max'."
+  (if (and (markerp codex--app-server-input-decoration-end)
+           (marker-position codex--app-server-input-decoration-end))
+      (marker-position codex--app-server-input-decoration-end)
+    (point-max)))
 
 (defun codex--app-server-prompt-input ()
   "Return meaningful pending input in the app-server buffer, or nil."
@@ -893,7 +956,10 @@ under `error' as `message' for turn errors, so check both."
   (when (and (markerp codex--app-server-input-marker)
              (marker-position codex--app-server-input-marker))
     (let ((inhibit-read-only t))
-      (delete-region codex--app-server-input-marker (point-max)))))
+      (delete-region (codex--app-server-input-decoration-end-position)
+                     (point-max))
+      (delete-region codex--app-server-input-marker
+                     (codex--app-server-input-decoration-start-position)))))
 
 (defun codex--app-server-render-header (thread)
   "Render the app-server session header from THREAD metadata."
@@ -1628,7 +1694,8 @@ the way the Codex CLI groups them onto one `└ Read FILE, FILE' line."
           (puthash id output codex--app-server-full-outputs)
           (let ((inhibit-read-only t))
             (put-text-property start (codex--app-server-output-point)
-                               'codex-output-id id)))))))
+                               'codex-output-id id))))
+      (codex--app-server-ensure-trailing-newline))))
 
 (defun codex--app-server-string-or-empty (value)
   "Return VALUE when it is a string, otherwise return the empty string.
@@ -2634,7 +2701,7 @@ counting the placeholders already present in the input region."
 (defun codex--app-server-replace-input (text)
   "Replace the input region contents with TEXT."
   (codex--app-server-clear-input)
-  (goto-char (point-max))
+  (goto-char codex--app-server-input-marker)
   (when (and text (not (string-empty-p text)))
     (insert text)))
 

@@ -1143,6 +1143,27 @@ assertion in `eat--t-cur-left' on the following cursor move."
                  (string-match "my draft" text))))
     (should (equal (codex--app-server-input-text) "my draft"))))
 
+(ert-deftest codex-test-app-server-setup-input-region-renders-cli-composer ()
+  "Idle app-server input uses the CLI composer and status rows."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-composer/*" t)
+    (let ((default-directory "/Users/pablostafforini/My Drive/Epoch/")
+          (codex-model "gpt-5.5")
+          (codex-reasoning-effort "xhigh")
+          (codex--buffer-directory "/Users/pablostafforini/My Drive/Epoch/"))
+      (cl-letf (((symbol-function 'codex--app-server-separator-width)
+                 (lambda () 30))
+                ((symbol-function 'codex--app-server-config-string)
+                 (lambda (key)
+                   (and (equal key "service_tier") "fast"))))
+        (codex--app-server-setup-input-region)))
+    (should (equal (buffer-substring-no-properties (point-min) (point-max))
+                   (concat "                              \n"
+                           "› Summarize recent commits    \n"
+                           "                              \n"
+                           "  gpt-5.5 xhigh fast · ~/My Drive/Epoch")))
+    (should (equal (codex--app-server-input-text) ""))))
+
 (ert-deftest codex-test-app-server-ignores-events-from-other-threads ()
   "App-server buffers do not render child/sub-agent thread events."
   (with-temp-buffer
