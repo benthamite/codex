@@ -1227,6 +1227,7 @@ assertion in `eat--t-cur-left' on the following cursor move."
 
 (ert-deftest codex-test-app-server-idle-suggestion-uses-autosuggestion-face ()
   "The idle suggestion uses Codex's gray autosuggestion face."
+  (skip-unless (fboundp 'completion-preview-mode))
   (with-temp-buffer
     (rename-buffer "*codex:/tmp/app-server-composer-face/*" t)
     (codex-app-server-mode)
