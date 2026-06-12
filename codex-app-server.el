@@ -165,6 +165,12 @@ because per-tool hooks can be frequent."
 (defvar-local codex--app-server-input-decoration-end nil
   "Marker at the end of app-server input composer decoration.")
 
+(defvar-local codex--app-server-composer-placeholder-index 0
+  "Index of the currently rendered idle composer placeholder.")
+
+(defvar-local codex--app-server-composer-placeholder-timer nil
+  "Timer that advances the idle composer placeholder.")
+
 (defvar-local codex--app-server-current-turn-id nil
   "Current app-server turn id.")
 
@@ -240,6 +246,9 @@ because per-tool hooks can be frequent."
 (defvar-local codex--app-server-rate-limit nil
   "Primary rate-limit usage percent reported for the current thread.")
 
+(defvar-local codex--app-server-weekly-rate-limit nil
+  "Secondary weekly rate-limit usage percent reported for the current thread.")
+
 (defvar-local codex--app-server-status-timer nil
   "Repeating timer that refreshes the app-server status while working.")
 
@@ -291,6 +300,20 @@ the terminal backends.")
 (defconst codex--app-server-user-prefix "› "
   "Prefix the Codex CLI shows before user messages.")
 
+(defconst codex--app-server-composer-placeholders
+  '("Explain this codebase"
+    "Summarize recent commits"
+    "Implement {feature}"
+    "Find and fix a bug in @filename"
+    "Write tests for @filename"
+    "Improve documentation in @filename"
+    "Run /review on my current changes"
+    "Use /skills to list available skills"
+    "Check recently modified functions for compatibility"
+    "How many files have been modified?"
+    "Will this algorithm scale well?")
+  "Idle composer placeholder suggestions observed in the Codex CLI.")
+
 (cl-defmethod codex--term-make ((_backend (eql app-server)) buffer-name
                                 program &optional switches)
   "Create an app-server Codex buffer named BUFFER-NAME.
@@ -314,7 +337,12 @@ arguments."
       (setq-local codex--app-server-input-marker nil)
       (setq-local codex--app-server-input-decoration-start nil)
       (setq-local codex--app-server-input-decoration-end nil)
+      (setq-local codex--app-server-composer-placeholder-index 0)
+      (setq-local codex--app-server-composer-placeholder-timer nil)
       (setq-local codex--app-server-queued-turn-inputs nil)
+      (setq-local codex--app-server-token-usage nil)
+      (setq-local codex--app-server-rate-limit nil)
+      (setq-local codex--app-server-weekly-rate-limit nil)
       (setq-local codex--app-server-plan-start nil)
       (setq-local codex--app-server-plan-end nil)
       (setq-local codex--app-server-queue-start nil)
@@ -415,6 +443,7 @@ arguments."
   "Clean up app-server buffer-local state."
   (codex--app-server-cancel-markdown-render)
   (codex--app-server-stop-status-timer)
+  (codex--app-server-stop-composer-placeholder-timer)
   (codex--app-server-remove-status-overlay)
   (codex--app-server-kill-stderr-buffer codex--app-server-stderr-buffer)
   (setq-local codex--app-server-stderr-buffer nil))
@@ -591,7 +620,10 @@ under `error' as `message' for turn errors, so check both."
            (blank (make-string (codex--app-server-separator-width) ?\s))
            (prompt codex--app-server-user-prefix)
            (placeholder (codex--app-server-composer-placeholder))
+           (warning (codex--app-server-weekly-limit-warning))
            (status (codex--app-server-composer-status-line)))
+      (when warning
+        (insert warning "\n\n"))
       (insert (concat blank "\n"))
       (insert prompt)
       (add-text-properties start (point)
@@ -599,24 +631,71 @@ under `error' as `message' for turn errors, so check both."
       (put-text-property (1- (point)) (point) 'rear-nonsticky t)
       (setq codex--app-server-output-marker (copy-marker start t))
       (setq codex--app-server-input-marker (copy-marker (point) nil))
-      (let ((decoration-start (point)))
-        (insert (concat (substring (codex--app-server-pad-terminal-row
-                                    (concat prompt placeholder))
-                                   (length prompt))
-                        "\n" blank "\n" status))
-        (add-text-properties
-         decoration-start (point)
-         '(read-only t face codex-app-server-status-face
-                     codex-app-server-input-decoration t front-sticky nil))
-        (put-text-property (1- (point)) (point) 'rear-nonsticky t)
-        (setq codex--app-server-input-decoration-start
-              (copy-marker decoration-start t))
-        (setq codex--app-server-input-decoration-end (copy-marker (point) nil)))
-      (goto-char codex--app-server-input-marker))))
+      (codex--app-server-insert-input-decoration placeholder blank status)
+      (goto-char codex--app-server-input-marker)
+      (codex--app-server-start-composer-placeholder-timer))))
+
+(defun codex--app-server-insert-input-decoration (placeholder blank status)
+  "Insert idle input decoration with PLACEHOLDER, BLANK, and STATUS."
+  (let ((decoration-start (point)))
+    (insert (concat (substring (codex--app-server-pad-terminal-row
+                                (concat codex--app-server-user-prefix
+                                        placeholder))
+                               (length codex--app-server-user-prefix))
+                    "\n" blank "\n" status))
+    (add-text-properties
+     decoration-start (point)
+     '(read-only t face codex-app-server-status-face
+                 codex-app-server-input-decoration t front-sticky nil))
+    (put-text-property (1- (point)) (point) 'rear-nonsticky t)
+    (setq codex--app-server-input-decoration-start
+          (copy-marker decoration-start t))
+    (setq codex--app-server-input-decoration-end (copy-marker (point) nil))))
 
 (defun codex--app-server-composer-placeholder ()
   "Return the CLI placeholder text for the idle app-server composer."
-  "Summarize recent commits")
+  (nth (mod codex--app-server-composer-placeholder-index
+            (length codex--app-server-composer-placeholders))
+       codex--app-server-composer-placeholders))
+
+(defun codex--app-server-start-composer-placeholder-timer ()
+  "Start rotating the idle composer placeholder in the current buffer."
+  (when (process-live-p codex--app-server-process)
+    (codex--app-server-stop-composer-placeholder-timer)
+    (setq codex--app-server-composer-placeholder-timer
+          (run-with-timer
+           4 4 #'codex--app-server-advance-composer-placeholder
+           (current-buffer)))))
+
+(defun codex--app-server-stop-composer-placeholder-timer ()
+  "Stop the idle composer placeholder timer in the current buffer."
+  (when (timerp codex--app-server-composer-placeholder-timer)
+    (cancel-timer codex--app-server-composer-placeholder-timer))
+  (setq codex--app-server-composer-placeholder-timer nil))
+
+(defun codex--app-server-advance-composer-placeholder (&optional buffer)
+  "Advance and refresh the idle composer placeholder in BUFFER."
+  (when (buffer-live-p (or buffer (current-buffer)))
+    (with-current-buffer (or buffer (current-buffer))
+      (setq codex--app-server-composer-placeholder-index
+            (mod (1+ codex--app-server-composer-placeholder-index)
+                 (length codex--app-server-composer-placeholders)))
+      (codex--app-server-refresh-input-decoration))))
+
+(defun codex--app-server-refresh-input-decoration ()
+  "Refresh idle input decoration without changing pending user text."
+  (when (and (codex--app-server-input-active-p)
+             (string-empty-p (codex--app-server-input-text)))
+    (let ((inhibit-read-only t)
+          (blank (make-string (codex--app-server-separator-width) ?\s))
+          (placeholder (codex--app-server-composer-placeholder))
+          (status (codex--app-server-composer-status-line)))
+      (save-excursion
+        (goto-char (codex--app-server-input-decoration-start-position))
+        (delete-region (point) (codex--app-server-input-decoration-end-position))
+        (codex--app-server-insert-input-decoration placeholder blank status))
+      (when (>= (point) (codex--app-server-input-decoration-start-position))
+        (goto-char codex--app-server-input-marker)))))
 
 (defun codex--app-server-composer-status-line ()
   "Return the CLI status line for the idle app-server composer."
@@ -631,6 +710,12 @@ under `error' as `message' for turn errors, so check both."
             (if effort (concat " " effort) "")
             (if tier (concat " " tier) "")
             " · " directory)))
+
+(defun codex--app-server-weekly-limit-warning ()
+  "Return the CLI weekly-limit warning text when usage is high."
+  (when (and codex--app-server-weekly-rate-limit
+             (> codex--app-server-weekly-rate-limit 75))
+    "⚠ Heads up, you have less than 25% of your weekly limit left. Run /status for a breakdown."))
 
 (defun codex--app-server-send-input ()
   "Send the app-server input region text as a Codex turn or slash command."
@@ -1164,10 +1249,13 @@ under `error' as `message' for turn errors, so check both."
     (force-mode-line-update)))
 
 (defun codex--app-server-rate-limits-updated (params)
-  "Record primary rate-limit usage percent from PARAMS."
-  (when-let* ((limits (alist-get 'rateLimits params))
-              (primary (alist-get 'primary limits)))
-    (setq codex--app-server-rate-limit (alist-get 'usedPercent primary))))
+  "Record rate-limit usage percents from PARAMS."
+  (when-let* ((limits (alist-get 'rateLimits params)))
+    (when-let* ((primary (alist-get 'primary limits)))
+      (setq codex--app-server-rate-limit (alist-get 'usedPercent primary)))
+    (when-let* ((secondary (alist-get 'secondary limits)))
+      (setq codex--app-server-weekly-rate-limit
+            (alist-get 'usedPercent secondary)))))
 
 (defun codex--app-server-render-hook-event (params suffix)
   "Render hook lifecycle event from PARAMS with SUFFIX when enabled."
@@ -2372,13 +2460,26 @@ object such as the \"don't ask again\" execpolicy amendment."
          (codex--app-server-insert-status
           (format "Codex app-server initialize failed: %S" error))
        (setq codex--app-server-user-agent (alist-get 'userAgent result))
-       (pcase codex--app-server-startup-action
-         ('resume (codex--app-server-begin-resume "thread/resume"))
-         ('resume-session
-          (codex--app-server-begin-resume-session-id
-           codex--app-server-startup-session-id))
-         ('fork (codex--app-server-begin-resume "thread/fork"))
-         (_ (codex--app-server-send-thread-start)))))))
+       (codex--app-server-read-rate-limits-before-startup)))))
+
+(defun codex--app-server-read-rate-limits-before-startup ()
+  "Read account rate limits before rendering the initial idle composer."
+  (codex--app-server-send-request
+   "account/rateLimits/read" nil
+   (lambda (result _error)
+     (when result
+       (codex--app-server-rate-limits-updated result))
+     (codex--app-server-after-initialize))))
+
+(defun codex--app-server-after-initialize ()
+  "Continue app-server startup after initialize-time setup."
+  (pcase codex--app-server-startup-action
+    ('resume (codex--app-server-begin-resume "thread/resume"))
+    ('resume-session
+     (codex--app-server-begin-resume-session-id
+      codex--app-server-startup-session-id))
+    ('fork (codex--app-server-begin-resume "thread/fork"))
+    (_ (codex--app-server-send-thread-start))))
 
 (defun codex--app-server-begin-resume (method)
   "List threads and resume or fork one via METHOD."

@@ -1159,10 +1159,56 @@ assertion in `eat--t-cur-left' on the following cursor move."
         (codex--app-server-setup-input-region)))
     (should (equal (buffer-substring-no-properties (point-min) (point-max))
                    (concat "                              \n"
-                           "› Summarize recent commits    \n"
+                           "› Explain this codebase       \n"
                            "                              \n"
                            "  gpt-5.5 xhigh fast · ~/My Drive/Epoch")))
     (should (equal (codex--app-server-input-text) ""))))
+
+(ert-deftest codex-test-app-server-composer-placeholder-sequence-matches-cli ()
+  "Idle app-server placeholder suggestions use the observed CLI sequence."
+  (should (equal codex--app-server-composer-placeholders
+                 '("Explain this codebase"
+                   "Summarize recent commits"
+                   "Implement {feature}"
+                   "Find and fix a bug in @filename"
+                   "Write tests for @filename"
+                   "Improve documentation in @filename"
+                   "Run /review on my current changes"
+                   "Use /skills to list available skills"
+                   "Check recently modified functions for compatibility"
+                   "How many files have been modified?"
+                   "Will this algorithm scale well?"))))
+
+(ert-deftest codex-test-app-server-composer-placeholder-advances-when-idle ()
+  "Idle app-server composer advances through CLI placeholder suggestions."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-composer-advance/*" t)
+    (cl-letf (((symbol-function 'codex--app-server-separator-width)
+               (lambda () 40))
+              ((symbol-function 'codex--app-server-composer-status-line)
+               (lambda () "  gpt-5.5 high fast · /tmp")))
+      (codex--app-server-setup-input-region)
+      (codex--app-server-advance-composer-placeholder (current-buffer)))
+    (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+      (should (string-match-p "^› Summarize recent commits" text)))
+    (should (equal (codex--app-server-input-text) ""))))
+
+(ert-deftest codex-test-app-server-composer-placeholder-keeps-draft ()
+  "Placeholder refresh does not rewrite the composer while text is pending."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-composer-draft/*" t)
+    (cl-letf (((symbol-function 'codex--app-server-separator-width)
+               (lambda () 40))
+              ((symbol-function 'codex--app-server-composer-status-line)
+               (lambda () "  gpt-5.5 high fast · /tmp")))
+      (codex--app-server-setup-input-region)
+      (goto-char codex--app-server-input-marker)
+      (insert "draft")
+      (codex--app-server-advance-composer-placeholder (current-buffer)))
+    (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+      (should (string-match-p "^› draftExplain this codebase" text))
+      (should-not (string-match-p "^› draftSummarize recent commits" text)))
+    (should (equal (codex--app-server-input-text) "draft"))))
 
 (ert-deftest codex-test-app-server-ignores-events-from-other-threads ()
   "App-server buffers do not render child/sub-agent thread events."
@@ -1537,6 +1583,34 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (should (equal (alist-get 'path (cdr sent))
                      "/tmp/session-sid-123.jsonl")))))
 
+(ert-deftest codex-test-app-server-initialize-reads-rate-limits-before-start ()
+  "Initialize records account rate limits before rendering the first composer."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-init-rate-limits/*" t)
+    (setq-local codex--app-server-startup-action 'start)
+    (let (methods started-weekly)
+      (cl-letf (((symbol-function 'codex--app-server-send-request)
+                 (lambda (method _params callback)
+                   (push method methods)
+                   (pcase method
+                     ("initialize"
+                      (funcall callback '((userAgent . "probe/0.139.0")) nil))
+                     ("account/rateLimits/read"
+                      (funcall callback
+                               '((rateLimits
+                                  (primary (usedPercent . 57))
+                                  (secondary (usedPercent . 77))))
+                               nil)))))
+                ((symbol-function 'codex--app-server-send-thread-start)
+                 (lambda ()
+                   (setq started-weekly
+                         codex--app-server-weekly-rate-limit))))
+        (codex--app-server-send-initialize))
+      (should (equal (nreverse methods)
+                     '("initialize" "account/rateLimits/read")))
+      (should (equal codex--app-server-rate-limit 57))
+      (should (equal started-weekly 77)))))
+
 (ert-deftest codex-test-app-server-resume-renders-transcript-history ()
   "Resume replays JSONL user-visible transcript text before lossy turn items."
   (let ((file (make-temp-file "codex-app-server-transcript" nil ".jsonl")))
@@ -1846,6 +1920,22 @@ assertion in `eat--t-cur-left' on the following cursor move."
      '((method . "account/rateLimits/updated")
        (params (rateLimits (primary (usedPercent . 42))))))
     (should (equal codex--app-server-rate-limit 42))))
+
+(ert-deftest codex-test-app-server-renders-weekly-limit-warning ()
+  "App-server renders the CLI weekly-limit warning before the composer."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-rate-warning/*" t)
+    (cl-letf (((symbol-function 'codex--app-server-separator-width)
+               (lambda () 30))
+              ((symbol-function 'codex--app-server-composer-status-line)
+               (lambda () "  gpt-5.5 high fast · /tmp")))
+      (codex--app-server-handle-message
+       '((method . "account/rateLimits/updated")
+         (params (rateLimits (secondary (usedPercent . 76)))))))
+    (codex--app-server-setup-input-region)
+    (should (string-prefix-p
+             "⚠ Heads up, you have less than 25% of your weekly limit left. Run /status for a breakdown.\n\n"
+             (buffer-substring-no-properties (point-min) (point-max))))))
 
 (ert-deftest codex-test-app-server-expand-folded-output ()
   "Folded command output is stored and expandable in full."
