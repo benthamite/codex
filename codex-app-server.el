@@ -169,7 +169,7 @@ because per-tool hooks can be frequent."
   "Index of the currently rendered idle composer placeholder.")
 
 (defvar-local codex--app-server-composer-placeholder-timer nil
-  "Timer that advances the idle composer placeholder.")
+  "Legacy timer for older idle composer placeholder rotation.")
 
 (defvar-local codex--app-server-current-turn-id nil
   "Current app-server turn id.")
@@ -656,8 +656,7 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
       (setq codex--app-server-output-marker (copy-marker start t))
       (setq codex--app-server-input-marker (copy-marker (point) nil))
       (codex--app-server-insert-input-decoration placeholder blank status)
-      (goto-char codex--app-server-input-marker)
-      (codex--app-server-start-composer-placeholder-timer))))
+      (goto-char codex--app-server-input-marker))))
 
 (defun codex--app-server-ensure-input-block-break ()
   "Ensure a blank-line break before the input block."
@@ -696,13 +695,8 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
        codex--app-server-composer-placeholders))
 
 (defun codex--app-server-start-composer-placeholder-timer ()
-  "Start rotating the idle composer placeholder in the current buffer."
-  (when (process-live-p codex--app-server-process)
-    (codex--app-server-stop-composer-placeholder-timer)
-    (setq codex--app-server-composer-placeholder-timer
-          (run-with-timer
-           4 4 #'codex--app-server-advance-composer-placeholder
-           (current-buffer)))))
+  "Preserve compatibility without rotating idle composer suggestions."
+  (codex--app-server-stop-composer-placeholder-timer))
 
 (defun codex--app-server-stop-composer-placeholder-timer ()
   "Stop the idle composer placeholder timer in the current buffer."
@@ -711,13 +705,10 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
   (setq codex--app-server-composer-placeholder-timer nil))
 
 (defun codex--app-server-advance-composer-placeholder (&optional buffer)
-  "Advance and refresh the idle composer placeholder in BUFFER."
+  "Stop legacy placeholder timers in BUFFER without changing the composer."
   (when (buffer-live-p (or buffer (current-buffer)))
     (with-current-buffer (or buffer (current-buffer))
-      (setq codex--app-server-composer-placeholder-index
-            (mod (1+ codex--app-server-composer-placeholder-index)
-                 (length codex--app-server-composer-placeholders)))
-      (codex--app-server-refresh-input-decoration))))
+      (codex--app-server-stop-composer-placeholder-timer))))
 
 (defun codex--app-server-refresh-input-decoration ()
   "Refresh idle input decoration without changing pending user text."

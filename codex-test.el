@@ -1166,7 +1166,7 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (should (equal (codex--app-server-input-text) ""))))
 
 (ert-deftest codex-test-app-server-composer-placeholder-sequence-matches-cli ()
-  "Idle app-server placeholder suggestions use the observed CLI sequence."
+  "Idle app-server placeholder suggestions use the observed CLI set."
   (should (equal codex--app-server-composer-placeholders
                  '("Explain this codebase"
                    "Summarize recent commits"
@@ -1180,19 +1180,24 @@ assertion in `eat--t-cur-left' on the following cursor move."
                    "How many files have been modified?"
                    "Will this algorithm scale well?"))))
 
-(ert-deftest codex-test-app-server-composer-placeholder-advances-when-idle ()
-  "Idle app-server composer advances through CLI placeholder suggestions."
-  (with-temp-buffer
-    (rename-buffer "*codex:/tmp/app-server-composer-advance/*" t)
-    (cl-letf (((symbol-function 'codex--app-server-separator-width)
-               (lambda () 40))
-              ((symbol-function 'codex--app-server-composer-status-line)
-               (lambda () "  gpt-5.5 high fast · /tmp")))
-      (codex--app-server-setup-input-region)
-      (codex--app-server-advance-composer-placeholder (current-buffer)))
-    (let ((text (buffer-substring-no-properties (point-min) (point-max))))
-      (should (string-match-p "^› Summarize recent commits" text)))
-    (should (equal (codex--app-server-input-text) ""))))
+(ert-deftest codex-test-app-server-composer-placeholder-does-not-rotate ()
+  "Idle app-server composer does not install a rotating suggestion timer."
+  (let ((process (start-process "codex-test-sleep" nil "sleep" "30")))
+    (unwind-protect
+        (with-temp-buffer
+          (rename-buffer "*codex:/tmp/app-server-composer-static/*" t)
+          (setq-local codex--app-server-process process)
+          (cl-letf (((symbol-function 'codex--app-server-separator-width)
+                     (lambda () 40))
+                    ((symbol-function 'codex--app-server-composer-status-line)
+                     (lambda () "  gpt-5.5 high fast · /tmp")))
+            (codex--app-server-setup-input-region))
+          (should-not codex--app-server-composer-placeholder-timer)
+          (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+            (should (string-match-p "^› Explain this codebase" text)))
+          (should (equal (codex--app-server-input-text) "")))
+      (when (process-live-p process)
+        (delete-process process)))))
 
 (ert-deftest codex-test-app-server-composer-placeholder-keeps-draft ()
   "Placeholder refresh does not rewrite the composer while text is pending."
@@ -1205,7 +1210,7 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (codex--app-server-setup-input-region)
       (goto-char codex--app-server-input-marker)
       (insert "draft")
-      (codex--app-server-advance-composer-placeholder (current-buffer)))
+      (codex--app-server-refresh-input-decoration))
     (let ((text (buffer-substring-no-properties (point-min) (point-max))))
       (should (string-match-p "^› draftExplain this codebase" text))
       (should-not (string-match-p "^› draftSummarize recent commits" text)))
