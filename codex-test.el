@@ -1254,7 +1254,7 @@ assertion in `eat--t-cur-left' on the following cursor move."
                   "printf '%s\\n' 'MCP codex_apps: ready' >&2\n"
                   "printf '%s\\n' "
                   "'{\"method\":\"mcpServer/startupStatus/updated\","
-                  "\"params\":{\"name\":\"codex_apps\",\"status\":\"ready\"}}'\n"))
+                  "\"params\":{\"name\":\"codex_apps\",\"status\":\"failed\"}}'\n"))
          (script (make-temp-file "codex-fake-app-server-" nil nil script-body))
          (buffer-name " *codex-test-app-server-stderr*")
          buffer)
@@ -1268,7 +1268,7 @@ assertion in `eat--t-cur-left' on the following cursor move."
           (with-current-buffer buffer
             (codex--app-server-drain-lines)
             (let ((text (buffer-substring-no-properties (point-min) (point-max))))
-              (should (string-match-p "MCP codex_apps: ready" text))
+              (should (string-match-p "MCP codex_apps: failed" text))
               (should-not (string-match-p "Malformed app-server message" text)))))
       (when (buffer-live-p buffer)
         (with-current-buffer buffer
@@ -1653,6 +1653,37 @@ assertion in `eat--t-cur-left' on the following cursor move."
               (should-not (string-match-p "lossy final only" text)))))
       (delete-file file))))
 
+(ert-deftest codex-test-app-server-resume-renders-composer-after-transcript ()
+  "Resume renders transcript history before the warning/composer block."
+  (let ((file (make-temp-file "codex-app-server-transcript-composer" nil ".jsonl")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert (json-encode
+                     '((type . "event_msg")
+                       (payload
+                        (type . "agent_message")
+                        (message . "  - projects/shared/project-registry.json")
+                        (phase . "final_answer"))))
+                    "\n"))
+          (with-temp-buffer
+            (rename-buffer "*codex:/tmp/app-server-resume-composer/*" t)
+            (setq-local codex--app-server-agent-items
+                        (make-hash-table :test 'equal))
+            (setq-local codex--app-server-weekly-rate-limit 76)
+            (let ((response `((thread (id . "sid-123") (path . ,file))
+                              (initialTurnsPage (data . nil)))))
+              (cl-letf (((symbol-function 'codex--app-server-send-request)
+                         (lambda (_method _params callback)
+                           (funcall callback response nil))))
+                (codex--app-server-send-resume
+                 "thread/resume" `((id . "sid-123") (path . ,file)))))
+            (should (string-match-p
+                     "project-registry\\.json\n\n⚠ Heads up"
+                     (buffer-substring-no-properties
+                      (point-min) (point-max))))))
+      (delete-file file))))
+
 (ert-deftest codex-test-app-server-transcript-history-separates-after-tools ()
   "Transcript replay inserts the CLI separator before messages after tool work."
   (let ((file (make-temp-file "codex-app-server-transcript-tools" nil ".jsonl")))
@@ -1773,6 +1804,19 @@ assertion in `eat--t-cur-left' on the following cursor move."
        "Path projects/cybersecurity-policy/cybersecurity-readings.org"))
     (should (equal (buffer-substring-no-properties (point-min) (point-max))
                    "• Path projects/cybersecurity-policy/\n  cybersecurity-readings.org"))))
+
+(ert-deftest codex-test-app-server-transcript-history-keeps-flag-tokens ()
+  "Transcript replay does not split leading double-hyphen flag tokens."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-transcript-flag-wrap/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
+    (cl-letf (((symbol-function 'codex--app-server-separator-width)
+               (lambda () 20)))
+      (codex--app-server-render-transcript-agent
+       "ran git diff --cached"))
+    (should (equal (buffer-substring-no-properties (point-min) (point-max))
+                   "• ran git diff\n  --cached"))))
 
 (ert-deftest codex-test-app-server-transcript-history-spaces-before-lists ()
   "Transcript replay leaves the CLI Markdown gap before a following list."
@@ -1904,7 +1948,26 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (codex--app-server-handle-message
      '((method . "mcpServer/startupStatus/updated")
        (params (name . "node_repl") (status . "ready"))))
-    (should (string-match-p "MCP node_repl: ready" (buffer-string)))))
+    (should-not (string-match-p "MCP node_repl: ready" (buffer-string)))
+    (codex--app-server-handle-message
+     '((method . "mcpServer/startupStatus/updated")
+       (params (name . "node_repl") (status . "failed"))))
+    (should (string-match-p "MCP node_repl: failed" (buffer-string)))))
+
+(ert-deftest codex-test-app-server-suppresses-noisy-resume-status ()
+  "Resume-only startup status chatter does not render above the composer."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-resume-noise/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (codex--app-server-handle-message
+     '((method . "thread/goal/cleared") (params)))
+    (codex--app-server-handle-message
+     '((method . "mcpServer/startupStatus/updated")
+       (params (name . "codex_apps") (status . "ready"))))
+    (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+      (should-not (string-match-p "Goal cleared" text))
+      (should-not (string-match-p "MCP codex_apps: ready" text)))))
 
 (ert-deftest codex-test-app-server-renders-hook-and-rate-limit ()
   "Hook events render when enabled and rate-limit usage is recorded."
@@ -1935,6 +1998,21 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (codex--app-server-setup-input-region)
     (should (string-prefix-p
              "⚠ Heads up, you have less than 25% of your weekly limit left. Run /status for a breakdown.\n\n"
+             (buffer-substring-no-properties (point-min) (point-max))))))
+
+(ert-deftest codex-test-app-server-warning-separated-from-transcript-tail ()
+  "Weekly-limit warning is separated from the prior transcript text."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-rate-warning-gap/*" t)
+    (setq-local codex--app-server-weekly-rate-limit 76)
+    (cl-letf (((symbol-function 'codex--app-server-separator-width)
+               (lambda () 60))
+              ((symbol-function 'codex--app-server-composer-status-line)
+               (lambda () "  gpt-5.5 high fast · /tmp")))
+      (insert "  - projects/shared/project-registry.json")
+      (codex--app-server-setup-input-region))
+    (should (string-match-p
+             "project-registry\\.json\n\n⚠ Heads up"
              (buffer-substring-no-properties (point-min) (point-max))))))
 
 (ert-deftest codex-test-app-server-expand-folded-output ()

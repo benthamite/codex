@@ -557,8 +557,7 @@ operations the handlers run, instead of raising `wrong-type-argument'."
         ("thread/goal/updated"
          (when-let* ((goal (alist-get 'goal params)))
            (codex--app-server-insert-status (format "Goal: %s" goal))))
-        ("thread/goal/cleared"
-         (codex--app-server-insert-status "Goal cleared"))
+        ("thread/goal/cleared" nil)
         ("model/rerouted"
          (codex--app-server-insert-status
           (format "Model rerouted%s"
@@ -597,11 +596,12 @@ under `error' as `message' for turn errors, so check both."
   "Render an MCP server startup status line from PARAMS."
   (when-let* ((name (alist-get 'name params))
               (status (alist-get 'status params)))
-    (when (member status '("ready" "failed" "error"))
+    (when (member status '("failed" "error"))
       (codex--app-server-insert-status (format "MCP %s: %s" name status)))))
 
-(defun codex--app-server-thread-started (params)
-  "Record app-server thread startup PARAMS and render the session header."
+(defun codex--app-server-thread-started (params &optional defer-input)
+  "Record app-server thread startup PARAMS and render the session header.
+When DEFER-INPUT is non-nil, leave input rendering to the caller."
   (let* ((thread (alist-get 'thread params))
          (thread-id (alist-get 'id thread))
          (thread-path (alist-get 'path thread)))
@@ -609,13 +609,15 @@ under `error' as `message' for turn errors, so check both."
       (setq codex--app-server-thread-id thread-id)
       (codex--record-session-metadata thread-id thread-path)
       (codex--app-server-render-header thread)
-      (codex--app-server-setup-input-region)
-      (codex--app-server-flush-queued-commands))))
+      (unless defer-input
+        (codex--app-server-setup-input-region)
+        (codex--app-server-flush-queued-commands)))))
 
 (defun codex--app-server-setup-input-region ()
   "Render the app-server input prompt and initialize input markers."
   (let ((inhibit-read-only t))
     (goto-char (point-max))
+    (codex--app-server-ensure-input-block-break)
     (let* ((start (point))
            (blank (make-string (codex--app-server-separator-width) ?\s))
            (prompt codex--app-server-user-prefix)
@@ -634,6 +636,19 @@ under `error' as `message' for turn errors, so check both."
       (codex--app-server-insert-input-decoration placeholder blank status)
       (goto-char codex--app-server-input-marker)
       (codex--app-server-start-composer-placeholder-timer))))
+
+(defun codex--app-server-ensure-input-block-break ()
+  "Ensure a blank-line break before the input block."
+  (unless (= (point) (point-min))
+    (let ((start (point)))
+      (unless (eq (char-before) ?\n)
+        (insert "\n"))
+      (unless (and (> (point) (1+ (point-min)))
+                   (eq (char-before (1- (point))) ?\n))
+        (insert "\n"))
+      (add-text-properties
+       start (point)
+       '(read-only t face codex-app-server-status-face front-sticky t)))))
 
 (defun codex--app-server-insert-input-decoration (placeholder blank status)
   "Insert idle input decoration with PLACEHOLDER, BLANK, and STATUS."
@@ -2177,7 +2192,7 @@ event."
     (when (> max-width 0)
       (dotimes (idx (length token))
         (let ((end (1+ idx)))
-          (when (and (memq (aref token idx) '(?- ?/))
+          (when (and (codex--app-server-transcript-token-break-p token idx)
                      (< end (length token))
                      (<= (codex--app-server-transcript-visible-token-width
                           (substring token 0 end))
@@ -2186,6 +2201,14 @@ event."
     (when best
       (cons (substring token 0 best)
             (substring token best)))))
+
+(defun codex--app-server-transcript-token-break-p (token idx)
+  "Return non-nil when TOKEN may wrap after character IDX."
+  (pcase (aref token idx)
+    (?/ t)
+    (?- (and (> idx 0)
+             (not (eq (aref token (1- idx)) ?-))))
+    (_ nil)))
 
 (defun codex--app-server-transcript-visible-token-width (token)
   "Return TOKEN width after inline Markdown markup is hidden."
@@ -2530,9 +2553,11 @@ object such as the \"don't ask again\" execpolicy amendment."
          (codex--app-server-insert-status
           (format "Codex resume failed: %S" error))
        (codex--app-server-thread-started
-        `((thread . ,(alist-get 'thread result))))
+        `((thread . ,(alist-get 'thread result))) t)
        (codex--app-server-render-resumed-history
-        (alist-get 'data (alist-get 'initialTurnsPage result)))))))
+        (alist-get 'data (alist-get 'initialTurnsPage result)))
+       (codex--app-server-setup-input-region)
+       (codex--app-server-flush-queued-commands)))))
 
 (defun codex--app-server-begin-resume-session-id (session-id)
   "Resume SESSION-ID in the current app-server buffer."
