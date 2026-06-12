@@ -1731,12 +1731,29 @@ Like the CLI, this shows the textual result rather than the raw envelope."
 Return non-nil when FILE supplied at least one displayable transcript
 event."
   (when (and (stringp file) (file-exists-p file))
-    (let ((rendered nil))
+    (let ((rendered nil)
+          (tool-separators-enabled nil)
+          (seen-visible nil)
+          (separate-after-tool nil))
       (dolist (event (codex--app-server-transcript-events file) rendered)
-        (setq rendered t)
         (pcase (car event)
-          ('user (codex--app-server-render-transcript-user (cdr event)))
-          ('agent (codex--app-server-render-transcript-agent (cdr event))))))))
+          ('user
+           (setq rendered t
+                 seen-visible t
+                 separate-after-tool nil)
+           (codex--app-server-render-transcript-user (cdr event)))
+          ('agent
+           (when (and seen-visible separate-after-tool)
+             (codex--app-server-render-transcript-separator))
+           (setq rendered t
+                 seen-visible t
+                 separate-after-tool nil)
+           (codex--app-server-render-transcript-agent (cdr event)))
+          ('tool
+           (when (eq (cdr event) 'enable-separators)
+             (setq tool-separators-enabled t))
+           (when seen-visible
+             (setq separate-after-tool tool-separators-enabled))))))))
 
 (defun codex--app-server-transcript-events (file)
   "Return user-visible transcript events from JSONL FILE."
@@ -1748,21 +1765,31 @@ event."
                              (json-parse-string line
                                                 :object-type 'alist
                                                 :array-type 'list)))
-                    ((equal (alist-get 'type entry) "event_msg"))
-                    (payload (alist-get 'payload entry))
-                    (event (codex--app-server-transcript-event payload)))
+                    (event (codex--app-server-transcript-event entry)))
           (push event events))))
     (nreverse events)))
 
-(defun codex--app-server-transcript-event (payload)
-  "Return a renderable transcript event from PAYLOAD, or nil."
-  (pcase (alist-get 'type payload)
-    ("user_message"
-     (codex--app-server-transcript-event-with-text
-      'user (alist-get 'message payload)))
-    ("agent_message"
-     (codex--app-server-transcript-event-with-text
-      'agent (alist-get 'message payload)))))
+(defun codex--app-server-transcript-event (entry)
+  "Return a renderable transcript event from JSONL ENTRY, or nil."
+  (let ((payload (alist-get 'payload entry)))
+    (pcase (alist-get 'type entry)
+      ("event_msg"
+       (pcase (alist-get 'type payload)
+         ("user_message"
+          (codex--app-server-transcript-event-with-text
+           'user (alist-get 'message payload)))
+         ("agent_message"
+          (codex--app-server-transcript-event-with-text
+           'agent (alist-get 'message payload)))
+         ("patch_apply_end" '(tool . enable-separators))))
+      ("response_item"
+       (pcase (alist-get 'type payload)
+         ((or "custom_tool_call" "custom_tool_call_output")
+          '(tool . enable-separators))
+         ((or "function_call" "function_call_output"
+              "local_shell_call" "mcp_tool_call"
+              "mcp_tool_call_output" "web_search_call")
+          '(tool . nil)))))))
 
 (defun codex--app-server-transcript-event-with-text (role text)
   "Return a transcript event with ROLE and TEXT when TEXT is meaningful."
@@ -1780,6 +1807,19 @@ event."
                 codex--app-server-bullet text)))
     (codex--app-server-fontify-markdown
      start (codex--app-server-output-point))))
+
+(defun codex--app-server-render-transcript-separator ()
+  "Render the CLI separator shown between transcript tool groups."
+  (codex--app-server-ensure-section-break)
+  (codex--app-server-insert
+   (concat (make-string (codex--app-server-separator-width) ?─) "\n")
+   'codex-app-server-status-face))
+
+(defun codex--app-server-separator-width ()
+  "Return the visible width for a transcript separator."
+  (if-let* ((window (get-buffer-window (current-buffer) t)))
+      (max 48 (window-body-width window))
+    48))
 
 (defun codex--app-server-render-history-item (item)
   "Render a single historical ITEM during resume."

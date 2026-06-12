@@ -1521,6 +1521,60 @@ assertion in `eat--t-cur-left' on the following cursor move."
               (should-not (string-match-p "lossy final only" text)))))
       (delete-file file))))
 
+(ert-deftest codex-test-app-server-transcript-history-separates-after-tools ()
+  "Transcript replay inserts the CLI separator before messages after tool work."
+  (let ((file (make-temp-file "codex-app-server-transcript-tools" nil ".jsonl")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert (json-encode
+                     '((type . "event_msg")
+                       (payload
+                        (type . "agent_message")
+                        (message . "About to edit.")
+                        (phase . "commentary"))))
+                    "\n")
+            (insert (json-encode
+                     '((type . "response_item")
+                       (payload
+                        (type . "custom_tool_call")
+                        (name . "apply_patch"))))
+                    "\n")
+            (insert (json-encode
+                     '((type . "event_msg")
+                       (payload
+                        (type . "patch_apply_end"))))
+                    "\n")
+            (insert (json-encode
+                     '((type . "response_item")
+                       (payload
+                        (type . "custom_tool_call_output")
+                        (output . "Success. Updated files."))))
+                    "\n")
+            (insert (json-encode
+                     '((type . "event_msg")
+                       (payload
+                        (type . "agent_message")
+                        (message . "Edit is in place.")
+                        (phase . "commentary"))))
+                    "\n"))
+          (with-temp-buffer
+            (rename-buffer "*codex:/tmp/app-server-transcript-tools/*" t)
+            (setq-local codex--app-server-agent-items
+                        (make-hash-table :test 'equal))
+            (setq-local codex--app-server-command-items
+                        (make-hash-table :test 'equal))
+            (let ((codex--session-transcript-file file))
+              (should (codex--app-server-render-transcript-history file)))
+            (let ((text (buffer-substring-no-properties
+                         (point-min) (point-max))))
+              (should (string-match-p
+                       (rx "• About to edit." (* anything)
+                           "\n\n" (+ "─") "\n\n"
+                           "• Edit is in place.")
+                       text)))))
+      (delete-file file))))
+
 (ert-deftest codex-test-app-server-reasoning-up-down ()
   "Reasoning up/down cycle the effort levels and clamp at the ends."
   (let ((codex-reasoning-effort nil))
