@@ -652,8 +652,7 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
     (let* ((start (point))
            (blank (make-string (codex--app-server-separator-width) ?\s))
            (prompt codex--app-server-user-prefix)
-           (warning (codex--app-server-weekly-limit-warning))
-           (status (codex--app-server-composer-status-line)))
+           (warning (codex--app-server-weekly-limit-warning)))
       (when warning
         (insert warning "\n\n"))
       (insert (concat blank "\n"))
@@ -663,7 +662,7 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
       (put-text-property (1- (point)) (point) 'rear-nonsticky t)
       (setq codex--app-server-output-marker (copy-marker start t))
       (setq codex--app-server-input-marker (copy-marker (point) nil))
-      (codex--app-server-insert-input-decoration blank status)
+      (codex--app-server-mark-input-end)
       (goto-char codex--app-server-input-marker)
       (codex--app-server-enable-completion-preview)
       (codex--app-server-show-idle-completion-preview))))
@@ -681,18 +680,10 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
        start (point)
        '(read-only t face codex-app-server-status-face front-sticky t)))))
 
-(defun codex--app-server-insert-input-decoration (blank status)
-  "Insert input footer decoration with BLANK and STATUS."
-  (let ((decoration-start (point)))
-    (insert (concat "\n" blank "\n" status))
-    (add-text-properties
-     decoration-start (point)
-     '(read-only t face codex-app-server-status-face
-                 codex-app-server-input-decoration t front-sticky nil))
-    (put-text-property (1- (point)) (point) 'rear-nonsticky t)
-    (setq codex--app-server-input-decoration-start
-          (copy-marker decoration-start t))
-    (setq codex--app-server-input-decoration-end (copy-marker (point) nil))))
+(defun codex--app-server-mark-input-end ()
+  "Mark the current end of the editable app-server input."
+  (setq codex--app-server-input-decoration-start (copy-marker (point) t))
+  (setq codex--app-server-input-decoration-end (copy-marker (point) t)))
 
 (defun codex--app-server-composer-placeholder ()
   "Return the CLI placeholder text for the idle app-server composer."
@@ -744,16 +735,14 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
       (codex--app-server-stop-composer-placeholder-timer))))
 
 (defun codex--app-server-refresh-input-decoration ()
-  "Refresh input footer decoration without changing pending user text."
+  "Refresh input boundary markers without changing pending user text."
   (when (and (codex--app-server-input-active-p)
              (string-empty-p (codex--app-server-input-text)))
-    (let ((inhibit-read-only t)
-          (blank (make-string (codex--app-server-separator-width) ?\s))
-          (status (codex--app-server-composer-status-line)))
+    (let ((inhibit-read-only t))
       (save-excursion
         (goto-char (codex--app-server-input-decoration-start-position))
         (delete-region (point) (codex--app-server-input-decoration-end-position))
-        (codex--app-server-insert-input-decoration blank status))
+        (codex--app-server-mark-input-end))
       (when (>= (point) (codex--app-server-input-decoration-start-position))
         (goto-char codex--app-server-input-marker))
       (codex--app-server-show-idle-completion-preview))))

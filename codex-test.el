@@ -1143,8 +1143,8 @@ assertion in `eat--t-cur-left' on the following cursor move."
                  (string-match "my draft" text))))
     (should (equal (codex--app-server-input-text) "my draft"))))
 
-(ert-deftest codex-test-app-server-setup-input-region-renders-cli-composer ()
-  "Idle app-server input uses the CLI composer and status rows."
+(ert-deftest codex-test-app-server-setup-input-region-ends-at-composer ()
+  "Idle app-server input leaves point-max at the editable composer."
   (with-temp-buffer
     (rename-buffer "*codex:/tmp/app-server-composer/*" t)
     (let* ((epoch-directory (expand-file-name "My Drive/Epoch/" "~"))
@@ -1160,9 +1160,8 @@ assertion in `eat--t-cur-left' on the following cursor move."
         (codex--app-server-setup-input-region)))
     (should (equal (buffer-substring-no-properties (point-min) (point-max))
                    (concat "                              \n"
-                           "› \n"
-                           "                              \n"
-                           "  gpt-5.5 xhigh fast · ~/My Drive/Epoch")))
+                           "› ")))
+    (should (= (point-max) codex--app-server-input-marker))
     (should (equal (codex--app-server-input-text) ""))))
 
 (ert-deftest codex-test-app-server-composer-placeholder-sequence-matches-cli ()
