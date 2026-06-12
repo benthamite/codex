@@ -1147,10 +1147,11 @@ assertion in `eat--t-cur-left' on the following cursor move."
   "Idle app-server input uses the CLI composer and status rows."
   (with-temp-buffer
     (rename-buffer "*codex:/tmp/app-server-composer/*" t)
-    (let ((default-directory "/Users/pablostafforini/My Drive/Epoch/")
+    (let* ((epoch-directory (expand-file-name "My Drive/Epoch/" "~"))
+           (default-directory epoch-directory)
           (codex-model "gpt-5.5")
           (codex-reasoning-effort "xhigh")
-          (codex--buffer-directory "/Users/pablostafforini/My Drive/Epoch/"))
+          (codex--buffer-directory epoch-directory))
       (cl-letf (((symbol-function 'codex--app-server-separator-width)
                  (lambda () 30))
                 ((symbol-function 'codex--app-server-config-string)
