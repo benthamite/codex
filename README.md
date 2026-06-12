@@ -1,8 +1,8 @@
 # `codex`: Emacs integration for OpenAI Codex CLI
 
-`codex.el` provides an Emacs interface to the [OpenAI Codex CLI](https://github.com/openai/codex), embedding the Codex agent TUI inside an Emacs terminal emulator buffer. You can interact with Codex without leaving your editor — start sessions, send commands, review output, and manage multiple instances across projects.
+`codex.el` provides an Emacs interface to the [OpenAI Codex CLI](https://github.com/openai/codex), running Codex through the native app-server renderer or a terminal backend. You can interact with Codex without leaving your editor — start sessions, send commands, review output, and manage multiple instances across projects.
 
-The package uses [eat](https://codeberg.org/akib/emacs-eat) by default and can use [vterm](https://github.com/akermu/emacs-libvterm) if you install it separately. It is modeled after `claude-code.el`, sharing a similar architecture and workflow.
+The package uses [eat](https://codeberg.org/akib/emacs-eat) by default, can render natively through `app-server`, and can use [vterm](https://github.com/akermu/emacs-libvterm) if you install it separately. It is modeled after `claude-code.el`, sharing a similar architecture and workflow.
 
 Key capabilities include:
 

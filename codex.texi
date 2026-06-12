@@ -95,7 +95,7 @@ Indices
 
 @samp{codex.el} provides an Emacs interface to the @uref{https://github.com/openai/codex, OpenAI Codex CLI}, allowing you to interact with the Codex agent directly from within Emacs.  The package is modeled after @samp{claude-code.el} and shares a similar architecture and design philosophy.
 
-The package embeds the Codex CLI inside an Emacs terminal emulator buffer (either @samp{eat} or @samp{vterm}), giving you a full-featured TUI experience without leaving your editor.  You can start, stop, and manage multiple Codex instances across different projects, send commands and code from any buffer, toggle the Codex window on and off, and access all of the CLI's slash commands through a transient menu.
+The package runs Codex through the native @samp{app-server} renderer or a terminal backend (@samp{eat} by default, with @samp{vterm} available separately), giving you a full-featured Codex experience without leaving your editor.  You can start, stop, and manage multiple Codex instances across different projects, send commands and code from any buffer, toggle the Codex window on and off, and access all of the CLI's slash commands through a transient menu.
 
 The main capabilities of @samp{codex.el} can be grouped thematically:
 
