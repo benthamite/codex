@@ -117,6 +117,9 @@ fail_for_dispatch_error() {
     if [ -z "$message" ]; then
         message="emacsclient hook dispatch failed"
     fi
+    if should_fail_open_for_dispatch_error; then
+        exit 0
+    fi
     printf 'codex hook dispatch failed for %s: %s\n' "$hook_type" "$message" >&2
     case "$hook_type" in
         PreToolUse|PermissionRequest)
@@ -127,6 +130,18 @@ fail_for_dispatch_error() {
             ;;
         *)
             exit "$dispatch_failure_exit"
+            ;;
+    esac
+}
+
+should_fail_open_for_dispatch_error() {
+    dispatch_error_is_transient || return 1
+    case "$hook_type" in
+        PreToolUse|PostToolUse|SessionStart|Stop|UserPromptSubmit|PreCompact|PostCompact)
+            return 0
+            ;;
+        *)
+            return 1
             ;;
     esac
 }

@@ -70,3 +70,41 @@ if ! grep -qx -- '--socket-name' "$args_file" \
   printf 'Expected relative socket name to resolve against socket dir\n' >&2
   exit 1
 fi
+
+refusing_emacsclient="$tmp_dir/refusing-emacsclient"
+cat >"$refusing_emacsclient" <<'SCRIPT'
+#!/usr/bin/env bash
+printf '%s\n' "emacsclient: can't connect to /tmp/emacs501/server: Connection refused" >&2
+exit 1
+SCRIPT
+chmod +x "$refusing_emacsclient"
+
+if output=$(printf '{}\n' | CODEX_BUFFER_NAME='*codex:/tmp/project*' \
+  CODEX_HOOK_DISPATCH_ATTEMPTS=1 \
+  "$repo_dir/bin/codex-hook-wrapper" PreToolUse \
+  --emacsclient "$refusing_emacsclient" 2>&1); then
+  if [ -n "$output" ]; then
+    printf 'Expected PreToolUse dispatch failure to fail open quietly, got: %s\n' "$output" >&2
+    exit 1
+  fi
+else
+  status=$?
+  printf 'Expected PreToolUse dispatch failure to fail open, got exit %s: %s\n' \
+    "$status" "$output" >&2
+  exit 1
+fi
+
+if output=$(printf '{}\n' | CODEX_BUFFER_NAME='*codex:/tmp/project*' \
+  CODEX_HOOK_DISPATCH_ATTEMPTS=1 \
+  "$repo_dir/bin/codex-hook-wrapper" PermissionRequest \
+  --emacsclient "$refusing_emacsclient" 2>&1); then
+  printf 'Expected PermissionRequest dispatch failure to fail closed\n' >&2
+  exit 1
+else
+  status=$?
+  if [ "$status" -ne 2 ]; then
+    printf 'Expected PermissionRequest dispatch failure exit 2, got %s: %s\n' \
+      "$status" "$output" >&2
+    exit 1
+  fi
+fi
