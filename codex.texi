@@ -116,7 +116,7 @@ The main capabilities of @samp{codex.el} can be grouped thematically:
 @strong{Model and configuration} --- change the model, reasoning effort, sandbox mode, approval policy, and profile on the fly through transient infixes.
 @end itemize
 
-The package requires Emacs 28.1 or later, @samp{transient} 0.9.3 or later, @samp{inheritenv}, and @samp{eat}.  The default backend is @samp{eat}, which runs the Codex terminal TUI@.  You can use the native app-server renderer by setting @code{codex-terminal-backend} to @code{app-server}, or use @samp{vterm} by installing it separately and setting @code{codex-terminal-backend} to @code{vterm}.
+The package requires Emacs 28.1 or later, @samp{transient} 0.9.3 or later, @samp{inheritenv}, and @samp{eat}.  The default backend is @samp{eat}, which runs the Codex terminal TUI@.  Set @code{codex-terminal-backend} to @code{app-server} or to @code{vterm} if you prefer those terminal backends.
 
 The development repository is on @uref{https://github.com/benthamite/codex, GitHub}.
 

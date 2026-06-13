@@ -34,7 +34,7 @@ The main capabilities of =codex.el= can be grouped thematically:
 - *Transient menus* --- a main command menu and a slash commands menu, both accessible from the keyboard.
 - *Model and configuration* --- change the model, reasoning effort, sandbox mode, approval policy, and profile on the fly through transient infixes.
 
-The package requires Emacs 28.1 or later, =transient= 0.9.3 or later, =inheritenv=, and =eat=.  The default backend is =eat=, which runs the Codex terminal TUI.  You can use the native app-server renderer by setting ~codex-terminal-backend~ to ~app-server~, or use =vterm= by installing it separately and setting ~codex-terminal-backend~ to ~vterm~.
+The package requires Emacs 28.1 or later, =transient= 0.9.3 or later, =inheritenv=, and =eat=.  The default backend is =eat=, which runs the Codex terminal TUI.  Set ~codex-terminal-backend~ to ~app-server~ or to ~vterm~ if you prefer those terminal backends.
 
 The development repository is on [[https://github.com/benthamite/codex][GitHub]].
 
