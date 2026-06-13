@@ -1,7 +1,7 @@
 ;;; codex.el --- Emacs integration for OpenAI Codex CLI -*- lexical-binding: t; -*-
 
 ;; Author: Pablo Stafforini
-;; Version: 0.3.0
+;; Version: 0.4.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.9.3") (inheritenv "0.2") (eat "0.9.4"))
 ;; Keywords: tools, ai
 ;; URL: https://github.com/benthamite/codex
