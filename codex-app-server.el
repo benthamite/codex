@@ -272,6 +272,9 @@ because per-tool hooks can be frequent."
 (defvar-local codex--app-server-last-agent-message nil
   "Text of the most recent completed assistant message.")
 
+(defvar-local codex--app-server-service-tier nil
+  "Service tier selected for the current app-server thread.")
+
 (defvar codex--app-server-skill-cache nil
   "Cached list of Codex skill names for app-server completion.")
 
@@ -497,14 +500,13 @@ arguments."
 
 (defun codex--app-server-handle-line (line)
   "Parse and handle one app-server JSON LINE.
-JSON null decodes as nil rather than the default `:null' so that
-optional fields the server sends as null behave like absent fields: nil
-flows safely through `alist-get', `append', and the other list
-operations the handlers run, instead of raising `wrong-type-argument'."
+JSON null and false decode as nil rather than truthy keyword sentinels.
+This lets optional fields and protocol booleans flow naturally through
+`alist-get', `append', predicates, and other handler operations."
   (condition-case err
       (codex--app-server-handle-message
        (json-parse-string line :object-type 'alist :array-type 'list
-                          :null-object nil))
+                          :null-object nil :false-object nil))
     (error
      (codex--app-server-insert-status
       (format "Malformed app-server message: %s" (error-message-string err))))))
@@ -783,41 +785,34 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
          (argument (string-trim (substring text (length command)))))
     (pcase command
       ("/compact" (codex--app-server-compact))
-      ("/clear" (codex--app-server-clear-display))
+      ("/clear" (codex-new-instance))
       ("/status" (codex--app-server-show-status))
       ("/diff" (codex--app-server-show-diff))
       ("/copy" (codex--app-server-copy-last-message))
       ("/new" (codex-new-instance))
       ("/resume" (codex-resume nil))
       ("/fork" (codex-fork nil))
-      ("/permissions" (codex-cycle-permissions))
+      ("/permissions" (codex--app-server-list-permission-profiles))
       ("/model" (codex--app-server-change-model))
       ("/mention" (codex-app-server-attach-mention))
-      ("/agent" (codex-select-buffer))
-      ("/side" (codex-new-instance))
-      ("/skills" (codex--app-server-insert-status
-                  "Skills are managed by Codex configuration (~/.codex)"))
-      ("/apps" (codex--app-server-insert-status
-                "Apps are managed by Codex configuration (~/.codex)"))
-      ("/theme" (call-interactively #'load-theme))
-      ("/vim" (codex--app-server-toggle-vim))
-      ("/keymap" (describe-keymap (current-local-map)))
+      ("/skills" (codex--app-server-list-skills))
+      ("/apps" (codex--app-server-list-apps))
       ("/raw" (codex--app-server-toggle-raw))
-      ("/statusline" (codex--app-server-insert-status
-                      "Status line is the Emacs mode line; customize `mode-line-format'"))
-      ("/goal" (let ((objective (read-string "Goal: ")))
+      ("/goal" (let ((objective (if (string-empty-p argument)
+                                    (read-string "Goal: ")
+                                  argument)))
                  (codex--app-server-thread-request
                   "thread/goal/set" `((objective . ,objective))
                   (format "Goal set: %s" objective))))
-      ((or "/title" "/rename")
-       (let ((name (read-string "Rename thread: ")))
+      ("/rename"
+       (let ((name (if (string-empty-p argument)
+                       (read-string "Rename thread: ")
+                     argument)))
          (codex--app-server-thread-request
           "thread/name/set" `((name . ,name))
           (format "Thread renamed: %s" name))))
       ("/archive" (codex--app-server-thread-request
                    "thread/archive" nil "Thread archived"))
-      ("/pets" (codex--app-server-insert-status
-                "Ambient pets are a Codex CLI-only animation"))
       ("/memories" (let ((mode (completing-read "Memory mode: "
                                                 '("enabled" "disabled") nil t)))
                      (codex--app-server-thread-request
@@ -829,31 +824,611 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
                         (codex--app-server-thread-request
                          "thread/settings/update" `((personality . ,personality))
                          (format "Personality: %s" personality))))
-      ("/plan" (codex--app-server-thread-request
-                "thread/settings/update" '((collaborationMode . "plan"))
-                "Plan mode enabled"))
-      ("/stop" (codex--app-server-thread-request
-                "thread/backgroundTerminals/clean" nil
-                "Background terminals stopped"))
-      ("/ps" (codex--app-server-insert-status
-              "Background terminals run inside the Codex thread"))
-      ("/mcp" (codex--app-server-insert-status
-               "MCP servers are configured in ~/.codex/config.toml"))
-      ("/fast" (codex--app-server-insert-status
-                "Service tier is set by your Codex account and config"))
-      ("/ide" (codex--app-server-insert-status
-               "codex.el is the Emacs IDE integration; use @-references for context"))
-      ("/logout" (codex--app-server-insert-status
-                  "Run `codex logout' in a terminal to clear credentials"))
-      ((or "/experimental" "/debug-config" "/feedback" "/plugins" "/hooks"
-           "/approve" "/sandbox-add-read-dir")
-       (codex--app-server-insert-status
-        (format "%s is managed by Codex configuration (~/.codex)" command)))
+      ("/stop" (codex--app-server-stop-background-terminals))
+      ("/ps" (codex--app-server-list-background-terminals))
+      ("/mcp" (codex--app-server-list-mcp-servers))
+      ("/fast" (codex--app-server-toggle-fast-mode))
+      ("/logout" (codex--app-server-logout))
+      ("/experimental" (codex--app-server-list-experimental-features))
+      ("/debug-config" (codex--app-server-read-config))
+      ("/feedback" (codex--app-server-send-feedback))
+      ("/plugins" (codex--app-server-list-plugins))
+      ("/hooks" (codex--app-server-list-hooks))
+      ("/usage" (codex--app-server-read-usage))
+      ("/delete" (codex--app-server-delete-thread))
       ((or "/quit" "/exit") (codex--term-kill-process 'app-server (current-buffer)))
       ((or "/init" "/review")
        (codex--app-server-submit-command (codex--app-server-slash-prompt command argument)))
       (_ (codex--app-server-insert-status
           (format "Unsupported command: %s" command))))))
+
+(defun codex--app-server-current-cwd ()
+  "Return the absolute working directory for app-server requests."
+  (expand-file-name (or codex--buffer-directory default-directory)))
+
+(defun codex--app-server-json-boolean (value)
+  "Return the JSON boolean representation of VALUE."
+  (if value t :json-false))
+
+(defun codex--app-server-read-object (prompt objects formatter)
+  "Read one of OBJECTS with PROMPT, labeling each through FORMATTER."
+  (let* ((choices (mapcar (lambda (object)
+                            (cons (funcall formatter object) object))
+                          objects))
+         (selection (completing-read prompt choices nil t)))
+    (cdr (assoc selection choices))))
+
+(defun codex--app-server-list-entry-items (result key)
+  "Return all KEY items from the cwd entries in RESULT."
+  (apply #'append
+         (mapcar (lambda (entry)
+                   (append (alist-get key entry) nil))
+                 (append (alist-get 'data result) nil))))
+
+(defun codex--app-server-list-skills ()
+  "Open the native skills workflow using app-server skill requests."
+  (codex--app-server-send-request
+   "skills/list"
+   `((cwds . ,(vector (codex--app-server-current-cwd)))
+     (forceReload . t))
+   (lambda (result error)
+     (if error
+         (codex--app-server-insert-status
+          (format "Skill list failed: %S" error))
+       (codex--app-server-handle-skills
+        (codex--app-server-list-entry-items result 'skills))))))
+
+(defun codex--app-server-list-permission-profiles ()
+  "List Codex permission profiles and apply the selected profile."
+  (codex--app-server-send-request
+   "permissionProfile/list" `((cwd . ,(codex--app-server-current-cwd)))
+   (lambda (result error)
+     (if error
+         (codex--app-server-insert-status
+          (format "Permission profile list failed: %S" error))
+       (codex--app-server-choose-permission-profile
+        (append (alist-get 'data result) nil))))))
+
+(defun codex--app-server-permission-profile-label (profile)
+  "Return a completion label for permission PROFILE."
+  (format "%s%s%s"
+          (alist-get 'id profile)
+          (if-let* ((description (alist-get 'description profile)))
+              (format " — %s" description)
+            "")
+          (if (alist-get 'allowed profile) "" " [unavailable]")))
+
+(defun codex--app-server-choose-permission-profile (profiles)
+  "Choose and apply one allowed permission profile from PROFILES."
+  (let* ((allowed (seq-filter (lambda (profile) (alist-get 'allowed profile))
+                              profiles))
+         (profile
+          (and allowed
+               (codex--app-server-read-object
+                "Permissions: " allowed
+                #'codex--app-server-permission-profile-label))))
+    (if profile
+        (codex--app-server-thread-request
+         "thread/settings/update" `((permissions . ,(alist-get 'id profile)))
+         (format "Permissions: %s" (alist-get 'id profile)))
+      (codex--app-server-insert-status
+       "No selectable Codex permission profiles available"))))
+
+(defun codex--app-server-handle-skills (skills)
+  "Prompt for a native skill action over SKILLS."
+  (if (null skills)
+      (codex--app-server-insert-status "No Codex skills available")
+    (pcase (completing-read "Skills: "
+                            '("Use skill" "Enable/Disable Skills") nil t)
+      ("Use skill" (codex--app-server-use-skill skills))
+      ("Enable/Disable Skills" (codex--app-server-toggle-skill skills)))))
+
+(defun codex--app-server-skill-label (skill)
+  "Return a completion label for SKILL."
+  (format "%s [%s%s]"
+          (alist-get 'name skill)
+          (alist-get 'scope skill)
+          (if (alist-get 'enabled skill) "" ", disabled")))
+
+(defun codex--app-server-use-skill (skills)
+  "Insert a selected enabled skill from SKILLS into the composer."
+  (let* ((enabled (seq-filter (lambda (skill) (alist-get 'enabled skill)) skills))
+         (skill (and enabled
+                     (codex--app-server-read-object
+                      "Use skill: " enabled #'codex--app-server-skill-label))))
+    (if skill
+        (codex--app-server-replace-input
+         (format "$%s " (alist-get 'name skill)))
+      (codex--app-server-insert-status "No enabled Codex skills available"))))
+
+(defun codex--app-server-toggle-skill (skills)
+  "Toggle one skill from SKILLS using `skills/config/write'."
+  (when-let* ((skill (codex--app-server-read-object
+                      "Enable/disable skill: "
+                      skills #'codex--app-server-skill-label))
+              (name (alist-get 'name skill)))
+    (let ((enabled (not (alist-get 'enabled skill))))
+      (codex--app-server-send-request
+       "skills/config/write"
+       `((path . ,(alist-get 'path skill))
+         (enabled . ,(codex--app-server-json-boolean enabled)))
+       (lambda (_result error)
+         (if error
+             (codex--app-server-insert-status
+              (format "Skill update failed: %S" error))
+           (setq codex--app-server-skill-cache-key nil)
+           (codex--app-server-insert-status
+            (format "%s %s" name (if enabled "enabled" "disabled")))))))))
+
+(defun codex--app-server-list-apps ()
+  "List Codex apps through `app/list' and insert the selected app."
+  (codex--app-server-send-request
+   "app/list"
+   `((threadId . ,codex--app-server-thread-id)
+     (forceRefetch . t))
+   (lambda (result error)
+     (if error
+         (codex--app-server-insert-status
+          (format "App list failed: %S" error))
+       (codex--app-server-choose-app (append (alist-get 'data result) nil))))))
+
+(defun codex--app-server-app-label (app)
+  "Return a completion label for APP."
+  (format "%s%s"
+          (alist-get 'name app)
+          (cond
+           ((not (alist-get 'isEnabled app)) " [disabled]")
+           ((not (alist-get 'isAccessible app)) " [not connected]")
+           (t ""))))
+
+(defun codex--app-server-choose-app (apps)
+  "Insert a selected accessible app from APPS into the composer."
+  (let* ((available (seq-filter
+                     (lambda (app)
+                       (and (alist-get 'isEnabled app)
+                            (alist-get 'isAccessible app)))
+                     apps))
+         (app (and available
+                   (codex--app-server-read-object
+                    "Use app: " available #'codex--app-server-app-label))))
+    (if app
+        (codex--app-server-replace-input
+         (format "$%s " (alist-get 'name app)))
+      (codex--app-server-insert-status
+       "No enabled and connected Codex apps available"))))
+
+(defun codex--app-server-list-plugins ()
+  "Open the native plugin workflow using `plugin/list'."
+  (codex--app-server-send-request
+   "plugin/list"
+   `((cwds . ,(vector (codex--app-server-current-cwd))))
+   (lambda (result error)
+     (if error
+         (codex--app-server-insert-status
+          (format "Plugin list failed: %S" error))
+       (codex--app-server-choose-plugin
+        (codex--app-server-plugin-records result))))))
+
+(defun codex--app-server-plugin-records (result)
+  "Return plugin and marketplace records from plugin list RESULT."
+  (apply #'append
+         (mapcar
+          (lambda (marketplace)
+            (mapcar (lambda (plugin)
+                      `((plugin . ,plugin) (marketplace . ,marketplace)))
+                    (append (alist-get 'plugins marketplace) nil)))
+          (append (alist-get 'marketplaces result) nil))))
+
+(defun codex--app-server-plugin-label (record)
+  "Return a completion label for plugin RECORD."
+  (let* ((plugin (alist-get 'plugin record))
+         (interface (alist-get 'interface plugin))
+         (name (or (alist-get 'displayName interface)
+                   (alist-get 'name plugin))))
+    (format "%s [%s]"
+            name
+            (cond
+             ((not (alist-get 'installed plugin)) "not installed")
+             ((alist-get 'enabled plugin) "enabled")
+             (t "disabled")))))
+
+(defun codex--app-server-choose-plugin (records)
+  "Choose and manage one plugin from RECORDS."
+  (if (null records)
+      (codex--app-server-insert-status "No Codex plugins available")
+    (when-let* ((record (codex--app-server-read-object
+                         "Plugin: " records #'codex--app-server-plugin-label))
+                (plugin (alist-get 'plugin record)))
+      (if (alist-get 'installed plugin)
+          (codex--app-server-manage-installed-plugin plugin)
+        (codex--app-server-install-plugin
+         plugin (alist-get 'marketplace record))))))
+
+(defun codex--app-server-manage-installed-plugin (plugin)
+  "Prompt for and apply an action to installed PLUGIN."
+  (let* ((enabled (alist-get 'enabled plugin))
+         (action (completing-read
+                  "Plugin action: "
+                  (list (if enabled "Disable" "Enable") "Uninstall") nil t)))
+    (pcase action
+      ("Enable" (codex--app-server-set-plugin-enabled plugin t))
+      ("Disable" (codex--app-server-set-plugin-enabled plugin nil))
+      ("Uninstall" (when (yes-or-no-p
+                           (format "Uninstall %s? " (alist-get 'name plugin)))
+                     (codex--app-server-uninstall-plugin plugin))))))
+
+(defun codex--app-server-set-plugin-enabled (plugin enabled)
+  "Set PLUGIN enablement to ENABLED through the Codex config protocol."
+  (codex--app-server-send-request
+   "config/value/write"
+   `((keyPath . ,(format "plugins.%s" (alist-get 'id plugin)))
+     (value (enabled . ,(codex--app-server-json-boolean enabled)))
+     (mergeStrategy . "upsert"))
+   (lambda (_result error)
+     (codex--app-server-insert-status
+      (if error
+          (format "Plugin update failed: %S" error)
+        (format "%s %s"
+                (alist-get 'name plugin)
+                (if enabled "enabled" "disabled")))))))
+
+(defun codex--app-server-install-plugin (plugin marketplace)
+  "Install PLUGIN from MARKETPLACE through `plugin/install'."
+  (when (yes-or-no-p (format "Install %s? " (alist-get 'name plugin)))
+    (let ((path (alist-get 'path marketplace)))
+      (codex--app-server-send-request
+       "plugin/install"
+       (append `((pluginName . ,(alist-get 'name plugin)))
+               (if path
+                   `((marketplacePath . ,path))
+                 `((remoteMarketplaceName . ,(alist-get 'name marketplace)))))
+       (lambda (_result error)
+         (codex--app-server-insert-status
+          (if error
+              (format "Plugin installation failed: %S" error)
+            (format "%s installed" (alist-get 'name plugin)))))))))
+
+(defun codex--app-server-uninstall-plugin (plugin)
+  "Uninstall PLUGIN through `plugin/uninstall'."
+  (codex--app-server-send-request
+   "plugin/uninstall" `((pluginId . ,(alist-get 'id plugin)))
+   (lambda (_result error)
+     (codex--app-server-insert-status
+      (if error
+          (format "Plugin uninstall failed: %S" error)
+        (format "%s uninstalled" (alist-get 'name plugin)))))))
+
+(defun codex--app-server-list-hooks ()
+  "Open the native hook workflow using `hooks/list'."
+  (codex--app-server-send-request
+   "hooks/list" `((cwds . ,(vector (codex--app-server-current-cwd))))
+   (lambda (result error)
+     (if error
+         (codex--app-server-insert-status
+          (format "Hook list failed: %S" error))
+       (codex--app-server-choose-hook
+        (codex--app-server-list-entry-items result 'hooks))))))
+
+(defun codex--app-server-hook-label (hook)
+  "Return a completion label for HOOK."
+  (format "%s [%s, %s, %s]"
+          (alist-get 'eventName hook)
+          (alist-get 'source hook)
+          (if (alist-get 'enabled hook) "enabled" "disabled")
+          (alist-get 'trustStatus hook)))
+
+(defun codex--app-server-choose-hook (hooks)
+  "Choose and manage one hook from HOOKS."
+  (if (null hooks)
+      (codex--app-server-insert-status "No Codex hooks configured")
+    (when-let* ((hook (codex--app-server-read-object
+                       "Hook: " hooks #'codex--app-server-hook-label)))
+      (let* ((enabled (alist-get 'enabled hook))
+             (needs-trust
+              (member (alist-get 'trustStatus hook) '("untrusted" "modified")))
+             (actions
+              (append (list (if enabled "Disable" "Enable") "View details")
+                      (and needs-trust (list "Trust current version"))))
+             (action (completing-read "Hook action: " actions nil t)))
+        (pcase action
+          ("Enable" (codex--app-server-set-hook-enabled hook t))
+          ("Disable" (codex--app-server-set-hook-enabled hook nil))
+          ("Trust current version" (codex--app-server-trust-hook hook))
+          ("View details"
+           (codex--app-server-display-output
+            (codex--app-server-format-hooks (list hook)))))))))
+
+(defun codex--app-server-hook-state-value (hook field value)
+  "Return a hooks.state value updating HOOK FIELD to VALUE."
+  (list (cons (alist-get 'key hook)
+              (list (cons field value)))))
+
+(defun codex--app-server-set-hook-enabled (hook enabled)
+  "Set HOOK enablement to ENABLED through `config/batchWrite'."
+  (codex--app-server-write-config
+   `(((keyPath . "hooks.state")
+      (value . ,(codex--app-server-hook-state-value
+                 hook 'enabled (codex--app-server-json-boolean enabled)))
+      (mergeStrategy . "upsert")))
+   (lambda (_result error)
+     (codex--app-server-insert-status
+      (if error
+          (format "Hook update failed: %S" error)
+        (format "%s hook %s"
+                (alist-get 'eventName hook)
+                (if enabled "enabled" "disabled")))))))
+
+(defun codex--app-server-trust-hook (hook)
+  "Trust the current version of HOOK through `config/batchWrite'."
+  (codex--app-server-write-config
+   `(((keyPath . "hooks.state")
+      (value . ,(codex--app-server-hook-state-value
+                 hook 'trusted_hash (alist-get 'currentHash hook)))
+      (mergeStrategy . "upsert")))
+   (lambda (_result error)
+     (codex--app-server-insert-status
+      (if error
+          (format "Hook trust update failed: %S" error)
+        (format "%s hook trusted" (alist-get 'eventName hook)))))))
+
+(defun codex--app-server-write-config (edits callback)
+  "Persist config EDITS through `config/batchWrite', then run CALLBACK."
+  (codex--app-server-send-request
+   "config/batchWrite"
+   `((edits . ,(vconcat edits)) (reloadUserConfig . t))
+   callback))
+
+(defun codex--app-server-format-hooks (hooks)
+  "Return a readable listing of HOOKS."
+  (if (null hooks)
+      "No Codex hooks configured\n"
+    (concat
+     "Codex hooks\n\n"
+     (mapconcat
+      (lambda (hook)
+        (format "%-18s %-9s %-10s %s"
+                (alist-get 'eventName hook)
+                (if (alist-get 'enabled hook) "enabled" "disabled")
+                (alist-get 'trustStatus hook)
+                (alist-get 'sourcePath hook)))
+      hooks "\n")
+     "\n")))
+
+(defun codex--app-server-list-mcp-servers ()
+  "List MCP server status through `mcpServerStatus/list'."
+  (codex--app-server-send-request
+   "mcpServerStatus/list"
+   `((threadId . ,codex--app-server-thread-id) (detail . "full"))
+   (lambda (result error)
+     (if error
+         (codex--app-server-insert-status
+          (format "MCP status failed: %S" error))
+       (codex--app-server-display-output
+        (codex--app-server-format-mcp-servers
+         (append (alist-get 'data result) nil)))))))
+
+(defun codex--app-server-format-mcp-servers (servers)
+  "Return a readable listing of MCP SERVERS."
+  (if (null servers)
+      "No MCP servers configured\n"
+    (concat
+     "MCP servers\n\n"
+     (mapconcat
+      (lambda (server)
+        (format "%-24s %-12s %d tools, %d resources"
+                (alist-get 'name server)
+                (alist-get 'authStatus server)
+                (length (alist-get 'tools server))
+                (length (alist-get 'resources server))))
+      servers "\n")
+     "\n")))
+
+(defun codex--app-server-list-background-terminals ()
+  "List thread processes through `thread/backgroundTerminals/list'."
+  (codex--app-server-send-request
+   "thread/backgroundTerminals/list"
+   `((threadId . ,codex--app-server-thread-id))
+   (lambda (result error)
+     (if error
+         (codex--app-server-insert-status
+          (format "Background terminal list failed: %S" error))
+       (codex--app-server-display-output
+        (codex--app-server-format-background-terminals
+         (append (alist-get 'data result) nil)))))))
+
+(defun codex--app-server-format-background-terminals (terminals)
+  "Return a readable listing of background TERMINALS."
+  (if (null terminals)
+      "No background terminals\n"
+    (concat
+     "Background terminals\n\n"
+     (mapconcat
+      (lambda (terminal)
+        (format "%-12s pid %-7s %s\n  %s"
+                (alist-get 'processId terminal)
+                (or (alist-get 'osPid terminal) "-")
+                (alist-get 'command terminal)
+                (alist-get 'cwd terminal)))
+      terminals "\n")
+     "\n")))
+
+(defun codex--app-server-stop-background-terminals ()
+  "Stop active thread processes through the background-terminal protocol."
+  (codex--app-server-send-request
+   "thread/backgroundTerminals/list"
+   `((threadId . ,codex--app-server-thread-id))
+   (lambda (result error)
+     (if error
+         (codex--app-server-insert-status
+          (format "Background terminal list failed: %S" error))
+       (codex--app-server-confirm-stop-background-terminals
+        (append (alist-get 'data result) nil))))))
+
+(defun codex--app-server-confirm-stop-background-terminals (terminals)
+  "Confirm and terminate active background TERMINALS."
+  (if (null terminals)
+      (codex--app-server-insert-status "No background terminals to stop")
+    (when (yes-or-no-p (format "Stop %d background terminal%s? "
+                               (length terminals)
+                               (if (= (length terminals) 1) "" "s")))
+      (dolist (terminal terminals)
+        (codex--app-server-send-request
+         "thread/backgroundTerminals/terminate"
+         `((threadId . ,codex--app-server-thread-id)
+           (processId . ,(alist-get 'processId terminal)))
+         (lambda (_result error)
+           (when error
+             (codex--app-server-insert-status
+              (format "Background terminal stop failed: %S" error))))))
+      (codex--app-server-insert-status "Background terminals stopped"))))
+
+(defun codex--app-server-list-experimental-features ()
+  "List and toggle features through the experimental-feature protocol."
+  (codex--app-server-send-request
+   "experimentalFeature/list" `((threadId . ,codex--app-server-thread-id))
+   (lambda (result error)
+     (if error
+         (codex--app-server-insert-status
+          (format "Experimental feature list failed: %S" error))
+       (codex--app-server-choose-experimental-feature
+        (append (alist-get 'data result) nil))))))
+
+(defun codex--app-server-feature-label (feature)
+  "Return a completion label for experimental FEATURE."
+  (format "%s [%s, %s]"
+          (or (alist-get 'displayName feature) (alist-get 'name feature))
+          (alist-get 'stage feature)
+          (if (alist-get 'enabled feature) "enabled" "disabled")))
+
+(defun codex--app-server-choose-experimental-feature (features)
+  "Choose and toggle one experimental feature from FEATURES."
+  (if (null features)
+      (codex--app-server-insert-status "No experimental Codex features")
+    (when-let* ((feature (codex--app-server-read-object
+                          "Experimental feature: "
+                          features #'codex--app-server-feature-label))
+                (name (alist-get 'name feature)))
+      (codex--app-server-persist-experimental-feature
+       feature (not (alist-get 'enabled feature))))))
+
+(defun codex--app-server-persist-experimental-feature (feature enabled)
+  "Persist FEATURE as ENABLED, then update the app-server process."
+  (let* ((name (alist-get 'name feature))
+         (value (if (and (not enabled)
+                         (not (alist-get 'defaultEnabled feature)))
+                    nil
+                  (codex--app-server-json-boolean enabled))))
+    (codex--app-server-write-config
+     `(((keyPath . ,(format "features.%s" name))
+        (value . ,value)
+        (mergeStrategy . "replace")))
+     (lambda (_result error)
+       (if error
+           (codex--app-server-insert-status
+            (format "Experimental feature update failed: %S" error))
+         (codex--app-server-set-experimental-feature-runtime
+          name enabled))))))
+
+(defun codex--app-server-set-experimental-feature-runtime (name enabled)
+  "Set runtime feature NAME enablement to ENABLED."
+  (codex--app-server-send-request
+   "experimentalFeature/enablement/set"
+   `((enablement
+      (,name . ,(codex--app-server-json-boolean enabled))))
+   (lambda (_result error)
+     (codex--app-server-insert-status
+      (if error
+          (format "Experimental runtime update failed: %S" error)
+        (format "%s %s" name (if enabled "enabled" "disabled")))))))
+
+(defun codex--app-server-read-config ()
+  "Read the effective Codex configuration through `config/read'."
+  (codex--app-server-send-request
+   "config/read"
+   `((cwd . ,(codex--app-server-current-cwd)) (includeLayers . t))
+   (lambda (result error)
+     (if error
+         (codex--app-server-insert-status
+          (format "Config read failed: %S" error))
+       (codex--app-server-display-output
+        (concat "Effective Codex configuration\n\n"
+                (pp-to-string result)))))))
+
+(defun codex--app-server-send-feedback ()
+  "Collect feedback and upload it through `feedback/upload'."
+  (let ((classification
+         (completing-read "Feedback type: "
+                          '("bug" "bad_result" "good_result"
+                            "safety_check" "other")
+                          nil t))
+        (reason (read-string "Feedback: "))
+        (include-logs (yes-or-no-p "Include Codex logs? ")))
+    (codex--app-server-send-request
+     "feedback/upload"
+     `((classification . ,classification)
+       (reason . ,reason)
+       (includeLogs . ,(codex--app-server-json-boolean include-logs))
+       (threadId . ,codex--app-server-thread-id))
+     (lambda (_result error)
+       (codex--app-server-insert-status
+        (if error
+            (format "Feedback upload failed: %S" error)
+          "Feedback uploaded"))))))
+
+(defun codex--app-server-logout ()
+  "Log out through `account/logout' after confirmation."
+  (when (yes-or-no-p "Log out of Codex? ")
+    (codex--app-server-send-request
+     "account/logout" '()
+     (lambda (_result error)
+       (codex--app-server-insert-status
+        (if error (format "Logout failed: %S" error) "Logged out of Codex"))))))
+
+(defun codex--app-server-toggle-fast-mode ()
+  "Toggle fast service tier for the current thread."
+  (let* ((current (or codex--app-server-service-tier
+                      (codex--app-server-config-string "service_tier")))
+         (enabled (not (equal current "fast")))
+         (tier (and enabled "fast")))
+    (codex--app-server-write-config
+     `(((keyPath . "service_tier")
+        (value . ,tier)
+        (mergeStrategy . "replace")))
+     (lambda (_result error)
+       (if error
+           (codex--app-server-insert-status
+            (format "Fast mode config update failed: %S" error))
+         (codex--app-server-apply-fast-mode tier enabled))))))
+
+(defun codex--app-server-apply-fast-mode (tier enabled)
+  "Apply service TIER to the thread and report whether fast mode is ENABLED."
+  (codex--app-server-send-request
+   "thread/settings/update"
+   `((threadId . ,codex--app-server-thread-id) (serviceTier . ,tier))
+   (lambda (_result error)
+     (if error
+         (codex--app-server-insert-status
+          (format "Fast mode update failed: %S" error))
+       (setq codex--app-server-service-tier tier)
+       (codex--app-server-insert-status
+        (if enabled "Fast mode enabled" "Fast mode disabled"))))))
+
+(defun codex--app-server-read-usage ()
+  "Read Codex account usage through `account/usage/read'."
+  (codex--app-server-send-request
+   "account/usage/read" nil
+   (lambda (result error)
+     (if error
+         (codex--app-server-insert-status
+          (format "Usage read failed: %S" error))
+       (codex--app-server-display-output
+        (concat "Codex account usage\n\n" (pp-to-string result)))))))
+
+(defun codex--app-server-delete-thread ()
+  "Delete the current Codex thread through `thread/delete'."
+  (when (yes-or-no-p "Permanently delete this Codex thread? ")
+    (codex--app-server-thread-request
+     "thread/delete" nil "Thread deleted")))
 
 (defun codex--app-server-thread-request (method extra ok-message)
   "Send thread request METHOD with EXTRA params, reporting OK-MESSAGE on success."
@@ -873,17 +1448,6 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
     (push (cons (file-name-nondirectory path) path)
           codex--app-server-pending-mentions)
     (message "File mentioned for next Codex turn: %s" path)))
-
-(defun codex--app-server-toggle-vim ()
-  "Toggle a Vim editing mode in the buffer when one is available."
-  (cond ((fboundp 'evil-local-mode)
-         (call-interactively #'evil-local-mode)
-         (codex--app-server-insert-status "Toggled evil-local-mode"))
-        ((fboundp 'viper-mode)
-         (viper-mode)
-         (codex--app-server-insert-status "Enabled viper-mode"))
-        (t (codex--app-server-insert-status
-            "No Vim mode available (install evil or viper)"))))
 
 (defun codex--app-server-toggle-raw ()
   "Toggle raw (unrendered) Markdown display for new messages."
@@ -913,26 +1477,6 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
           (if error (format "Compact failed: %S" error)
             "Compacting conversation…"))))
     (message "No active Codex thread")))
-
-(defun codex--app-server-clear-display ()
-  "Clear the buffer display while keeping the current thread."
-  (codex--app-server-cancel-markdown-render)
-  (let ((inhibit-read-only t)) (erase-buffer))
-  (setq codex--app-server-output-marker nil
-        codex--app-server-input-marker nil
-        codex--app-server-plan-start nil
-        codex--app-server-plan-end nil
-        codex--app-server-queue-start nil
-        codex--app-server-queue-end nil
-        codex--app-server-explore-files nil
-        codex--app-server-explore-start nil
-        codex--app-server-explore-end nil)
-  (clrhash codex--app-server-agent-items)
-  (clrhash codex--app-server-command-items)
-  (clrhash codex--app-server-reasoning-items)
-  (codex--app-server-insert-status
-   (format "Connected to Codex thread %s" codex--app-server-thread-id))
-  (codex--app-server-setup-input-region))
 
 (defun codex--app-server-show-status ()
   "Insert a session status line with model, tokens, rate limit, and directory."
@@ -1424,15 +1968,14 @@ END is updated to the new end of the replaced region."
         (set-marker end (point))))))
 
 (defconst codex--app-server-slash-commands
-  '("/agent" "/approve" "/apps" "/archive" "/clear" "/compact" "/copy"
-    "/debug-config" "/diff" "/exit" "/experimental" "/fast" "/feedback" "/fork"
-    "/goal" "/hooks" "/ide" "/init" "/keymap" "/logout" "/mcp" "/memories"
-    "/mention" "/model" "/new" "/permissions" "/personality" "/plan"
-    "/pets" "/plugins" "/ps" "/quit" "/raw" "/rename" "/resume" "/review"
-    "/sandbox-add-read-dir" "/side" "/skills" "/status" "/statusline" "/stop"
-    "/theme" "/title" "/vim")
+  '("/apps" "/archive" "/clear" "/compact" "/copy" "/debug-config" "/delete"
+    "/diff" "/exit" "/experimental" "/fast" "/feedback" "/fork" "/goal"
+    "/hooks" "/init" "/logout" "/mcp" "/memories" "/mention" "/model" "/new"
+    "/permissions" "/personality" "/plugins" "/ps" "/quit" "/raw" "/rename"
+    "/resume" "/review" "/skills" "/status" "/stop" "/usage")
   "Slash commands recognized by the app-server backend, used for completion.
-Mirrors the Codex CLI's slash-command set.")
+Contains only Codex operations implemented with equivalent app-server
+requests or frontend actions with the same user-visible effect.")
 
 (defun codex--app-server-complete-or-queue ()
   "Complete prompt references when idle, or queue input while a turn runs.

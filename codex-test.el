@@ -1592,16 +1592,194 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (should (equal (alist-get 'path mention) "/tmp/foo.el")))
     (should (null codex--app-server-pending-mentions))))
 
-(ert-deftest codex-test-app-server-all-slash-commands-recognized ()
-  "Documented message-only slash commands do not fall through as unsupported."
+(ert-deftest codex-test-app-server-protocol-slash-commands-send-requests ()
+  "Protocol-backed slash commands send their native app-server requests."
   (with-temp-buffer
     (rename-buffer "*codex:/tmp/app-server-allslash/*" t)
     (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-thread-id "thread-1")
+    (setq-local codex--buffer-directory "/tmp/project")
     (codex--app-server-setup-input-region)
-    (dolist (cmd '("/fast" "/mcp" "/ps" "/ide" "/logout"
-                   "/experimental" "/plugins" "/hooks" "/statusline" "/skills"))
-      (codex--app-server-dispatch-slash cmd))
-    (should-not (string-match-p "Unsupported command" (buffer-string)))))
+    (dolist (case '(("/skills" . "skills/list")
+                    ("/apps" . "app/list")
+                    ("/plugins" . "plugin/list")
+                    ("/hooks" . "hooks/list")
+                    ("/mcp" . "mcpServerStatus/list")
+                    ("/ps" . "thread/backgroundTerminals/list")
+                    ("/experimental" . "experimentalFeature/list")
+                    ("/debug-config" . "config/read")
+                    ("/permissions" . "permissionProfile/list")
+                    ("/usage" . "account/usage/read")))
+      (let (method)
+        (cl-letf (((symbol-function 'codex--app-server-send-request)
+                   (lambda (sent-method _params _callback)
+                     (setq method sent-method))))
+          (codex--app-server-dispatch-slash (car case)))
+        (should (equal method (cdr case)))))))
+
+(ert-deftest codex-test-app-server-placeholder-notices-are-gone ()
+  "Slash dispatch does not claim Codex operations are configuration notices."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-no-placeholders/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-thread-id "thread-1")
+    (setq-local codex--buffer-directory "/tmp/project")
+    (codex--app-server-setup-input-region)
+    (cl-letf (((symbol-function 'codex--app-server-send-request) #'ignore))
+      (dolist (command '("/skills" "/apps" "/plugins" "/hooks" "/mcp"
+                         "/ps" "/experimental" "/debug-config"
+                         "/permissions" "/usage"))
+        (codex--app-server-dispatch-slash command)))
+    (should-not (string-match-p "managed by Codex configuration"
+                                (buffer-string)))))
+
+(ert-deftest codex-test-app-server-json-false-decodes-as-nil ()
+  "Protocol booleans decode to ordinary Elisp truth values."
+  (let (parsed)
+    (cl-letf (((symbol-function 'codex--app-server-handle-message)
+               (lambda (message) (setq parsed message))))
+      (codex--app-server-handle-line
+       "{\"enabled\":false,\"available\":true,\"optional\":null}"))
+    (should-not (alist-get 'enabled parsed))
+    (should (eq (alist-get 'available parsed) t))
+    (should-not (alist-get 'optional parsed))))
+
+(ert-deftest codex-test-app-server-omits-frontend-slash-substitutions ()
+  "App-server completion does not advertise unrelated Emacs substitutes."
+  (dolist (command '("/agent" "/ide" "/keymap" "/pets" "/plan" "/side"
+                     "/statusline" "/theme" "/title" "/vim"))
+    (should-not (member command codex--app-server-slash-commands))))
+
+(ert-deftest codex-test-app-server-skills-use-native-list-result ()
+  "/skills lists server skills and inserts the selected skill reference."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-skills/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--buffer-directory "/tmp/project")
+    (codex--app-server-setup-input-region)
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (prompt _choices &rest _)
+                 (if (equal prompt "Skills: ")
+                     "Use skill"
+                   "proofread [user]")))
+              ((symbol-function 'codex--app-server-send-request)
+               (lambda (method params callback)
+                 (should (equal method "skills/list"))
+                 (should (equal (alist-get 'cwds params) ["/tmp/project"]))
+                 (funcall
+                  callback
+                  '((data . (((cwd . "/tmp/project")
+                              (errors . [])
+                              (skills . (((name . "proofread")
+                                          (description . "Proofread text")
+                                          (enabled . t)
+                                          (path . "/tmp/proofread/SKILL.md")
+                                          (scope . "user"))))))))
+                  nil))))
+      (codex--app-server-dispatch-slash "/skills"))
+    (should (equal (codex--app-server-input-text) "$proofread "))))
+
+(ert-deftest codex-test-app-server-skills-toggle-through-config-request ()
+  "/skills toggles the selected skill through `skills/config/write'."
+  (let (sent)
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (prompt _choices &rest _)
+                 (if (equal prompt "Skills: ")
+                     "Enable/Disable Skills"
+                   "proofread [user, disabled]")))
+              ((symbol-function 'codex--app-server-send-request)
+               (lambda (method params callback)
+                 (setq sent (cons method params))
+                 (funcall callback nil nil)))
+              ((symbol-function 'codex--app-server-insert-status) #'ignore))
+      (codex--app-server-handle-skills
+       '(((name . "proofread")
+          (description . "Proofread text")
+          (enabled . nil)
+          (path . "/tmp/proofread/SKILL.md")
+          (scope . "user")))))
+    (should (equal (car sent) "skills/config/write"))
+    (should (equal (alist-get 'path (cdr sent))
+                   "/tmp/proofread/SKILL.md"))
+    (should (eq (alist-get 'enabled (cdr sent)) t))))
+
+(ert-deftest codex-test-app-server-plugin-installs-through-native-request ()
+  "/plugins installs the selected catalog plugin through `plugin/install'."
+  (let (sent)
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (&rest _) "Documents [not installed]"))
+              ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+              ((symbol-function 'codex--app-server-send-request)
+               (lambda (method params callback)
+                 (setq sent (cons method params))
+                 (funcall callback nil nil)))
+              ((symbol-function 'codex--app-server-insert-status) #'ignore))
+      (codex--app-server-choose-plugin
+       '(((plugin . ((id . "documents@openai")
+                     (name . "documents")
+                     (installed . nil)
+                     (enabled . nil)
+                     (interface . ((displayName . "Documents")))))
+          (marketplace . ((name . "openai-curated-remote")
+                          (path . nil)))))))
+    (should (equal (car sent) "plugin/install"))
+    (should (equal (alist-get 'pluginName (cdr sent)) "documents"))
+    (should (equal (alist-get 'remoteMarketplaceName (cdr sent))
+                   "openai-curated-remote"))))
+
+(ert-deftest codex-test-app-server-plugin-enablement-matches-native-request ()
+  "Plugin enablement uses the same config object write as the Codex TUI."
+  (let (sent)
+    (cl-letf (((symbol-function 'codex--app-server-send-request)
+               (lambda (method params _callback)
+                 (setq sent (cons method params)))))
+      (codex--app-server-set-plugin-enabled
+       '((id . "documents@openai") (name . "documents")) t))
+    (should (equal (car sent) "config/value/write"))
+    (should (equal (alist-get 'keyPath (cdr sent))
+                   "plugins.documents@openai"))
+    (should (equal (alist-get 'value (cdr sent)) '((enabled . t))))
+    (should (equal (alist-get 'mergeStrategy (cdr sent)) "upsert"))))
+
+(ert-deftest codex-test-app-server-experimental-toggle-persists-then-applies ()
+  "Experimental toggles persist through config before runtime enablement."
+  (let (requests)
+    (cl-letf (((symbol-function 'codex--app-server-send-request)
+               (lambda (method params callback)
+                 (push (cons method params) requests)
+                 (funcall callback nil nil)))
+              ((symbol-function 'codex--app-server-insert-status) #'ignore))
+      (codex--app-server-persist-experimental-feature
+       '((name . "browser_use")
+         (enabled . nil)
+         (defaultEnabled . nil))
+       t))
+    (setq requests (nreverse requests))
+    (should (equal (mapcar #'car requests)
+                   '("config/batchWrite"
+                     "experimentalFeature/enablement/set")))
+    (let* ((edit (aref (alist-get 'edits (cdr (car requests))) 0))
+           (enablement (alist-get 'enablement (cdr (cadr requests)))))
+      (should (equal (alist-get 'keyPath edit) "features.browser_use"))
+      (should (eq (alist-get 'value edit) t))
+      (should (eq (alist-get "browser_use" enablement nil nil #'equal) t)))))
+
+(ert-deftest codex-test-app-server-hook-enablement-matches-native-request ()
+  "Hook enablement uses the Codex TUI's hooks.state config batch."
+  (let (sent)
+    (cl-letf (((symbol-function 'codex--app-server-send-request)
+               (lambda (method params _callback)
+                 (setq sent (cons method params)))))
+      (codex--app-server-set-hook-enabled
+       '((key . "hook-1") (eventName . "preToolUse")) nil))
+    (should (equal (car sent) "config/batchWrite"))
+    (let* ((edit (aref (alist-get 'edits (cdr sent)) 0))
+           (state (alist-get 'value edit))
+           (hook (alist-get "hook-1" state nil nil #'equal)))
+      (should (equal (alist-get 'keyPath edit) "hooks.state"))
+      (should (eq (alist-get 'enabled hook) :json-false))
+      (should (equal (alist-get 'mergeStrategy edit) "upsert"))
+      (should (eq (alist-get 'reloadUserConfig (cdr sent)) t)))))
 
 (ert-deftest codex-test-app-server-archive-and-rename-dispatch ()
   "/archive and /rename send the matching thread requests, like the CLI."

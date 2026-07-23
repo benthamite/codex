@@ -539,12 +539,17 @@ value is returned to the Codex CLI hook process.")
     ("M" "MCP" (lambda () (interactive) (codex--do-send-command "/mcp")))
     ("a" "Agent" (lambda () (interactive) (codex--do-send-command "/agent")))
     ("A" "Apps" (lambda () (interactive) (codex--do-send-command "/apps")))
+    ("k" "Skills" (lambda () (interactive) (codex--do-send-command "/skills")))
+    ("g" "Plugins" (lambda () (interactive) (codex--do-send-command "/plugins")))
+    ("H" "Hooks" (lambda () (interactive) (codex--do-send-command "/hooks")))
     ("@" "Mention" (lambda () (interactive) (codex--do-send-command "/mention")))
     ("!" "PS" (lambda () (interactive) (codex--do-send-command "/ps")))]
    ["Account & Identity"
     ("l" "Logout" (lambda () (interactive) (codex--do-send-command "/logout")))
     ("Y" "Personality" (lambda () (interactive) (codex--do-send-command "/personality")))
-    ("b" "Feedback" (lambda () (interactive) (codex--do-send-command "/feedback")))]])
+    ("b" "Feedback" (lambda () (interactive) (codex--do-send-command "/feedback")))
+    ("u" "Usage" (lambda () (interactive) (codex--do-send-command "/usage")))
+    ("x" "Delete thread" (lambda () (interactive) (codex--do-send-command "/delete")))]])
 
 ;;;; Terminal abstraction layer
 ;;;;; Generic function definitions
