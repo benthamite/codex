@@ -2,22 +2,27 @@
   "codex_version": "codex-cli 0.145.0",
   "methods": {
     "account/chatgptAuthTokens/refresh": {
-      "status": "unreviewed"
+      "note": "the CLI manages its own tokens",
+      "status": "wont-implement"
     },
     "account/login/cancel": {
-      "status": "unreviewed"
+      "note": "login runs through the CLI",
+      "status": "wont-implement"
     },
     "account/login/completed": {
-      "status": "unreviewed"
+      "note": "login runs through the CLI",
+      "status": "wont-implement"
     },
     "account/login/start": {
-      "status": "unreviewed"
+      "note": "login runs through the CLI; codex.el switches accounts via CODEX_HOME",
+      "status": "wont-implement"
     },
     "account/logout": {
       "status": "handled"
     },
     "account/rateLimitResetCredit/consume": {
-      "status": "unreviewed"
+      "note": "billing action, not an editor concern",
+      "status": "wont-implement"
     },
     "account/rateLimits/read": {
       "status": "handled"
@@ -26,58 +31,72 @@
       "status": "handled"
     },
     "account/read": {
-      "status": "unreviewed"
+      "note": "rateLimits/read and usage/read already cover what the modeline shows",
+      "status": "wont-implement"
     },
     "account/sendAddCreditsNudgeEmail": {
-      "status": "unreviewed"
+      "note": "upsell path",
+      "status": "wont-implement"
     },
     "account/updated": {
-      "status": "unreviewed"
+      "note": "refresh the usage and rate-limit display",
+      "status": "todo"
     },
     "account/usage/read": {
       "status": "handled"
     },
     "account/workspaceMessages/read": {
-      "status": "unreviewed"
+      "note": "no Emacs surface for workspace messages",
+      "status": "wont-implement"
     },
     "app/installed": {
-      "status": "unreviewed"
+      "note": "refresh the app list after install",
+      "status": "todo"
     },
     "app/list": {
       "status": "handled"
     },
     "app/list/updated": {
-      "status": "unreviewed"
+      "note": "refresh the app list",
+      "status": "todo"
     },
     "app/read": {
-      "status": "unreviewed"
+      "note": "app detail view",
+      "status": "todo"
     },
     "applyPatchApproval": {
       "status": "handled"
     },
     "attestation/generate": {
-      "status": "unreviewed"
+      "note": "enterprise attestation; no user-visible behavior",
+      "status": "wont-implement"
     },
     "command/exec": {
-      "status": "unreviewed"
+      "note": "client-run terminals; background terminal list is handled but not exec",
+      "status": "todo"
     },
     "command/exec/outputDelta": {
-      "status": "unreviewed"
+      "note": "output for client-run terminals",
+      "status": "todo"
     },
     "command/exec/resize": {
-      "status": "unreviewed"
+      "note": "resize client-run terminals",
+      "status": "todo"
     },
     "command/exec/terminate": {
-      "status": "unreviewed"
+      "note": "kill client-run terminals",
+      "status": "todo"
     },
     "command/exec/write": {
-      "status": "unreviewed"
+      "note": "input to client-run terminals",
+      "status": "todo"
     },
     "config/batchWrite": {
       "status": "handled"
     },
     "config/mcpServer/reload": {
-      "status": "unreviewed"
+      "note": "reload an MCP server without restarting",
+      "status": "todo"
     },
     "config/read": {
       "status": "handled"
@@ -86,7 +105,8 @@
       "status": "handled"
     },
     "configRequirements/read": {
-      "status": "unreviewed"
+      "note": "informational only",
+      "status": "wont-implement"
     },
     "configWarning": {
       "status": "handled"
@@ -107,61 +127,79 @@
       "status": "handled"
     },
     "externalAgentConfig/detect": {
-      "status": "unreviewed"
+      "note": "one-time import from other agents; not an ongoing feature",
+      "status": "wont-implement"
     },
     "externalAgentConfig/import": {
-      "status": "unreviewed"
+      "note": "one-time import from other agents; not an ongoing feature",
+      "status": "wont-implement"
     },
     "externalAgentConfig/import/completed": {
-      "status": "unreviewed"
+      "note": "one-time import from other agents; not an ongoing feature",
+      "status": "wont-implement"
     },
     "externalAgentConfig/import/progress": {
-      "status": "unreviewed"
+      "note": "one-time import from other agents; not an ongoing feature",
+      "status": "wont-implement"
     },
     "externalAgentConfig/import/readHistories": {
-      "status": "unreviewed"
+      "note": "one-time import from other agents; not an ongoing feature",
+      "status": "wont-implement"
     },
     "feedback/upload": {
       "status": "handled"
     },
     "fs/changed": {
-      "status": "unreviewed"
+      "note": "Emacs accesses the filesystem directly; no need to proxy it",
+      "status": "wont-implement"
     },
     "fs/copy": {
-      "status": "unreviewed"
+      "note": "Emacs accesses the filesystem directly; no need to proxy it",
+      "status": "wont-implement"
     },
     "fs/createDirectory": {
-      "status": "unreviewed"
+      "note": "Emacs accesses the filesystem directly; no need to proxy it",
+      "status": "wont-implement"
     },
     "fs/getMetadata": {
-      "status": "unreviewed"
+      "note": "Emacs accesses the filesystem directly; no need to proxy it",
+      "status": "wont-implement"
     },
     "fs/readDirectory": {
-      "status": "unreviewed"
+      "note": "Emacs accesses the filesystem directly; no need to proxy it",
+      "status": "wont-implement"
     },
     "fs/readFile": {
-      "status": "unreviewed"
+      "note": "Emacs accesses the filesystem directly; no need to proxy it",
+      "status": "wont-implement"
     },
     "fs/remove": {
-      "status": "unreviewed"
+      "note": "Emacs accesses the filesystem directly; no need to proxy it",
+      "status": "wont-implement"
     },
     "fs/unwatch": {
-      "status": "unreviewed"
+      "note": "Emacs accesses the filesystem directly; no need to proxy it",
+      "status": "wont-implement"
     },
     "fs/watch": {
-      "status": "unreviewed"
+      "note": "Emacs accesses the filesystem directly; no need to proxy it",
+      "status": "wont-implement"
     },
     "fs/writeFile": {
-      "status": "unreviewed"
+      "note": "Emacs accesses the filesystem directly; no need to proxy it",
+      "status": "wont-implement"
     },
     "fuzzyFileSearch": {
-      "status": "unreviewed"
+      "note": "the CLI's @-mention file search",
+      "status": "todo"
     },
     "fuzzyFileSearch/sessionCompleted": {
-      "status": "unreviewed"
+      "note": "end of an @-mention search",
+      "status": "todo"
     },
     "fuzzyFileSearch/sessionUpdated": {
-      "status": "unreviewed"
+      "note": "incremental @-mention search results",
+      "status": "todo"
     },
     "guardianWarning": {
       "status": "handled"
@@ -179,46 +217,56 @@
       "status": "handled"
     },
     "initialized": {
-      "status": "unreviewed"
+      "note": "handshake bookkeeping; the current handshake works without it",
+      "status": "wont-implement"
     },
     "item/agentMessage/delta": {
       "status": "handled"
     },
     "item/autoApprovalReview/completed": {
-      "status": "unreviewed"
+      "note": "auto-approval review is invisible in Emacs",
+      "status": "todo"
     },
     "item/autoApprovalReview/started": {
-      "status": "unreviewed"
+      "note": "auto-approval review is invisible in Emacs",
+      "status": "todo"
     },
     "item/commandExecution/outputDelta": {
-      "status": "unreviewed"
+      "note": "live command output while it runs",
+      "status": "todo"
     },
     "item/commandExecution/requestApproval": {
       "status": "handled"
     },
     "item/commandExecution/terminalInteraction": {
-      "status": "unreviewed"
+      "note": "interactive terminal inside a command",
+      "status": "todo"
     },
     "item/completed": {
       "status": "handled"
     },
     "item/fileChange/outputDelta": {
-      "status": "unreviewed"
+      "note": "live diff output while a patch is written",
+      "status": "todo"
     },
     "item/fileChange/patchUpdated": {
-      "status": "unreviewed"
+      "note": "patch revised after presentation",
+      "status": "todo"
     },
     "item/fileChange/requestApproval": {
       "status": "handled"
     },
     "item/mcpToolCall/progress": {
-      "status": "unreviewed"
+      "note": "MCP tool progress",
+      "status": "todo"
     },
     "item/permissions/requestApproval": {
-      "status": "unreviewed"
+      "note": "approval surface; command and fileChange equivalents are handled",
+      "status": "todo"
     },
     "item/plan/delta": {
-      "status": "unreviewed"
+      "note": "live plan updates; only completed plans are handled",
+      "status": "todo"
     },
     "item/reasoning/summaryPartAdded": {
       "status": "handled"
@@ -227,43 +275,55 @@
       "status": "handled"
     },
     "item/reasoning/textDelta": {
-      "status": "unreviewed"
+      "note": "raw reasoning stream; only summary deltas are handled",
+      "status": "todo"
     },
     "item/started": {
-      "status": "unreviewed"
+      "note": "items render only once complete; no in-progress display",
+      "status": "todo"
     },
     "item/tool/call": {
-      "status": "unreviewed"
+      "note": "generic tool call rendering",
+      "status": "todo"
     },
     "item/tool/requestUserInput": {
-      "status": "unreviewed"
+      "note": "tool asks the user; unhandled means a stalled turn",
+      "status": "todo"
     },
     "marketplace/add": {
-      "status": "unreviewed"
+      "note": "marketplace management belongs in the CLI",
+      "status": "wont-implement"
     },
     "marketplace/remove": {
-      "status": "unreviewed"
+      "note": "marketplace management belongs in the CLI",
+      "status": "wont-implement"
     },
     "marketplace/upgrade": {
-      "status": "unreviewed"
+      "note": "marketplace management belongs in the CLI",
+      "status": "wont-implement"
     },
     "mcpServer/elicitation/request": {
-      "status": "unreviewed"
+      "note": "MCP asks the user; unhandled means a stalled turn",
+      "status": "todo"
     },
     "mcpServer/oauth/login": {
-      "status": "unreviewed"
+      "note": "blocks OAuth MCP servers entirely",
+      "status": "todo"
     },
     "mcpServer/oauthLogin/completed": {
-      "status": "unreviewed"
+      "note": "completion half of the OAuth flow",
+      "status": "todo"
     },
     "mcpServer/resource/read": {
-      "status": "unreviewed"
+      "note": "the agent reads MCP resources, not the client",
+      "status": "wont-implement"
     },
     "mcpServer/startupStatus/updated": {
       "status": "handled"
     },
     "mcpServer/tool/call": {
-      "status": "unreviewed"
+      "note": "the agent calls MCP tools, not the client",
+      "status": "wont-implement"
     },
     "mcpServerStatus/list": {
       "status": "handled"
@@ -275,13 +335,16 @@
       "status": "handled"
     },
     "model/safetyBuffering/updated": {
-      "status": "unreviewed"
+      "note": "informational only",
+      "status": "wont-implement"
     },
     "model/verification": {
-      "status": "unreviewed"
+      "note": "informational only",
+      "status": "wont-implement"
     },
     "modelProvider/capabilities/read": {
-      "status": "unreviewed"
+      "note": "informational only",
+      "status": "wont-implement"
     },
     "permissionProfile/list": {
       "status": "handled"
@@ -290,73 +353,91 @@
       "status": "handled"
     },
     "plugin/installed": {
-      "status": "unreviewed"
+      "note": "refresh the plugin list after install",
+      "status": "todo"
     },
     "plugin/list": {
       "status": "handled"
     },
     "plugin/read": {
-      "status": "unreviewed"
+      "note": "plugin/list already covers the Emacs surface",
+      "status": "wont-implement"
     },
     "plugin/share/checkout": {
-      "status": "unreviewed"
+      "note": "plugin sharing has no Emacs surface",
+      "status": "wont-implement"
     },
     "plugin/share/delete": {
-      "status": "unreviewed"
+      "note": "plugin sharing has no Emacs surface",
+      "status": "wont-implement"
     },
     "plugin/share/list": {
-      "status": "unreviewed"
+      "note": "plugin sharing has no Emacs surface",
+      "status": "wont-implement"
     },
     "plugin/share/save": {
-      "status": "unreviewed"
+      "note": "plugin sharing has no Emacs surface",
+      "status": "wont-implement"
     },
     "plugin/share/updateTargets": {
-      "status": "unreviewed"
+      "note": "plugin sharing has no Emacs surface",
+      "status": "wont-implement"
     },
     "plugin/skill/read": {
-      "status": "unreviewed"
+      "note": "skills/list already covers the Emacs surface",
+      "status": "wont-implement"
     },
     "plugin/uninstall": {
       "status": "handled"
     },
     "process/exited": {
-      "status": "unreviewed"
+      "note": "process exit notification",
+      "status": "todo"
     },
     "process/outputDelta": {
-      "status": "unreviewed"
+      "note": "process output stream",
+      "status": "todo"
     },
     "remoteControl/status/changed": {
-      "status": "unreviewed"
+      "note": "remote control state; agent.el reads this from the footer today",
+      "status": "todo"
     },
     "review/start": {
-      "status": "unreviewed"
+      "note": "the CLI's /review feature has no Emacs entry point",
+      "status": "todo"
     },
     "serverRequest/resolved": {
-      "status": "unreviewed"
+      "note": "protocol bookkeeping",
+      "status": "wont-implement"
     },
     "skills/changed": {
-      "status": "unreviewed"
+      "note": "refresh the skill list when skills change on disk",
+      "status": "todo"
     },
     "skills/config/write": {
       "status": "handled"
     },
     "skills/extraRoots/set": {
-      "status": "unreviewed"
+      "note": "agent.el supplies extra skill roots; this is the protocol path for it",
+      "status": "todo"
     },
     "skills/list": {
       "status": "handled"
     },
     "thread/approveGuardianDeniedAction": {
-      "status": "unreviewed"
+      "note": "approval surface",
+      "status": "todo"
     },
     "thread/archive": {
       "status": "handled"
     },
     "thread/archived": {
-      "status": "unreviewed"
+      "note": "confirmation notification; refresh the thread list",
+      "status": "todo"
     },
     "thread/closed": {
-      "status": "unreviewed"
+      "note": "thread closed elsewhere",
+      "status": "todo"
     },
     "thread/compact/start": {
       "status": "handled"
@@ -368,25 +449,30 @@
       "status": "handled"
     },
     "thread/deleted": {
-      "status": "unreviewed"
+      "note": "confirmation notification; refresh the thread list",
+      "status": "todo"
     },
     "thread/environment/connected": {
-      "status": "unreviewed"
+      "note": "cloud environments are not used from Emacs",
+      "status": "wont-implement"
     },
     "thread/environment/disconnected": {
-      "status": "unreviewed"
+      "note": "cloud environments are not used from Emacs",
+      "status": "wont-implement"
     },
     "thread/fork": {
       "status": "handled"
     },
     "thread/goal/clear": {
-      "status": "unreviewed"
+      "note": "goal is partly handled; cleared is, clear is not",
+      "status": "todo"
     },
     "thread/goal/cleared": {
       "status": "handled"
     },
     "thread/goal/get": {
-      "status": "unreviewed"
+      "note": "goal is partly handled; cleared is, get is not",
+      "status": "todo"
     },
     "thread/goal/set": {
       "status": "handled"
@@ -395,16 +481,19 @@
       "status": "handled"
     },
     "thread/inject_items": {
-      "status": "unreviewed"
+      "note": "programmatic injection, not a user action",
+      "status": "wont-implement"
     },
     "thread/list": {
       "status": "handled"
     },
     "thread/loaded/list": {
-      "status": "unreviewed"
+      "note": "list loaded threads",
+      "status": "todo"
     },
     "thread/metadata/update": {
-      "status": "unreviewed"
+      "note": "rename or retag a thread",
+      "status": "todo"
     },
     "thread/name/set": {
       "status": "handled"
@@ -413,7 +502,8 @@
       "status": "handled"
     },
     "thread/read": {
-      "status": "unreviewed"
+      "note": "needed to display a thread without resuming it",
+      "status": "todo"
     },
     "thread/realtime/closed": {
       "status": "handled"
@@ -425,10 +515,12 @@
       "status": "handled"
     },
     "thread/realtime/outputAudio/delta": {
-      "status": "unreviewed"
+      "note": "voice mode; no audio path in Emacs",
+      "status": "wont-implement"
     },
     "thread/realtime/sdp": {
-      "status": "unreviewed"
+      "note": "voice mode; no audio path in Emacs",
+      "status": "wont-implement"
     },
     "thread/realtime/started": {
       "status": "handled"
@@ -443,10 +535,12 @@
       "status": "handled"
     },
     "thread/rollback": {
-      "status": "unreviewed"
+      "note": "user-visible undo",
+      "status": "todo"
     },
     "thread/settings/updated": {
-      "status": "unreviewed"
+      "note": "settings changed mid-thread",
+      "status": "todo"
     },
     "thread/shellCommand": {
       "status": "handled"
@@ -458,31 +552,37 @@
       "status": "handled"
     },
     "thread/status/changed": {
-      "status": "unreviewed"
+      "note": "session status transitions",
+      "status": "todo"
     },
     "thread/tokenUsage/updated": {
       "status": "handled"
     },
     "thread/unarchive": {
-      "status": "unreviewed"
+      "note": "archive is handled, unarchive is not",
+      "status": "todo"
     },
     "thread/unarchived": {
-      "status": "unreviewed"
+      "note": "confirmation notification; refresh the thread list",
+      "status": "todo"
     },
     "thread/unsubscribe": {
-      "status": "unreviewed"
+      "note": "protocol bookkeeping",
+      "status": "wont-implement"
     },
     "turn/completed": {
       "status": "handled"
     },
     "turn/diff/updated": {
-      "status": "unreviewed"
+      "note": "cumulative turn diff view",
+      "status": "todo"
     },
     "turn/interrupt": {
       "status": "handled"
     },
     "turn/moderationMetadata": {
-      "status": "unreviewed"
+      "note": "informational only",
+      "status": "wont-implement"
     },
     "turn/plan/updated": {
       "status": "handled"
@@ -503,13 +603,16 @@
       "status": "handled"
     },
     "windowsSandbox/readiness": {
-      "status": "unreviewed"
+      "note": "Windows only",
+      "status": "wont-implement"
     },
     "windowsSandbox/setupCompleted": {
-      "status": "unreviewed"
+      "note": "Windows only",
+      "status": "wont-implement"
     },
     "windowsSandbox/setupStart": {
-      "status": "unreviewed"
+      "note": "Windows only",
+      "status": "wont-implement"
     }
   }
 }
