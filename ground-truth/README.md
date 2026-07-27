@@ -63,6 +63,16 @@ escalates through `item/commandExecution/requestApproval`, not through
 `item/permissions/requestApproval`. Finding a trigger is usually the slow part
 of adding support for a method.
 
+`CGT_EXTRA` sends arbitrary requests once the turn finishes and traces the
+responses, so one session can capture several request/response methods instead
+of one session each. `{threadId}` in params is replaced with the live thread id;
+`CGT_EXTRA_WAIT` sets the pause between calls (default 4s).
+
+```bash
+CGT_TRACE=1 CGT_EXTRA='[{"method":"thread/read","params":{"threadId":"{threadId}"}}]' \
+  python3 capture_protocol.py "Say ok."
+```
+
 ## `protocol_coverage.py` — what Codex offers that codex.el ignores
 
 `codex-app-server.el` reimplements the client rather than hosting the CLI's own
@@ -108,13 +118,3 @@ once means later runs show only what actually changed.
 - `CGT_DIR` must be an initialized git repo; on first run the CLI shows a trust
   prompt which `codex_gt.py` answers with Enter.
 - Image paste: put a PNG on the clipboard first, then use a `key:ctrlv` step.
-
-`CGT_EXTRA` sends arbitrary requests once the turn finishes and traces the
-responses, so one session can capture several request/response methods instead
-of one session each. `{threadId}` in params is replaced with the live thread id;
-`CGT_EXTRA_WAIT` sets the pause between calls (default 4s).
-
-```bash
-CGT_TRACE=1 CGT_EXTRA='[{"method":"thread/read","params":{"threadId":"{threadId}"}}]' \
-  python3 capture_protocol.py "Say ok."
-```

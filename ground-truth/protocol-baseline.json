@@ -539,8 +539,8 @@
       "status": "todo"
     },
     "thread/settings/updated": {
-      "note": "settings changed mid-thread",
-      "status": "todo"
+      "note": "could not trigger: thread/settings/update from this client returns {} and emits no notification, so it appears to exist for out-of-band changes (another client or remote control) that a single Emacs client will not see. Not observed here, so not implemented rather than guessed.",
+      "status": "wont-implement"
     },
     "thread/shellCommand": {
       "status": "handled"
