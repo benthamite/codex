@@ -4450,3 +4450,77 @@ When only :inherit remains, the face is removed entirely."
 (provide 'codex-test)
 
 ;;; codex-test.el ends here
+
+(ert-deftest codex-test-app-server-idle-status-clears-abandoned-turn ()
+  "Clear active-turn state when the thread goes idle without completing.
+A turn that fails to start never sends `turn/completed', so without this
+the buffer keeps reporting work forever.  Captured payload shape:
+\(:threadId ID :status (:type \"idle\"))."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-idle/*" t)
+    (codex--app-server-setup-input-region)
+    (setq-local codex--app-server-turn-active-p t)
+    (setq-local codex--app-server-current-turn-id "turn-1")
+    (codex--app-server-thread-status-changed
+     '((threadId . "t1") (status . ((type . "idle")))))
+    (should-not codex--app-server-turn-active-p)
+    (should-not codex--app-server-current-turn-id)))
+
+(ert-deftest codex-test-app-server-active-status-keeps-turn ()
+  "Leave an active turn alone when the thread reports it is active."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-active/*" t)
+    (codex--app-server-setup-input-region)
+    (setq-local codex--app-server-turn-active-p t)
+    (codex--app-server-thread-status-changed
+     '((threadId . "t1") (status . ((type . "active") (activeFlags . [])))))
+    (should codex--app-server-turn-active-p)))
+
+(ert-deftest codex-test-app-server-system-error-status-reports-and-clears ()
+  "Report a thread system error and stop showing the turn as active."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-syserr/*" t)
+    (codex--app-server-setup-input-region)
+    (setq-local codex--app-server-turn-active-p t)
+    (codex--app-server-thread-status-changed
+     '((threadId . "t1") (status . ((type . "systemError")))))
+    (should-not codex--app-server-turn-active-p)
+    (should (string-match-p "system error" (buffer-string)))))
+
+(ert-deftest codex-test-app-server-idle-status-without-turn-is-inert ()
+  "Do not touch state when the thread is idle and no turn is active."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-idle2/*" t)
+    (codex--app-server-setup-input-region)
+    (let ((before (buffer-string)))
+      (codex--app-server-thread-status-changed
+       '((threadId . "t1") (status . ((type . "idle")))))
+      (should-not codex--app-server-turn-active-p)
+      (should (equal before (buffer-string))))))
+
+(ert-deftest codex-test-app-server-records-remote-control-status ()
+  "Record remote-control status from the server instead of scraping it.
+Captured payload shape: (:status \"disabled\" :serverName NAME
+:installationId ID :environmentId nil)."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-rc/*" t)
+    (codex--app-server-setup-input-region)
+    (codex--app-server-remote-control-status-changed
+     '((status . "disabled") (serverName . "host") (installationId . "i")))
+    (should (equal codex--app-server-remote-control-status "disabled"))
+    (codex--app-server-remote-control-status-changed
+     '((status . "connected") (serverName . "host") (installationId . "i")))
+    (should (equal codex--app-server-remote-control-status "connected"))
+    (should (string-match-p "Remote control connected (host)" (buffer-string)))))
+
+(ert-deftest codex-test-app-server-remote-control-status-repeat-is-quiet ()
+  "Report a remote-control change once, not on every repeat notification."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-rc2/*" t)
+    (codex--app-server-setup-input-region)
+    (codex--app-server-remote-control-status-changed
+     '((status . "connected") (serverName . "host") (installationId . "i")))
+    (let ((once (buffer-string)))
+      (codex--app-server-remote-control-status-changed
+       '((status . "connected") (serverName . "host") (installationId . "i")))
+      (should (equal once (buffer-string))))))

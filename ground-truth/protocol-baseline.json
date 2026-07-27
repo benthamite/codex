@@ -400,7 +400,7 @@
     },
     "remoteControl/status/changed": {
       "note": "remote control state; agent.el reads this from the footer today",
-      "status": "todo"
+      "status": "handled"
     },
     "review/start": {
       "note": "the CLI's /review feature has no Emacs entry point",
@@ -553,7 +553,7 @@
     },
     "thread/status/changed": {
       "note": "session status transitions",
-      "status": "todo"
+      "status": "handled"
     },
     "thread/tokenUsage/updated": {
       "status": "handled"

@@ -32,6 +32,11 @@ TRACE = os.environ.get("CGT_TRACE") == "1"
 # (with CGT_SANDBOX=read-only) to make the server actually ask, which is the
 # only way to capture an approval request's shape.
 APPROVAL = os.environ.get("CGT_APPROVAL", "never")
+# CGT_TRACE_ONLY is a comma-separated method list. Tracing just the methods you
+# care about also prints their params, including for notifications, which is how
+# you capture the payload a new renderer must be written against.
+TRACE_ONLY = ([m.strip() for m in os.environ["CGT_TRACE_ONLY"].split(",")]
+              if os.environ.get("CGT_TRACE_ONLY") else None)
 
 p = subprocess.Popen(["codex", "app-server"], stdin=subprocess.PIPE,
                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -65,10 +70,10 @@ def reader():
         except Exception:
             continue
         meth = m.get("method")
-        if TRACE and meth:
+        if TRACE and meth and (TRACE_ONLY is None or meth in TRACE_ONLY):
             kind = "REQUEST " if "id" in m else "notify  "
             print(f"[trace] {kind}{meth}", file=sys.stderr)
-            if "id" in m:
+            if "id" in m or TRACE_ONLY:
                 print(json.dumps(m.get("params"), indent=2), file=sys.stderr)
         if meth == "thread/started":
             pr = m["params"]

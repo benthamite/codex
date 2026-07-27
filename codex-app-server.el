@@ -182,6 +182,11 @@ because per-tool hooks can be frequent."
 (defvar-local codex--app-server-current-turn-id nil
   "Current app-server turn id.")
 
+(defvar-local codex--app-server-remote-control-status nil
+  "Remote-control connection status last reported by the app server.
+One of \"disabled\", \"connecting\", \"connected\", \"errored\", or nil
+before the server has reported.")
+
 (defvar-local codex--app-server-turn-active-p nil
   "Whether the current app-server thread has an active turn.")
 
@@ -577,6 +582,10 @@ This lets optional fields and protocol booleans flow naturally through
          (when-let* ((goal (alist-get 'goal params)))
            (codex--app-server-insert-status (format "Goal: %s" goal))))
         ("thread/goal/cleared" nil)
+        ("thread/status/changed"
+         (codex--app-server-thread-status-changed params))
+        ("remoteControl/status/changed"
+         (codex--app-server-remote-control-status-changed params))
         ("model/rerouted"
          (codex--app-server-insert-status
           (format "Model rerouted%s"
@@ -1800,6 +1809,49 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
   (force-mode-line-update)
   (codex--app-server-ensure-trailing-newline)
   (codex--app-server-flush-turn-queue))
+
+(defun codex--app-server-thread-status-changed (params)
+  "Handle a `thread/status/changed' notification with PARAMS.
+The server reports one of `notLoaded', `idle', `active', or `systemError'.
+`active' needs no handling, since `turn/started' already marks the turn.
+The other two matter when a turn ends without `turn/completed', which
+happens when a turn fails to start: the client would otherwise keep
+showing it as working indefinitely."
+  (let ((status (alist-get 'type (alist-get 'status params))))
+    (when (and codex--app-server-turn-active-p
+               (member status '("idle" "systemError")))
+      (codex--app-server-abandon-turn))
+    (when (equal status "systemError")
+      (codex--app-server-insert-status "Thread reported a system error"))))
+
+(defun codex--app-server-abandon-turn ()
+  "Clear active-turn state for a turn that ended without completing.
+Unlike `codex--app-server-turn-completed' this does not flush the queued
+input, because no turn finished normally and the queue belongs to the
+turn the user expects to run next."
+  (setq codex--app-server-turn-active-p nil)
+  (setq codex--app-server-current-turn-id nil)
+  (codex--app-server-update-status-overlay)
+  (codex--app-server-refresh-status-timer)
+  (force-mode-line-update))
+
+(defun codex--app-server-remote-control-status-changed (params)
+  "Handle a `remoteControl/status/changed' notification with PARAMS.
+Records the reported status so callers have a real signal instead of
+scraping it out of the rendered status line, and notes connection changes
+in the transcript.  The server sends one of `disabled', `connecting',
+`connected', or `errored'."
+  (let ((status (alist-get 'status params))
+        (previous codex--app-server-remote-control-status))
+    (setq codex--app-server-remote-control-status status)
+    (when (and status (not (equal status previous))
+               (member status '("connected" "errored")))
+      (codex--app-server-insert-status
+       (if (equal status "connected")
+           (format "Remote control connected%s"
+                   (if-let* ((name (alist-get 'serverName params)))
+                       (format " (%s)" name) ""))
+         "Remote control error")))))
 
 (defun codex--app-server-working-text ()
   "Return the CLI-style working status text for an active turn."
