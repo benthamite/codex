@@ -865,7 +865,8 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
       ("/usage" (codex--app-server-read-usage))
       ("/delete" (codex--app-server-delete-thread))
       ((or "/quit" "/exit") (codex--term-kill-process 'app-server (current-buffer)))
-      ((or "/init" "/review")
+      ("/review" (codex--app-server-start-review argument))
+      ("/init"
        (codex--app-server-submit-command (codex--app-server-slash-prompt command argument)))
       (_ (codex--app-server-insert-status
           (format "Unsupported command: %s" command))))))
@@ -1457,6 +1458,54 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
   (when (yes-or-no-p "Permanently delete this Codex thread? ")
     (codex--app-server-thread-request
      "thread/delete" nil "Thread deleted")))
+
+(defconst codex--app-server-review-presets
+  '(("Review against a base branch  (PR Style)" . baseBranch)
+    ("Review uncommitted changes" . uncommittedChanges)
+    ("Review a commit" . commit)
+    ("Custom review instructions" . custom))
+  "Review presets offered by `/review', worded as the CLI words them.
+Captured from the CLI's own picker; each maps to one `ReviewTarget'
+variant accepted by `review/start'.")
+
+(defun codex--app-server-start-review (argument)
+  "Start a code review through `review/start'.
+ARGUMENT, when given, is used as custom review instructions and skips the
+preset picker.
+
+`/review' previously sent an ordinary turn with a hand-written prompt, so
+it was a cosmetic alias: no preset choice, no base-branch or commit
+target, and none of the review framing the server applies.  The server
+answers with the review thread and turn, and brackets the work with
+`enteredReviewMode' and `exitedReviewMode' items."
+  (if codex--app-server-thread-id
+      (let ((target (if (string-empty-p argument)
+                        (codex--app-server-read-review-target)
+                      `((custom . ((instructions . ,argument)))))))
+        (codex--app-server-send-request
+         "review/start"
+         `((threadId . ,codex--app-server-thread-id)
+           (target . ,target))
+         (lambda (_result error)
+           (when error
+             (codex--app-server-insert-status
+              (format "Review failed: %S" error))))))
+    (message "No active Codex thread")))
+
+(defun codex--app-server-read-review-target ()
+  "Prompt for a review preset and return its `review/start' target."
+  (let* ((selection (completing-read "Select a review preset: "
+                                     codex--app-server-review-presets nil t))
+         (preset (alist-get selection codex--app-server-review-presets
+                            nil nil #'equal)))
+    (pcase preset
+      ('uncommittedChanges '((uncommittedChanges . ())))
+      ('baseBranch
+       `((baseBranch . ((branch . ,(read-string "Base branch: " "main"))))))
+      ('commit
+       `((commit . ((sha . ,(read-string "Commit sha: "))))))
+      ('custom
+       `((custom . ((instructions . ,(read-string "Review instructions: ")))))))))
 
 (defun codex--app-server-unarchive-thread ()
   "Pick an archived thread and unarchive it.
@@ -2519,7 +2568,20 @@ pending and in-progress steps."
       ("mcpToolCall" (codex--app-server-render-completed-tool-call item))
       ("webSearch" (codex--app-server-render-completed-web-search item))
       ("error" (codex--app-server-render-error-item item))
+      ("enteredReviewMode"
+       (codex--app-server-insert-status
+        (format "Review started: %s" (or (alist-get 'review item) "changes"))))
+      ("exitedReviewMode" (codex--app-server-render-review-result item))
       ("agentMessage" (codex--app-server-fontify-completed-message item)))))
+
+(defun codex--app-server-render-review-result (item)
+  "Render the finished review carried by ITEM.
+`exitedReviewMode' carries the review text itself in `review', so without
+rendering it the result of a review would not appear in the buffer."
+  (let ((review (alist-get 'review item)))
+    (codex--app-server-insert-status "Review finished")
+    (when (and review (not (string-empty-p review)))
+      (codex--app-server-insert review))))
 
 (defun codex--app-server-render-error-item (item)
   "Render an error ITEM as a status line."

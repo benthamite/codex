@@ -4809,3 +4809,66 @@ Captured response is (:cleared BOOL): false when no goal was set."
       (setq-local codex--app-server-thread-id "t")
       (codex--app-server-clear-goal)
       (should (string-match-p "Goal cleared" (buffer-string))))))
+
+(ert-deftest codex-test-app-server-review-presets-match-cli ()
+  "Offer the CLI's four review presets, worded as the CLI words them.
+Captured CLI picker:
+  1. Review against a base branch  (PR Style)
+  2. Review uncommitted changes
+  3. Review a commit
+  4. Custom review instructions
+Each maps to one ReviewTarget variant."
+  (should (equal (mapcar #'cdr codex--app-server-review-presets)
+                 '(baseBranch uncommittedChanges commit custom)))
+  (should (string-match-p "PR Style" (car (nth 0 codex--app-server-review-presets)))))
+
+(ert-deftest codex-test-app-server-review-calls-review-start ()
+  "Call review/start rather than sending a hand-written prompt as a turn.
+/review used to submit an ordinary turn, so it was a cosmetic alias with no
+preset, no target, and none of the server's review framing."
+  (let (sent submitted)
+    (cl-letf (((symbol-function 'codex--app-server-send-request)
+               (lambda (method params &rest _) (setq sent (cons method params))))
+              ((symbol-function 'codex--app-server-submit-command)
+               (lambda (&rest _) (setq submitted t)))
+              ((symbol-function 'completing-read)
+               (lambda (&rest _) "Review uncommitted changes")))
+      (with-temp-buffer
+        (setq-local codex--app-server-thread-id "t1")
+        (codex--app-server-dispatch-slash "/review"))
+      (should-not submitted)
+      (should (equal (car sent) "review/start"))
+      (should (equal (alist-get 'threadId (cdr sent)) "t1"))
+      (should (assq 'uncommittedChanges (alist-get 'target (cdr sent)))))))
+
+(ert-deftest codex-test-app-server-review-argument-is-custom-instructions ()
+  "Treat a /review argument as custom instructions and skip the picker."
+  (let (sent)
+    (cl-letf (((symbol-function 'codex--app-server-send-request)
+               (lambda (method params &rest _) (setq sent (cons method params))))
+              ((symbol-function 'completing-read)
+               (lambda (&rest _) (error "should not prompt"))))
+      (with-temp-buffer
+        (setq-local codex--app-server-thread-id "t1")
+        (codex--app-server-start-review "look at error handling"))
+      (should (equal (alist-get 'instructions
+                                (alist-get 'custom
+                                           (alist-get 'target (cdr sent))))
+                     "look at error handling")))))
+
+(ert-deftest codex-test-app-server-renders-review-mode-items ()
+  "Render the review-mode items, since exitedReviewMode carries the review.
+Captured item types: {type:\"enteredReviewMode\", review:\"current changes\"}
+and {type:\"exitedReviewMode\", review:\"<the full review text>\"}."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-review/*" t)
+    (codex--app-server-setup-input-region)
+    (codex--app-server-render-completed-item
+     '((item . ((type . "enteredReviewMode") (id . "r1")
+                (review . "current changes")))))
+    (should (string-match-p "Review started: current changes" (buffer-string)))
+    (codex--app-server-render-completed-item
+     '((item . ((type . "exitedReviewMode") (id . "r2")
+                (review . "Finding 1: check the nil case")))))
+    (should (string-match-p "Review finished" (buffer-string)))
+    (should (string-match-p "check the nil case" (buffer-string)))))

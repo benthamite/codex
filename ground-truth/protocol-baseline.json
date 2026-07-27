@@ -404,7 +404,7 @@
     },
     "review/start": {
       "note": "the CLI's /review feature has no Emacs entry point",
-      "status": "todo"
+      "status": "handled"
     },
     "serverRequest/resolved": {
       "note": "protocol bookkeeping",
