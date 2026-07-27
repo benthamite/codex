@@ -50,8 +50,8 @@
       "status": "wont-implement"
     },
     "app/installed": {
-      "note": "refresh the app list after install",
-      "status": "todo"
+      "note": "captured the CLI's $-mention list and it is PLUGIN-driven, not app-driven: 8 entries (Browser, Chrome, Documents, GitHub, Presentations, Sites, Spreadsheets, Superpowers), each labelled [Plugin] with a description. codex.el's /apps inserts $name from app/list data instead, and app/list returned 2388 entries of which 2 passed its filter. So the app/* family is not the source the CLI's $ surface uses, and swapping /apps to app/installed would not converge on the CLI either. What the $ list needs is plugin data, which plugin/list already provides and /plugins already fetches. Recorded here rather than acted on: reconciling /apps with the CLI's $ list is a design change to an existing command, not a missing protocol handler.",
+      "status": "wont-implement"
     },
     "app/list": {
       "status": "handled"
@@ -61,8 +61,8 @@
       "status": "handled"
     },
     "app/read": {
-      "note": "app detail view",
-      "status": "todo"
+      "note": "an app detail view would need a surface the CLI does not have: its $-mention list shows plugins with one-line descriptions, no per-app tool listing. Captured response does carry toolSummaries with full tool descriptions, so this is worth revisiting only if a detail view is wanted as a deliberate extra rather than as parity.",
+      "status": "wont-implement"
     },
     "applyPatchApproval": {
       "status": "handled"
@@ -95,8 +95,8 @@
       "status": "handled"
     },
     "config/mcpServer/reload": {
-      "note": "captured response is {} and it succeeds; would back a command to reload an MCP server without restarting the session. Small, no CLI surface captured yet.",
-      "status": "todo"
+      "note": "no CLI surface: captured /mcp is a read-only listing of servers with Auth and Tools, offering no reload. The request works and returns {}, but adding a command the CLI does not have is a new feature, not the parity this package exists for.",
+      "status": "wont-implement"
     },
     "config/read": {
       "status": "handled"
@@ -353,8 +353,8 @@
       "status": "handled"
     },
     "plugin/installed": {
-      "note": "refresh the plugin list after install",
-      "status": "todo"
+      "note": "drop-in for codex--app-server-plugin-records, which already parses the identical marketplaces->plugins structure, but it only pre-filters to installed plugins. /plugins re-queries plugin/list and shows install state, so the saving is a narrower payload, not a user-visible difference.",
+      "status": "wont-implement"
     },
     "plugin/list": {
       "status": "handled"
