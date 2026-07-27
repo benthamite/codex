@@ -834,7 +834,7 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
       ("/model" (codex--app-server-change-model))
       ("/mention" (codex-app-server-attach-mention))
       ("/skills" (codex--app-server-list-skills))
-      ("/apps" (codex--app-server-list-apps))
+      ("/plugin-mention" (codex-app-server-insert-plugin-mention))
       ("/raw" (codex--app-server-toggle-raw))
       ("/goal" (let ((objective (if (string-empty-p argument)
                                     (read-string "Goal: ")
@@ -1001,17 +1001,17 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
            (codex--app-server-insert-status
             (format "%s %s" name (if enabled "enabled" "disabled")))))))))
 
-(defun codex--app-server-list-apps ()
+(defun codex-app-server-insert-plugin-mention ()
   "Offer the mentionable plugins and insert the chosen one as `$name'.
-This is the Emacs equivalent of the CLI's `$' composer menu, which is
-plugin-driven despite the command being called `/apps': the captured menu
-listed Browser, Chrome, Documents, GitHub, Presentations, Sites,
-Spreadsheets and Superpowers, every row tagged [Plugin], and picking
-Browser inserted the lowercase identifier `$browser'.
+Bound to `$' in the composer, mirroring the CLI, where typing `$' opens
+this menu; `@' opens the file equivalent the same way.
 
-This used to read `app/list' instead, a different and much larger set --
-thousands of entries, of which two survived its filter, arriving over
-twenty seconds later.  Those are apps, not the plugins the CLI mentions."
+The CLI's menu is plugin-driven: every captured row was tagged [Plugin],
+and picking Browser inserted the lowercase identifier `$browser'.  This
+read `app/list' before, a different and far larger set -- thousands of
+entries, two of which survived its filter, arriving twenty seconds later.
+Those are apps, not the plugins the CLI mentions."
+  (interactive)
   (codex--app-server-send-request
    "plugin/list"
    `((cwds . ,(vector (codex--app-server-current-cwd))))
@@ -1019,7 +1019,7 @@ twenty seconds later.  Those are apps, not the plugins the CLI mentions."
      (if error
          (codex--app-server-insert-status
           (format "Plugin list failed: %S" error))
-       (codex--app-server-choose-app
+       (codex--app-server-choose-plugin-mention
         (codex--app-server-mentionable-plugins result))))))
 
 (defun codex--app-server-mentionable-plugins (result)
@@ -1032,10 +1032,10 @@ Sorted by display name, matching the CLI's alphabetical `$' menu."
                              (eq (alist-get 'enabled plugin) t)))
                       plugins)
           (lambda (a b)
-            (string< (codex--app-server-plugin-mention-label a)
-                     (codex--app-server-plugin-mention-label b))))))
+            (string< (codex--app-server-plugin-display-name a)
+                     (codex--app-server-plugin-display-name b))))))
 
-(defun codex--app-server-plugin-mention-label (plugin)
+(defun codex--app-server-plugin-display-name (plugin)
   "Return the display label for PLUGIN in the mention picker."
   (or (alist-get 'displayName plugin) (alist-get 'name plugin) "?"))
 
@@ -1074,25 +1074,25 @@ which lists both fields as optional."
         (when mode (setf (alist-get 'authMode account) mode))
         (setq codex--app-server-account account)))))
 
-(defun codex--app-server-app-label (plugin)
+(defun codex--app-server-plugin-mention-label (plugin)
   "Return a completion label for PLUGIN, as the CLI's `$' menu labels it.
 The captured menu showed the display name, the tag [Plugin], and the
 description: \"Browser  [Plugin] Control the in-app browser with ChatGPT\"."
   (let ((description (alist-get 'description plugin)))
     (format "%s  [Plugin]%s"
-            (codex--app-server-plugin-mention-label plugin)
+            (codex--app-server-plugin-display-name plugin)
             (if (and description (not (string-empty-p description)))
                 (format " %s" description)
               ""))))
 
-(defun codex--app-server-choose-app (plugins)
+(defun codex--app-server-choose-plugin-mention (plugins)
   "Insert one of PLUGINS into the composer as a `$' mention.
 The identifier is inserted, not the display name: picking Browser in the
 CLI inserts `$browser'."
   (let ((plugin (and plugins
                      (codex--app-server-read-object
                       "Mention plugin: " plugins
-                      #'codex--app-server-app-label))))
+                      #'codex--app-server-plugin-mention-label))))
     (if plugin
         (codex--app-server-replace-input
          (format "$%s " (alist-get 'name plugin)))
@@ -2272,10 +2272,10 @@ END is updated to the new end of the replaced region."
         (set-marker end (point))))))
 
 (defconst codex--app-server-slash-commands
-  '("/apps" "/archive" "/clear" "/compact" "/copy" "/debug-config" "/delete"
+  '("/archive" "/clear" "/compact" "/copy" "/debug-config" "/delete"
     "/diff" "/exit" "/experimental" "/fast" "/feedback" "/fork" "/goal"
     "/goal-clear" "/hooks" "/init" "/logout" "/mcp" "/memories" "/mention"
-    "/model" "/new" "/permissions" "/personality" "/plugins" "/ps" "/quit"
+    "/model" "/new" "/permissions" "/personality" "/plugin-mention" "/plugins" "/ps" "/quit"
     "/raw" "/rename" "/resume" "/review" "/skills" "/status" "/stop"
     "/unarchive" "/usage")
   "Slash commands recognized by the app-server backend, used for completion.

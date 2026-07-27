@@ -683,6 +683,7 @@ SWITCHES is an optional list of command-line arguments."
     (define-key map [tab] #'codex--terminal-send-tab)
     (when (eq backend 'app-server)
       (define-key map (kbd "@") #'codex-app-server-insert-file-reference)
+      (define-key map (kbd "$") #'codex-app-server-insert-plugin-mention)
       (define-key map (kbd "C-v") #'codex-app-server-paste-image)
       (define-key map (kbd "<escape>") #'codex-send-escape)
       (define-key map (kbd "C-c C-e") #'codex-app-server-open-editor)

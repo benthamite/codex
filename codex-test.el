@@ -1601,7 +1601,7 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (setq-local codex--buffer-directory "/tmp/project")
     (codex--app-server-setup-input-region)
     (dolist (case '(("/skills" . "skills/list")
-                    ("/apps" . "plugin/list")
+                    ("/plugin-mention" . "plugin/list")
                     ("/plugins" . "plugin/list")
                     ("/hooks" . "hooks/list")
                     ("/mcp" . "mcpServerStatus/list")
@@ -5100,13 +5100,13 @@ Captured: picking Browser in the CLI's $ menu inserts `$browser'."
     (codex--app-server-setup-input-region)
     (cl-letf (((symbol-function 'codex--app-server-read-object)
                (lambda (_prompt items _label) (car items))))
-      (codex--app-server-choose-app
+      (codex--app-server-choose-plugin-mention
        (codex--app-server-mentionable-plugins codex-test--plugin-list-result)))
     (should (string-match-p "\\$browser " (codex--app-server-input-text)))))
 
 (ert-deftest codex-test-app-server-mention-label-matches-cli ()
   "Label a plugin as the CLI does: display name, [Plugin], description."
-  (should (equal (codex--app-server-app-label
+  (should (equal (codex--app-server-plugin-mention-label
                   '((name . "browser") (displayName . "Browser")
                     (description . "Control the in-app browser with ChatGPT")))
                  "Browser  [Plugin] Control the in-app browser with ChatGPT")))
@@ -5118,6 +5118,22 @@ Captured: picking Browser in the CLI's $ menu inserts `$browser'."
     (codex--app-server-setup-input-region)
     (cl-letf (((symbol-function 'codex--app-server-read-object)
                (lambda (&rest _) (error "should not prompt"))))
-      (codex--app-server-choose-app nil))
+      (codex--app-server-choose-plugin-mention nil))
     (should (string-match-p "No installed and enabled Codex plugins"
                             (buffer-string)))))
+
+(ert-deftest codex-test-app-server-dollar-key-inserts-plugin-mention ()
+  "Bind `$' to the plugin mention picker, as the CLI triggers it.
+The CLI has no slash command for this: typing `$' in the composer opens
+the menu, exactly as `@' opens the file equivalent."
+  (with-temp-buffer
+    (codex--term-setup-keymap 'app-server)
+    (let ((map (current-local-map)))
+      (should (eq (lookup-key map (kbd "$"))
+                  #'codex-app-server-insert-plugin-mention))
+      (should (eq (lookup-key map (kbd "@"))
+                  #'codex-app-server-insert-file-reference)))))
+
+(ert-deftest codex-test-app-server-plugin-mention-command-is-interactive ()
+  "Keep the mention picker callable as a command, since a key is bound to it."
+  (should (commandp #'codex-app-server-insert-plugin-mention)))
