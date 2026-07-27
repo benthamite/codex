@@ -4569,3 +4569,44 @@ detected.\", so `/diff' must not shell out to `git diff'."
     (setq-local codex--app-server-turn-diff "stale")
     (codex--app-server-turn-started '((turn . ((id . "new")))))
     (should-not codex--app-server-turn-diff)))
+
+(ert-deftest codex-test-app-server-elicitation-spec-uses-server-message ()
+  "Prompt with the message the server sent for an MCP elicitation.
+Captured request shape: (:threadId ID :turnId ID :serverName NAME
+:mode \"form\" :message TEXT :requestedSchema (:type \"object\"
+:properties ()) :_meta (:persist [\"session\" \"always\"] ...))."
+  (let ((spec (codex--app-server-approval-spec
+               '((method . "mcpServer/elicitation/request")
+                 (params . ((serverName . "elicit_probe")
+                            (mode . "form")
+                            (message . "Allow the elicit_probe MCP server to run tool \"ask_colour\"?")))))))
+    (should spec)
+    (should (string-match-p "ask_colour" (plist-get spec :prompt)))
+    (should (plist-get spec :responder))))
+
+(ert-deftest codex-test-app-server-elicitation-response-uses-action ()
+  "Answer an elicitation with `action', not with `decision'.
+The reply shape is (:action \"accept\"|\"decline\"|\"cancel\"), so reusing
+the decision reply would leave the turn stalled."
+  (should (equal (codex--app-server-elicitation-response "accept")
+                 '((action . "accept"))))
+  (should (equal (codex--app-server-elicitation-response "cancel")
+                 '((action . "cancel")))))
+
+(ert-deftest codex-test-app-server-read-approval-honors-responder ()
+  "Let a spec supply its own reply shape via `:responder'."
+  (cl-letf (((symbol-function 'read-multiple-choice)
+             (lambda (&rest _) (list ?a "Allow"))))
+    (should (equal (codex--app-server-read-approval
+                    (list :prompt "p"
+                          :choices '((?a "Allow" "h" "accept"))
+                          :responder (lambda (v) `((action . ,v)))))
+                   '((action . "accept"))))))
+
+(ert-deftest codex-test-app-server-read-approval-defaults-to-decision ()
+  "Keep the decision reply shape for specs without a responder."
+  (cl-letf (((symbol-function 'read-multiple-choice)
+             (lambda (&rest _) (list ?y "yes"))))
+    (should (equal (codex--app-server-read-approval
+                    (list :prompt "p" :choices '((?y "yes" "h" "accept"))))
+                   '((decision . "accept"))))))

@@ -3096,7 +3096,29 @@ when it follows the item bullet, which precedes START on the same line."
       ((or "item/fileChange/requestApproval" "applyPatchApproval")
        (list :prompt (codex--app-server-file-approval-prompt params)
              :choices (codex--app-server-file-approval-choices method)))
+      ("mcpServer/elicitation/request"
+       (list :prompt (or (alist-get 'message params) "MCP server request")
+             :choices (codex--app-server-elicitation-choices)
+             :responder #'codex--app-server-elicitation-response))
       (_ nil))))
+
+(defun codex--app-server-elicitation-choices ()
+  "Return choices for an MCP elicitation, worded as the CLI words them.
+Captured from the CLI: it offers Allow, Allow for this session, Always
+allow, and Cancel.  Only the first and last are offered here, because the
+reply that records a persisted choice carries it in the response `_meta',
+and that encoding was not captured.  Offering a remembered choice that
+silently failed to persist would be worse than not offering it."
+  '((?a "Allow" "Run the tool and continue." "accept")
+    (?c "Cancel" "Cancel this tool call" "cancel")))
+
+(defun codex--app-server-elicitation-response (value)
+  "Return the elicitation reply body for choice VALUE.
+The action is one of `accept', `decline', or `cancel'.  No content is
+sent: the captured requests carry an empty `requestedSchema', so there
+are no fields to fill in.  A schema with properties would need form
+input, which is not implemented."
+  `((action . ,value)))
 
 (defun codex--app-server-command-approval-prompt (params)
   "Return an approval prompt string for command request PARAMS."
@@ -3145,14 +3167,19 @@ object such as the \"don't ask again\" execpolicy amendment."
       (?c "cancel" "cancel the turn" "cancel"))))
 
 (defun codex--app-server-read-approval (spec)
-  "Prompt with SPEC and return the chosen app-server approval decision."
+  "Prompt with SPEC and return the chosen app-server approval response.
+Most requests answer with a `decision' field.  SPEC may carry a
+`:responder' function instead, for requests whose reply has a different
+shape, such as an elicitation's `action'."
   (let* ((choices (plist-get spec :choices))
          (chosen (read-multiple-choice
                   (plist-get spec :prompt)
                   (mapcar (lambda (c) (list (nth 0 c) (nth 1 c) (nth 2 c)))
                           choices)))
          (value (nth 3 (assq (car chosen) choices))))
-    `((decision . ,value))))
+    (if-let* ((responder (plist-get spec :responder)))
+        (funcall responder value)
+      `((decision . ,value)))))
 
 (defun codex--app-server-send-initialize ()
   "Send the app-server initialize request."

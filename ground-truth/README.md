@@ -100,6 +100,30 @@ Each method carries a decision in the baseline, so the report stays short. Set
 `note` saying why), or `todo`. Everything starts as `unreviewed`; triaging those
 once means later runs show only what actually changed.
 
+## `elicit_server.py` — provoking an MCP elicitation
+
+No configured MCP server asks the user anything during an ordinary turn, so
+`mcpServer/elicitation/request` cannot be captured without a server that
+provokes one. This is a minimal MCP server whose only tool elicits input.
+
+Register it for the capture only, via `CGT_CODEX_ARGS`, rather than editing
+`~/.codex/config.toml`. Both capture scripts pass that variable through to the
+CLI, so the same override works for the protocol payload and the TUI reference:
+
+```bash
+S=$PWD/elicit_server.py
+OVERRIDE="-c mcp_servers.elicit_probe={command=\"python3\",args=[\"$S\"]}"
+
+CGT_TRACE=1 CGT_CODEX_ARGS="$OVERRIDE" \
+  python3 capture_protocol.py "Call the elicit_probe ask_colour tool."
+
+CGT_CODEX_ARGS="$OVERRIDE" \
+  python3 codex_gt.py --cwd /tmp/codex-gt wait:6 key:esc wait:2 \
+    "send:Call the elicit_probe ask_colour tool." key:enter wait:24
+```
+
+Keep override values free of spaces: `CGT_CODEX_ARGS` is split naively.
+
 ## Workflow
 
 1. `codex_gt.py` → capture what the CLI displays for the interaction.
@@ -118,3 +142,26 @@ once means later runs show only what actually changed.
 - `CGT_DIR` must be an initialized git repo; on first run the CLI shows a trust
   prompt which `codex_gt.py` answers with Enter.
 - Image paste: put a PNG on the clipboard first, then use a `key:ctrlv` step.
+- `elicit_server.py` needs the `mcp` package (`pip install mcp`).
+
+No configured MCP server asks the user anything during an ordinary turn, so
+`mcpServer/elicitation/request` cannot be captured without a server that
+provokes one. This is a minimal MCP server whose only tool elicits input.
+
+Register it for the capture only, via `CGT_CODEX_ARGS`, rather than editing
+`~/.codex/config.toml`. Both capture scripts pass that variable through to the
+CLI, so the same override works for the protocol payload and the TUI reference:
+
+```bash
+S=$PWD/elicit_server.py
+OVERRIDE="-c mcp_servers.elicit_probe={command=\"python3\",args=[\"$S\"]}"
+
+CGT_TRACE=1 CGT_CODEX_ARGS="$OVERRIDE" \
+  python3 capture_protocol.py "Call the elicit_probe ask_colour tool."
+
+CGT_CODEX_ARGS="$OVERRIDE" \
+  python3 codex_gt.py --cwd /tmp/codex-gt wait:6 key:esc wait:2 \
+    "send:Call the elicit_probe ask_colour tool." key:enter wait:24
+```
+
+Keep override values free of spaces: `CGT_CODEX_ARGS` is split naively.

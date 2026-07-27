@@ -303,8 +303,8 @@
       "status": "wont-implement"
     },
     "mcpServer/elicitation/request": {
-      "note": "MCP asks the user; unhandled means a stalled turn",
-      "status": "todo"
+      "note": "Allow and Cancel implemented against a captured request and the CLI's own prompt. The CLI also offers 'Allow for this session' and 'Always allow'; those record the choice in the response _meta, an encoding that was not captured, so they are deliberately not offered. Form-mode input is also unimplemented: every captured request had an empty requestedSchema.",
+      "status": "handled"
     },
     "mcpServer/oauth/login": {
       "note": "blocks OAuth MCP servers entirely",

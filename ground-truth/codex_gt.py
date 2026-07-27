@@ -44,11 +44,15 @@ def build_codex_argv(config=None, approval=None, sandbox=None, env=None):
     env = os.environ if env is None else env
     approval = env.get("CGT_APPROVAL", "never") if approval is None else approval
     sandbox = env.get("CGT_SANDBOX", "read-only") if sandbox is None else sandbox
+    # CGT_CODEX_ARGS is passed through, space-separated, so a capture can add
+    # `-c` config overrides without editing ~/.codex/config.toml. Keep override
+    # values free of spaces, since the split is naive.
+    extra = env.get("CGT_CODEX_ARGS", "").split()
     resume = getattr(config, "resume", None)
     if resume:
         return ["codex", "resume", "-a", approval, "-s", sandbox,
-                "--no-alt-screen", resume]
-    return ["codex", "-a", approval, "-s", sandbox, "--no-alt-screen"]
+                "--no-alt-screen", *extra, resume]
+    return ["codex", "-a", approval, "-s", sandbox, "--no-alt-screen", *extra]
 
 
 def run(scenario, cols=120, rows=40, cwd=None, resume=None):

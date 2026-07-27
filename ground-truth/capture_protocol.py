@@ -42,8 +42,14 @@ TRACE_ONLY = ([m.strip() for m in os.environ["CGT_TRACE_ONLY"].split(",")]
 # request/response methods instead of one session each. "{threadId}" anywhere in
 # a params string is replaced with the live thread id.
 EXTRA = json.loads(os.environ["CGT_EXTRA"]) if os.environ.get("CGT_EXTRA") else []
+# CGT_CODEX_ARGS is passed through to `codex app-server`, space-separated. Use it
+# with `-c` overrides to add a config only for the capture, rather than editing
+# ~/.codex/config.toml. Registering elicit_server.py this way is how an
+# elicitation can be provoked without changing the user's real configuration.
+CODEX_ARGS = (os.environ["CGT_CODEX_ARGS"].split()
+              if os.environ.get("CGT_CODEX_ARGS") else [])
 
-p = subprocess.Popen(["codex", "app-server"], stdin=subprocess.PIPE,
+p = subprocess.Popen(["codex", "app-server", *CODEX_ARGS], stdin=subprocess.PIPE,
                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                      cwd=CWD, bufsize=1, text=True)
 _id = [0]
