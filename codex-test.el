@@ -4872,3 +4872,60 @@ and {type:\"exitedReviewMode\", review:\"<the full review text>\"}."
                 (review . "Finding 1: check the nil case")))))
     (should (string-match-p "Review finished" (buffer-string)))
     (should (string-match-p "check the nil case" (buffer-string)))))
+
+(ert-deftest codex-test-app-server-renders-terminal-interaction ()
+  "Show stdin sent to a background terminal, named by its command.
+An interactive command never sends item/completed, so before this nothing
+about it appeared in the buffer at all.  Captured CLI rendering:
+  ↳ Interacted with background terminal · python3
+    └ 6*7
+Captured payload: (:threadId T :turnId U :itemId I :processId P :stdin S)."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-terminal/*" t)
+    (setq-local codex--app-server-terminal-names (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (codex--app-server-record-terminal-name
+     '((item . ((type . "commandExecution") (id . "i1") (command . "python3")))))
+    (codex--app-server-render-terminal-interaction
+     '((threadId . "t") (turnId . "u") (itemId . "i1")
+       (processId . "24842") (stdin . "6*7\n")))
+    (should (string-match-p "Interacted with background terminal · python3"
+                            (buffer-string)))
+    (should (string-match-p "6\\*7" (buffer-string)))))
+
+(ert-deftest codex-test-app-server-terminal-interaction-falls-back-to-pid ()
+  "Name the terminal by process id when the command was never recorded."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-terminal2/*" t)
+    (setq-local codex--app-server-terminal-names (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (codex--app-server-render-terminal-interaction
+     '((itemId . "unknown") (processId . "24842") (stdin . "ls\n")))
+    (should (string-match-p "terminal · 24842" (buffer-string)))))
+
+(ert-deftest codex-test-app-server-terminal-interaction-empty-stdin ()
+  "Render the header alone when the interaction carried no stdin.
+The captured pair had a second event with stdin \"\"."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-terminal3/*" t)
+    (setq-local codex--app-server-terminal-names (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (codex--app-server-render-terminal-interaction
+     '((itemId . "i") (processId . "p") (stdin . "")))
+    (should (string-match-p "Interacted with background terminal" (buffer-string)))))
+
+(ert-deftest codex-test-app-server-dispatch-routes-terminal-interaction ()
+  "Route terminalInteraction through the dispatch table."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-terminal4/*" t)
+    (setq-local codex--app-server-terminal-names (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (codex--app-server-handle-message
+     '((method . "item/started")
+       (params (item (type . "commandExecution") (id . "i9")
+                     (command . "python3")))))
+    (codex--app-server-handle-message
+     '((method . "item/commandExecution/terminalInteraction")
+       (params (itemId . "i9") (processId . "1") (stdin . "print(1)\n"))))
+    (should (string-match-p "terminal · python3" (buffer-string)))
+    (should (string-match-p "print(1)" (buffer-string)))))

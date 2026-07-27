@@ -232,15 +232,15 @@
       "status": "todo"
     },
     "item/commandExecution/outputDelta": {
-      "note": "REAL BUG, not just missing polish: an interactive or never-exiting command sends item/started and deltas but no item/completed, so codex.el renders nothing at all for it (captured: an interactive python3 got 15 deltas and never completed). Params {threadId,turnId,itemId,delta}; concatenated deltas are byte-identical to the completed item's aggregatedOutput, so streaming must not double-render alongside item/completed. Needs a codex_gt.py screen capture before implementing.",
-      "status": "todo"
+      "note": "the CLI does not display streaming command output. Captured twice: during a 14s sleep it showed only its Working status line, and for an interactive python3 it showed '\u21b3 Interacted with background terminal \u00b7 python3' plus the stdin, never the streamed output. The gap those deltas hinted at -- an interactive command rendering nothing, because it never sends item/completed -- is closed by handling terminalInteraction instead. Streaming here would also double-render, since concatenated deltas are byte-identical to the completed item's aggregatedOutput.",
+      "status": "wont-implement"
     },
     "item/commandExecution/requestApproval": {
       "status": "handled"
     },
     "item/commandExecution/terminalInteraction": {
-      "note": "captured {threadId,turnId,itemId,processId,stdin} -- the only protocol source of injected stdin. Belongs with item/commandExecution/outputDelta, since the owning item never completes and nothing about the session is shown today. Needs a screen capture first.",
-      "status": "todo"
+      "note": "renders the CLI's captured line: '\u21b3 Interacted with background terminal \u00b7 python3' followed by the stdin. Terminal name comes from the command recorded at item/started, since the payload carries only a process id; falls back to the pid.",
+      "status": "handled"
     },
     "item/completed": {
       "status": "handled"
@@ -279,8 +279,8 @@
       "status": "wont-implement"
     },
     "item/started": {
-      "note": "captured TUI shows no in-progress item block: while a 14s command ran the CLI displayed only the Working status line and '1 background terminal running', rendering the item on completion as codex-app-server.el already does. No in-progress behavior to mirror.",
-      "status": "wont-implement"
+      "note": "not rendered -- the CLI renders items on completion. Used only to record a commandExecution's command, so terminalInteraction can name the terminal as the CLI does.",
+      "status": "handled"
     },
     "item/tool/call": {
       "note": "server->client request for a dynamic tool the CLIENT registered. DynamicToolSpec is referenced by no request in the 0.145.0 surface, so nothing codex.el can send would make this arrive.",

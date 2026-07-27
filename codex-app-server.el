@@ -207,6 +207,11 @@ before the server has reported.")
 (defvar-local codex--app-server-command-items nil
   "Hash table of rendered app-server command output items.")
 
+(defvar-local codex--app-server-terminal-names nil
+  "Hash table mapping command item id to the command it ran.
+Used to name a background terminal when rendering stdin sent to it, since
+`item/commandExecution/terminalInteraction' carries only a process id.")
+
 (defvar-local codex--app-server-reasoning-items nil
   "Hash table of rendered app-server reasoning items.")
 
@@ -396,6 +401,8 @@ arguments."
       (setq-local codex--app-server-reasoning-items
                   (make-hash-table :test 'equal))
       (setq-local codex--app-server-full-outputs
+                  (make-hash-table :test 'equal))
+      (setq-local codex--app-server-terminal-names
                   (make-hash-table :test 'equal)))
     (let ((process
            (make-process :name (string-trim buffer-name "\\*")
@@ -583,6 +590,9 @@ This lets optional fields and protocol booleans flow naturally through
          (codex--app-server-rate-limits-updated params))
         ("hook/started" (codex--app-server-render-hook-event params ""))
         ("hook/completed" (codex--app-server-render-hook-event params " Completed"))
+        ("item/started" (codex--app-server-record-terminal-name params))
+        ("item/commandExecution/terminalInteraction"
+         (codex--app-server-render-terminal-interaction params))
         ("item/completed" (codex--app-server-render-completed-item params))
         ("thread/compacted"
          (codex--app-server-insert-status "Conversation compacted"))
@@ -2597,6 +2607,47 @@ rendering it the result of a review would not appear in the buffer."
       (if reads
           (codex--app-server-render-explored reads)
         (codex--app-server-render-ran-command item)))))
+
+(defun codex--app-server-render-terminal-interaction (params)
+  "Render stdin sent to a background terminal, from PARAMS.
+An interactive command never sends `item/completed', so nothing about it
+reached the buffer at all: an interactive python3 produced `item/started'
+and output deltas and then simply stopped.  The CLI does not show such a
+command's streaming output either.  What it does show was captured as:
+
+  ↳ Interacted with background terminal · python3
+    └ 6*7
+
+The terminal's name is absent from this payload, so it comes from the
+command recorded when the owning item started, falling back to the
+process id."
+  (let* ((stdin (string-trim-right
+                 (codex--app-server-string-or-empty (alist-get 'stdin params))))
+         (name (or (gethash (alist-get 'itemId params)
+                            codex--app-server-terminal-names)
+                   (alist-get 'processId params)
+                   "terminal")))
+    (codex--app-server-ensure-section-break)
+    (codex--app-server-insert
+     (format "↳ Interacted with background terminal · %s\n" name)
+     'codex-app-server-command-face)
+    (unless (string-empty-p stdin)
+      (codex--app-server-insert
+       (codex--app-server-indent-output (split-string stdin "\n"))))))
+
+(defun codex--app-server-record-terminal-name (params)
+  "Record the command of a starting commandExecution item from PARAMS.
+`item/commandExecution/terminalInteraction' names the terminal only by
+process id, while the CLI shows the command, so take the label from the
+item that started it."
+  (let ((item (alist-get 'item params)))
+    (when (equal (alist-get 'type item) "commandExecution")
+      (when-let* ((id (alist-get 'id item))
+                  (command (codex--app-server-strip-shell-wrapper
+                            (codex--app-server-string-or-empty
+                             (alist-get 'command item)))))
+        (unless (string-empty-p command)
+          (puthash id command codex--app-server-terminal-names))))))
 
 (defun codex--app-server-render-explored (names)
   "Render file reads NAMES as an `Explored' block, aggregating reads.
