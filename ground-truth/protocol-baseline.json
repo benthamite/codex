@@ -190,16 +190,16 @@
       "status": "wont-implement"
     },
     "fuzzyFileSearch": {
-      "note": "the CLI's @-mention file search",
-      "status": "todo"
+      "note": "captured response is {files:[{root,path,match_type,file_name,score,indices}]} and it does return untracked files. That set is now matched locally with 'git ls-files --cached --others --exclude-standard', which keeps @-completion synchronous; a protocol round-trip would make completing-read asynchronous for no user-visible gain.",
+      "status": "wont-implement"
     },
     "fuzzyFileSearch/sessionCompleted": {
-      "note": "end of an @-mention search",
-      "status": "todo"
+      "note": "captured response is {files:[{root,path,match_type,file_name,score,indices}]} and it does return untracked files. That set is now matched locally with 'git ls-files --cached --others --exclude-standard', which keeps @-completion synchronous; a protocol round-trip would make completing-read asynchronous for no user-visible gain.",
+      "status": "wont-implement"
     },
     "fuzzyFileSearch/sessionUpdated": {
-      "note": "incremental @-mention search results",
-      "status": "todo"
+      "note": "captured response is {files:[{root,path,match_type,file_name,score,indices}]} and it does return untracked files. That set is now matched locally with 'git ls-files --cached --others --exclude-standard', which keeps @-completion synchronous; a protocol round-trip would make completing-read asynchronous for no user-visible gain.",
+      "status": "wont-implement"
     },
     "guardianWarning": {
       "status": "handled"
@@ -471,8 +471,8 @@
       "status": "handled"
     },
     "thread/goal/get": {
-      "note": "goal is partly handled; cleared is, get is not",
-      "status": "todo"
+      "note": "captured response is {goal: null}; thread/goal/updated and thread/goal/cleared already keep the buffer in step, so a getter adds nothing.",
+      "status": "wont-implement"
     },
     "thread/goal/set": {
       "status": "handled"

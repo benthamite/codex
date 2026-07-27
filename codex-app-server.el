@@ -3573,13 +3573,18 @@ counting the placeholders already present in the input region."
     (completing-read "File: " files nil t)))
 
 (defun codex--app-server-project-files ()
-  "Return project file paths under the session directory."
+  "Return project file paths under the session directory.
+Lists tracked and untracked files while honoring ignore rules, matching
+the set the CLI offers.  Plain `git ls-files' omitted untracked files, so
+a file the CLI finds could not be @-mentioned here: its `fuzzyFileSearch'
+returns untracked files, verified against a freshly created one."
   (let ((dir (or codex--buffer-directory default-directory)))
     (when (and dir (file-directory-p dir))
       (let ((default-directory dir))
         (split-string
          (shell-command-to-string
-          "git ls-files 2>/dev/null || find . -type f -not -path './.*' 2>/dev/null")
+          (concat "git ls-files --cached --others --exclude-standard 2>/dev/null"
+                  " || find . -type f -not -path './.*' 2>/dev/null"))
          "\n" t)))))
 
 (defun codex-app-server-previous-input ()

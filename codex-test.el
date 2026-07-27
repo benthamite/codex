@@ -4686,3 +4686,25 @@ Captured account/read response: (:account (:type \"chatgpt\"
   (with-temp-buffer
     (setq-local codex--app-server-account '((email . "a@b.com")))
     (should (equal (codex--app-server-account-text) " · a@b.com"))))
+
+(ert-deftest codex-test-app-server-project-files-include-untracked ()
+  "Offer untracked files for @-mentions, and skip ignored ones.
+The CLI's fuzzyFileSearch returns untracked files -- verified against a
+freshly created one -- so listing only tracked files meant a file the CLI
+could reference could not be @-mentioned here."
+  (let ((dir (make-temp-file "codex-files" t)))
+    (unwind-protect
+        (let ((default-directory dir))
+          (call-process "git" nil nil nil "init" "-q")
+          (with-temp-file (expand-file-name ".gitignore" dir) (insert "hidden.txt\n"))
+          (with-temp-file (expand-file-name "tracked.txt" dir) (insert "t\n"))
+          (with-temp-file (expand-file-name "fresh.txt" dir) (insert "u\n"))
+          (with-temp-file (expand-file-name "hidden.txt" dir) (insert "i\n"))
+          (call-process "git" nil nil nil "add" "tracked.txt")
+          (with-temp-buffer
+            (setq-local codex--buffer-directory dir)
+            (let ((files (codex--app-server-project-files)))
+              (should (member "tracked.txt" files))
+              (should (member "fresh.txt" files))
+              (should-not (member "hidden.txt" files)))))
+      (delete-directory dir t))))
