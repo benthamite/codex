@@ -4524,3 +4524,48 @@ Captured payload shape: (:status \"disabled\" :serverName NAME
       (codex--app-server-remote-control-status-changed
        '((status . "connected") (serverName . "host") (installationId . "i")))
       (should (equal once (buffer-string))))))
+
+(ert-deftest codex-test-app-server-records-turn-diff ()
+  "Record the turn diff the server reports, replacing rather than appending.
+Captured payload shape: (:threadId ID :turnId ID :diff UNIFIED-DIFF).  The
+server resends the whole diff as it grows."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-td/*" t)
+    (codex--app-server-turn-diff-updated
+     '((threadId . "t") (turnId . "u") (diff . "diff --git a/x b/x\n-a\n+b\n")))
+    (should (string-match-p "\\+b" codex--app-server-turn-diff))
+    (codex--app-server-turn-diff-updated
+     '((threadId . "t") (turnId . "u") (diff . "diff --git a/x b/x\n-a\n+c\n")))
+    (should (string-match-p "\\+c" codex--app-server-turn-diff))
+    (should-not (string-match-p "\\+b" codex--app-server-turn-diff))))
+
+(ert-deftest codex-test-app-server-diff-command-shows-turn-diff ()
+  "Show the agent's turn diff, not the working tree.
+With an unrelated uncommitted change present the CLI reports \"No changes
+detected.\", so `/diff' must not shell out to `git diff'."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-showdiff/*" t)
+    (codex--app-server-setup-input-region)
+    (setq-local codex--app-server-turn-diff
+                "diff --git a/lines.txt b/lines.txt\n-three\n+THREE\n")
+    (codex--app-server-show-diff)
+    (should (string-match-p "Turn diff" (buffer-string)))
+    (should (string-match-p "THREE" (buffer-string)))))
+
+(ert-deftest codex-test-app-server-diff-command-reports-no-changes ()
+  "Match the CLI's wording when the turn changed nothing."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-nodiff/*" t)
+    (codex--app-server-setup-input-region)
+    (setq-local codex--app-server-turn-diff nil)
+    (codex--app-server-show-diff)
+    (should (string-match-p "No changes detected\\." (buffer-string)))))
+
+(ert-deftest codex-test-app-server-turn-start-resets-diff ()
+  "Drop the previous turn's diff when a new turn starts."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-resetdiff/*" t)
+    (codex--app-server-setup-input-region)
+    (setq-local codex--app-server-turn-diff "stale")
+    (codex--app-server-turn-started '((turn . ((id . "new")))))
+    (should-not codex--app-server-turn-diff)))

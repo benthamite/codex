@@ -279,8 +279,8 @@
       "status": "todo"
     },
     "item/started": {
-      "note": "items render only once complete; no in-progress display",
-      "status": "todo"
+      "note": "captured TUI shows no in-progress item block: while a 14s command ran the CLI displayed only the Working status line and '1 background terminal running', rendering the item on completion as codex-app-server.el already does. No in-progress behavior to mirror.",
+      "status": "wont-implement"
     },
     "item/tool/call": {
       "note": "generic tool call rendering",
@@ -575,7 +575,7 @@
     },
     "turn/diff/updated": {
       "note": "cumulative turn diff view",
-      "status": "todo"
+      "status": "handled"
     },
     "turn/interrupt": {
       "status": "handled"

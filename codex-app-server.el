@@ -182,6 +182,11 @@ because per-tool hooks can be frequent."
 (defvar-local codex--app-server-current-turn-id nil
   "Current app-server turn id.")
 
+(defvar-local codex--app-server-turn-diff nil
+  "Cumulative diff of agent changes reported by `turn/diff/updated'.
+Covers only what the agent changed, unlike the working-tree git diff.
+Reset when a new turn starts.")
+
 (defvar-local codex--app-server-remote-control-status nil
   "Remote-control connection status last reported by the app server.
 One of \"disabled\", \"connecting\", \"connected\", \"errored\", or nil
@@ -584,6 +589,7 @@ This lets optional fields and protocol booleans flow naturally through
         ("thread/goal/cleared" nil)
         ("thread/status/changed"
          (codex--app-server-thread-status-changed params))
+        ("turn/diff/updated" (codex--app-server-turn-diff-updated params))
         ("remoteControl/status/changed"
          (codex--app-server-remote-control-status-changed params))
         ("model/rerouted"
@@ -1499,16 +1505,23 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
            (abbreviate-file-name (or codex--buffer-directory default-directory)))))
 
 (defun codex--app-server-show-diff ()
-  "Render the working-tree git diff folded in the buffer."
-  (let* ((default-directory (or codex--buffer-directory default-directory))
-         (diff (string-trim-right
-                (with-output-to-string
-                  (with-current-buffer standard-output
-                    (process-file "git" nil t nil "diff"))))))
-    (codex--app-server-insert-status "Working tree diff")
+  "Render the diff of changes made in this thread, as the CLI's `/diff' does.
+The server reports it through `turn/diff/updated', which covers only what
+the agent changed.  Shelling out to `git diff' instead would include
+edits the user made before the turn: with an unrelated uncommitted change
+present the CLI reports \"No changes detected.\", so the working tree is
+not what it shows."
+  (let ((diff (string-trim-right (or codex--app-server-turn-diff ""))))
     (if (string-empty-p diff)
-        (codex--app-server-insert "(no changes)")
+        (codex--app-server-insert-status "No changes detected.")
+      (codex--app-server-insert-status "Turn diff")
       (codex--app-server-render-diff diff))))
+
+(defun codex--app-server-turn-diff-updated (params)
+  "Record the turn diff reported by PARAMS.
+The server resends the whole diff as it grows, so this replaces rather
+than appends."
+  (setq codex--app-server-turn-diff (alist-get 'diff params)))
 
 (defun codex--app-server-change-model ()
   "Pick a model with `model/list' and apply it via `thread/settings/update'."
@@ -1795,6 +1808,7 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
   (let ((turn (alist-get 'turn params)))
     (setq codex--app-server-current-turn-id (alist-get 'id turn))
     (setq codex--app-server-turn-active-p t)
+    (setq codex--app-server-turn-diff nil)
     (setq codex--app-server-turn-start-time (float-time))
     (codex--app-server-start-status-timer)
     (codex--app-server-update-status-overlay)
