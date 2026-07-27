@@ -207,11 +207,6 @@ before the server has reported.")
 (defvar-local codex--app-server-command-items nil
   "Hash table of rendered app-server command output items.")
 
-(defvar-local codex--app-server-apps nil
-  "Apps last reported by `app/list/updated', or nil before any arrived.
-Used by `/apps' so the picker does not wait on the slow paginated
-`app/list' response.")
-
 (defvar-local codex--app-server-terminal-names nil
   "Hash table mapping command item id to the command it ran.
 Used to name a background terminal when rendering stdin sent to it, since
@@ -596,7 +591,6 @@ This lets optional fields and protocol booleans flow naturally through
         ("hook/started" (codex--app-server-render-hook-event params ""))
         ("hook/completed" (codex--app-server-render-hook-event params " Completed"))
         ("thread/closed" (codex--app-server-thread-closed params))
-        ("app/list/updated" (codex--app-server-apps-updated params))
         ("account/updated" (codex--app-server-account-updated params))
         ("item/started" (codex--app-server-record-terminal-name params))
         ("item/commandExecution/terminalInteraction"
@@ -1008,31 +1002,42 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
             (format "%s %s" name (if enabled "enabled" "disabled")))))))))
 
 (defun codex--app-server-list-apps ()
-  "List Codex apps and insert the selected app.
-Uses the snapshot from `app/list/updated' when one has arrived.  The
-server sends that notification with a cached list immediately, and again
-once a refetch lands, whereas the `app/list' response carried thousands of
-apps and took over twenty seconds to arrive.  The filtering is unchanged,
-so the same apps are offered, only without the wait."
-  (if codex--app-server-apps
-      (codex--app-server-choose-app codex--app-server-apps)
-    (codex--app-server-send-request
-     "app/list"
-     `((threadId . ,codex--app-server-thread-id)
-       (forceRefetch . t))
-     (lambda (result error)
-       (if error
-           (codex--app-server-insert-status
-            (format "App list failed: %S" error))
-         (codex--app-server-choose-app
-          (append (alist-get 'data result) nil)))))))
+  "Offer the mentionable plugins and insert the chosen one as `$name'.
+This is the Emacs equivalent of the CLI's `$' composer menu, which is
+plugin-driven despite the command being called `/apps': the captured menu
+listed Browser, Chrome, Documents, GitHub, Presentations, Sites,
+Spreadsheets and Superpowers, every row tagged [Plugin], and picking
+Browser inserted the lowercase identifier `$browser'.
 
-(defun codex--app-server-apps-updated (params)
-  "Record the app snapshot in PARAMS for `/apps'.
-Replaces rather than merges: the notification carries the whole list,
-unpaginated, unlike the paginated `app/list' response."
-  (when-let* ((data (alist-get 'data params)))
-    (setq codex--app-server-apps (append data nil))))
+This used to read `app/list' instead, a different and much larger set --
+thousands of entries, of which two survived its filter, arriving over
+twenty seconds later.  Those are apps, not the plugins the CLI mentions."
+  (codex--app-server-send-request
+   "plugin/list"
+   `((cwds . ,(vector (codex--app-server-current-cwd))))
+   (lambda (result error)
+     (if error
+         (codex--app-server-insert-status
+          (format "Plugin list failed: %S" error))
+       (codex--app-server-choose-app
+        (codex--app-server-mentionable-plugins result))))))
+
+(defun codex--app-server-mentionable-plugins (result)
+  "Return the installed and enabled plugins in plugin list RESULT.
+Sorted by display name, matching the CLI's alphabetical `$' menu."
+  (let ((plugins (mapcar (lambda (record) (alist-get 'plugin record))
+                         (codex--app-server-plugin-records result))))
+    (sort (seq-filter (lambda (plugin)
+                        (and (eq (alist-get 'installed plugin) t)
+                             (eq (alist-get 'enabled plugin) t)))
+                      plugins)
+          (lambda (a b)
+            (string< (codex--app-server-plugin-mention-label a)
+                     (codex--app-server-plugin-mention-label b))))))
+
+(defun codex--app-server-plugin-mention-label (plugin)
+  "Return the display label for PLUGIN in the mention picker."
+  (or (alist-get 'displayName plugin) (alist-get 'name plugin) "?"))
 
 (defun codex--app-server-thread-closed (params)
   "Note that the server unloaded the thread named in PARAMS.
@@ -1069,30 +1074,30 @@ which lists both fields as optional."
         (when mode (setf (alist-get 'authMode account) mode))
         (setq codex--app-server-account account)))))
 
-(defun codex--app-server-app-label (app)
-  "Return a completion label for APP."
-  (format "%s%s"
-          (alist-get 'name app)
-          (cond
-           ((not (alist-get 'isEnabled app)) " [disabled]")
-           ((not (alist-get 'isAccessible app)) " [not connected]")
-           (t ""))))
+(defun codex--app-server-app-label (plugin)
+  "Return a completion label for PLUGIN, as the CLI's `$' menu labels it.
+The captured menu showed the display name, the tag [Plugin], and the
+description: \"Browser  [Plugin] Control the in-app browser with ChatGPT\"."
+  (let ((description (alist-get 'description plugin)))
+    (format "%s  [Plugin]%s"
+            (codex--app-server-plugin-mention-label plugin)
+            (if (and description (not (string-empty-p description)))
+                (format " %s" description)
+              ""))))
 
-(defun codex--app-server-choose-app (apps)
-  "Insert a selected accessible app from APPS into the composer."
-  (let* ((available (seq-filter
-                     (lambda (app)
-                       (and (alist-get 'isEnabled app)
-                            (alist-get 'isAccessible app)))
-                     apps))
-         (app (and available
-                   (codex--app-server-read-object
-                    "Use app: " available #'codex--app-server-app-label))))
-    (if app
+(defun codex--app-server-choose-app (plugins)
+  "Insert one of PLUGINS into the composer as a `$' mention.
+The identifier is inserted, not the display name: picking Browser in the
+CLI inserts `$browser'."
+  (let ((plugin (and plugins
+                     (codex--app-server-read-object
+                      "Mention plugin: " plugins
+                      #'codex--app-server-app-label))))
+    (if plugin
         (codex--app-server-replace-input
-         (format "$%s " (alist-get 'name app)))
+         (format "$%s " (alist-get 'name plugin)))
       (codex--app-server-insert-status
-       "No enabled and connected Codex apps available"))))
+       "No installed and enabled Codex plugins available"))))
 
 (defun codex--app-server-list-plugins ()
   "Open the native plugin workflow using `plugin/list'."

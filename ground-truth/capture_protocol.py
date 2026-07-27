@@ -48,6 +48,10 @@ EXTRA = json.loads(os.environ["CGT_EXTRA"]) if os.environ.get("CGT_EXTRA") else 
 # elicitation can be provoked without changing the user's real configuration.
 CODEX_ARGS = (os.environ["CGT_CODEX_ARGS"].split()
               if os.environ.get("CGT_CODEX_ARGS") else [])
+# Traced responses are truncated so one huge reply does not bury the log, but
+# the default silently cut a plugin list mid-object and made it unparseable.
+# Raise it with CGT_TRACE_MAX when you need the whole thing.
+TRACE_MAX = int(os.environ.get("CGT_TRACE_MAX", "4000"))
 
 p = subprocess.Popen(["codex", "app-server", *CODEX_ARGS], stdin=subprocess.PIPE,
                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -84,7 +88,7 @@ def reader():
         if TRACE and meth is None and ("result" in m or "error" in m):
             print(f"[trace] RESPONSE id={m.get('id')}", file=sys.stderr)
             body = m.get("result") if "result" in m else m.get("error")
-            print(json.dumps(body, indent=2)[:4000], file=sys.stderr)
+            print(json.dumps(body, indent=2)[:TRACE_MAX], file=sys.stderr)
         if TRACE and meth and (TRACE_ONLY is None or meth in TRACE_ONLY):
             kind = "REQUEST " if "id" in m else "notify  "
             print(f"[trace] {kind}{meth}", file=sys.stderr)

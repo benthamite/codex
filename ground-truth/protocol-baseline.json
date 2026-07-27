@@ -50,18 +50,19 @@
       "status": "wont-implement"
     },
     "app/installed": {
-      "note": "captured the CLI's $-mention list and it is PLUGIN-driven, not app-driven: 8 entries (Browser, Chrome, Documents, GitHub, Presentations, Sites, Spreadsheets, Superpowers), each labelled [Plugin] with a description. codex.el's /apps inserts $name from app/list data instead, and app/list returned 2388 entries of which 2 passed its filter. So the app/* family is not the source the CLI's $ surface uses, and swapping /apps to app/installed would not converge on the CLI either. What the $ list needs is plugin data, which plugin/list already provides and /plugins already fetches. Recorded here rather than acted on: reconciling /apps with the CLI's $ list is a design change to an existing command, not a missing protocol handler.",
+      "note": "the CLI's $ composer menu is plugin-driven, so /apps now reads plugin/list. Captured: the menu tagged every row [Plugin] and picking Browser inserted the lowercase identifier $browser; 'codex plugin list --json' reported exactly the 9 installed-and-enabled plugins the menu showed (the 9th sorted past the visible rows). The app/* family is a different and much larger set -- app/list returned thousands, of which two survived the old filter -- and is not what the CLI mentions.",
       "status": "wont-implement"
     },
     "app/list": {
-      "status": "handled"
+      "note": "the CLI's $ composer menu is plugin-driven, so /apps now reads plugin/list. Captured: the menu tagged every row [Plugin] and picking Browser inserted the lowercase identifier $browser; 'codex plugin list --json' reported exactly the 9 installed-and-enabled plugins the menu showed (the 9th sorted past the visible rows). The app/* family is a different and much larger set -- app/list returned thousands, of which two survived the old filter -- and is not what the CLI mentions. app/list itself is therefore no longer requested.",
+      "status": "wont-implement"
     },
     "app/list/updated": {
-      "note": "refresh the app list",
-      "status": "handled"
+      "note": "the CLI's $ composer menu is plugin-driven, so /apps now reads plugin/list. Captured: the menu tagged every row [Plugin] and picking Browser inserted the lowercase identifier $browser; 'codex plugin list --json' reported exactly the 9 installed-and-enabled plugins the menu showed (the 9th sorted past the visible rows). The app/* family is a different and much larger set -- app/list returned thousands, of which two survived the old filter -- and is not what the CLI mentions.",
+      "status": "wont-implement"
     },
     "app/read": {
-      "note": "an app detail view would need a surface the CLI does not have: its $-mention list shows plugins with one-line descriptions, no per-app tool listing. Captured response does carry toolSummaries with full tool descriptions, so this is worth revisiting only if a detail view is wanted as a deliberate extra rather than as parity.",
+      "note": "the CLI's $ composer menu is plugin-driven, so /apps now reads plugin/list. Captured: the menu tagged every row [Plugin] and picking Browser inserted the lowercase identifier $browser; 'codex plugin list --json' reported exactly the 9 installed-and-enabled plugins the menu showed (the 9th sorted past the visible rows). The app/* family is a different and much larger set -- app/list returned thousands, of which two survived the old filter -- and is not what the CLI mentions.",
       "status": "wont-implement"
     },
     "applyPatchApproval": {

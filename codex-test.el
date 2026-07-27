@@ -1601,7 +1601,7 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (setq-local codex--buffer-directory "/tmp/project")
     (codex--app-server-setup-input-region)
     (dolist (case '(("/skills" . "skills/list")
-                    ("/apps" . "app/list")
+                    ("/apps" . "plugin/list")
                     ("/plugins" . "plugin/list")
                     ("/hooks" . "hooks/list")
                     ("/mcp" . "mcpServerStatus/list")
@@ -4930,52 +4930,9 @@ The captured pair had a second event with stdin \"\"."
     (should (string-match-p "terminal · python3" (buffer-string)))
     (should (string-match-p "print(1)" (buffer-string)))))
 
-(ert-deftest codex-test-app-server-apps-updated-records-snapshot ()
-  "Record the app snapshot the server pushes, replacing any earlier one.
-Captured: app/list/updated carries {data: [AppInfo]} unpaginated -- 2388
-entries in one notification -- and arrives immediately, while the paginated
-app/list response took over twenty seconds."
-  (with-temp-buffer
-    (codex--app-server-apps-updated
-     '((data . [((id . "a") (name . "Alpha"))])))
-    (should (= 1 (length codex--app-server-apps)))
-    (codex--app-server-apps-updated
-     '((data . [((id . "b") (name . "Beta")) ((id . "c") (name . "Gamma"))])))
-    (should (= 2 (length codex--app-server-apps)))
-    (should (equal (alist-get 'name (car codex--app-server-apps)) "Beta"))))
 
-(ert-deftest codex-test-app-server-apps-uses-snapshot-without-request ()
-  "Serve /apps from the pushed snapshot instead of waiting on app/list."
-  (let (requested chosen)
-    (cl-letf (((symbol-function 'codex--app-server-send-request)
-               (lambda (&rest _) (setq requested t)))
-              ((symbol-function 'codex--app-server-choose-app)
-               (lambda (apps) (setq chosen apps))))
-      (with-temp-buffer
-        (setq-local codex--app-server-apps '(((id . "a") (name . "Alpha"))))
-        (codex--app-server-list-apps))
-      (should-not requested)
-      (should (equal (alist-get 'name (car chosen)) "Alpha")))))
 
-(ert-deftest codex-test-app-server-apps-falls-back-to-request ()
-  "Fall back to app/list when no snapshot has arrived yet."
-  (let (requested)
-    (cl-letf (((symbol-function 'codex--app-server-send-request)
-               (lambda (method &rest _) (setq requested method))))
-      (with-temp-buffer
-        (setq-local codex--app-server-apps nil)
-        (codex--app-server-list-apps))
-      (should (equal requested "app/list")))))
 
-(ert-deftest codex-test-app-server-dispatch-routes-apps-updated ()
-  "Route app/list/updated through the dispatch table."
-  (with-temp-buffer
-    (rename-buffer "*codex:/tmp/app-server-apps/*" t)
-    (codex--app-server-setup-input-region)
-    (codex--app-server-handle-message
-     '((method . "app/list/updated")
-       (params (data . [((id . "a") (name . "Alpha"))]))))
-    (should (= 1 (length codex--app-server-apps)))))
 
 (ert-deftest codex-test-app-server-account-updated-merges-plan ()
   "Merge a plan change into the recorded account, keeping the email.
@@ -5104,3 +5061,63 @@ has forgotten, rather than saying there is no active thread."
     (codex--app-server-thread-closed '((threadId . "someone-else")))
     (should (equal codex--app-server-thread-id "mine"))
     (should-not (string-match-p "Thread closed" (buffer-string)))))
+
+(defconst codex-test--plugin-list-result
+  (list (cons 'marketplaces
+              (vector
+               (list (cons 'name "openai-primary-runtime")
+                     (cons 'plugins
+                           (vector
+                            '((name . "browser") (displayName . "Browser")
+                              (description . "Control the in-app browser with ChatGPT")
+                              (installed . t) (enabled . t))
+                            '((name . "visualize") (displayName . "Visualize")
+                              (description . "Make charts")
+                              (installed . t) (enabled . t))
+                            '((name . "latex") (displayName . "LaTeX")
+                              (description . "Typeset")
+                              (installed . t) (enabled . :false))
+                            '((name . "linear") (displayName . "Linear")
+                              (description . "Issues")
+                              (installed . :false) (enabled . :false))))))))
+  "Plugin list result shaped like the captured plugin/list response.")
+
+(ert-deftest codex-test-app-server-mentionable-plugins-filters-and-sorts ()
+  "Offer only installed and enabled plugins, alphabetically.
+Captured from the CLI: `codex plugin list --json' reported 9 installed and
+enabled plugins, and the CLI's $ menu listed them by display name in
+alphabetical order."
+  (let ((plugins (codex--app-server-mentionable-plugins
+                  codex-test--plugin-list-result)))
+    (should (equal (mapcar (lambda (p) (alist-get 'name p)) plugins)
+                   '("browser" "visualize")))))
+
+(ert-deftest codex-test-app-server-mention-inserts-identifier ()
+  "Insert the lowercase identifier, not the display name.
+Captured: picking Browser in the CLI's $ menu inserts `$browser'."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-mention/*" t)
+    (codex--app-server-setup-input-region)
+    (cl-letf (((symbol-function 'codex--app-server-read-object)
+               (lambda (_prompt items _label) (car items))))
+      (codex--app-server-choose-app
+       (codex--app-server-mentionable-plugins codex-test--plugin-list-result)))
+    (should (string-match-p "\\$browser " (codex--app-server-input-text)))))
+
+(ert-deftest codex-test-app-server-mention-label-matches-cli ()
+  "Label a plugin as the CLI does: display name, [Plugin], description."
+  (should (equal (codex--app-server-app-label
+                  '((name . "browser") (displayName . "Browser")
+                    (description . "Control the in-app browser with ChatGPT")))
+                 "Browser  [Plugin] Control the in-app browser with ChatGPT")))
+
+(ert-deftest codex-test-app-server-mention-reports-when-none ()
+  "Say so when nothing is installed and enabled, instead of prompting."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-mention2/*" t)
+    (codex--app-server-setup-input-region)
+    (cl-letf (((symbol-function 'codex--app-server-read-object)
+               (lambda (&rest _) (error "should not prompt"))))
+      (codex--app-server-choose-app nil))
+    (should (string-match-p "No installed and enabled Codex plugins"
+                            (buffer-string)))))
