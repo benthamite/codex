@@ -287,8 +287,8 @@
       "status": "todo"
     },
     "item/tool/requestUserInput": {
-      "note": "tool asks the user; unhandled means a stalled turn",
-      "status": "todo"
+      "note": "implemented from the app-server schema, which is authoritative for the request and reply shapes. The CLI's own presentation was NOT captured: no configured tool asks this and no listed experimental feature enables it (checked experimentalFeature/list), so no trigger was found. Prompt wording is this client's own and has not been diffed against the CLI.",
+      "status": "handled"
     },
     "marketplace/add": {
       "note": "marketplace management belongs in the CLI",

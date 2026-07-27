@@ -4610,3 +4610,53 @@ the decision reply would leave the turn stalled."
     (should (equal (codex--app-server-read-approval
                     (list :prompt "p" :choices '((?y "yes" "h" "accept"))))
                    '((decision . "accept"))))))
+
+(ert-deftest codex-test-app-server-user-input-answers-by-question-id ()
+  "Answer a tool's questions, keyed by question id.
+Schema shapes: request (:questions [(:id ID :header H :question Q
+:options [(:label L :description D)] :isOther BOOL :isSecret BOOL)]),
+reply (:answers (ID (:answers [ANSWER])))."
+  (cl-letf (((symbol-function 'completing-read)
+             (lambda (&rest _) "Berlin"))
+            ((symbol-function 'read-string)
+             (lambda (&rest _) "free text")))
+    (let ((body (codex--app-server-answer-user-input
+                 '((questions . [((id . "q1") (header . "City")
+                                  (question . "Which city?")
+                                  (options . [((label . "Berlin")
+                                               (description . "de"))]))
+                                 ((id . "q2") (header . "Note")
+                                  (question . "Anything else?"))])))))
+      (should (equal (alist-get 'answers (alist-get 'q1 (alist-get 'answers body)))
+                     ["Berlin"]))
+      (should (equal (alist-get 'answers (alist-get 'q2 (alist-get 'answers body)))
+                     ["free text"])))))
+
+(ert-deftest codex-test-app-server-user-input-reads-secrets-without-echo ()
+  "Ask a secret question with `read-passwd', not `read-string'."
+  (let (used-passwd)
+    (cl-letf (((symbol-function 'read-passwd)
+               (lambda (&rest _) (setq used-passwd t) "hunter2"))
+              ((symbol-function 'read-string)
+               (lambda (&rest _) (error "should not echo a secret"))))
+      (codex--app-server-answer-user-input
+       '((questions . [((id . "k") (header . "Token")
+                        (question . "API key?") (isSecret . t))])))
+      (should used-passwd))))
+
+(ert-deftest codex-test-app-server-user-input-prompt-includes-header ()
+  "Show the question's header in the prompt."
+  (should (equal (codex--app-server-user-input-prompt
+                  '((header . "City") (question . "Which city?")))
+                 "City: Which city? "))
+  (should (equal (codex--app-server-user-input-prompt
+                  '((header . "") (question . "Which city?")))
+                 "Which city? ")))
+
+(ert-deftest codex-test-app-server-user-input-spec-uses-ask ()
+  "Dispatch requestUserInput through an `:ask' spec, not a choice list."
+  (let ((spec (codex--app-server-approval-spec
+               '((method . "item/tool/requestUserInput")
+                 (params . ((questions . [])))))))
+    (should (plist-get spec :ask))
+    (should (equal (codex--app-server-read-approval spec) '((answers))))))

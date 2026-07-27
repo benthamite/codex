@@ -3100,7 +3100,48 @@ when it follows the item bullet, which precedes START on the same line."
        (list :prompt (or (alist-get 'message params) "MCP server request")
              :choices (codex--app-server-elicitation-choices)
              :responder #'codex--app-server-elicitation-response))
+      ("item/tool/requestUserInput"
+       (list :ask (lambda () (codex--app-server-answer-user-input params))))
       (_ nil))))
+
+(defun codex--app-server-answer-user-input (params)
+  "Ask the questions in PARAMS and return the answers response body.
+Handles `item/tool/requestUserInput', where a tool asks the user one or
+more questions.  Each question carries an id, a header, and the question
+text, and optionally a list of options; `isSecret' asks without echo, and
+`isOther' means a free-text answer is acceptable alongside the options.
+The reply maps question ids to answers.
+
+Unlike the other requests handled here, the CLI's own presentation was not
+captured: no configured tool asks this, and no listed experimental feature
+enables it.  The request and reply shapes come from the app-server schema,
+which is authoritative, but the prompt wording is this client's own and
+has not been diffed against the CLI."
+  (let ((answers (mapcar #'codex--app-server-user-input-answer
+                         (append (alist-get 'questions params) nil))))
+    `((answers . ,answers))))
+
+(defun codex--app-server-user-input-answer (question)
+  "Ask QUESTION and return its answers entry, keyed by question id."
+  (let* ((id (alist-get 'id question))
+         (prompt (codex--app-server-user-input-prompt question))
+         (options (append (alist-get 'options question) nil))
+         (answer (cond
+                  ((eq (alist-get 'isSecret question) t) (read-passwd prompt))
+                  (options
+                   (completing-read
+                    prompt (mapcar (lambda (o) (alist-get 'label o)) options)
+                    nil (not (eq (alist-get 'isOther question) t))))
+                  (t (read-string prompt)))))
+    (cons (intern id) `((answers . ,(vector answer))))))
+
+(defun codex--app-server-user-input-prompt (question)
+  "Return the minibuffer prompt for QUESTION, showing its header."
+  (let ((header (alist-get 'header question))
+        (text (alist-get 'question question)))
+    (if (and header (not (string-empty-p header)))
+        (format "%s: %s " header text)
+      (format "%s " text))))
 
 (defun codex--app-server-elicitation-choices ()
   "Return choices for an MCP elicitation, worded as the CLI words them.
@@ -3171,15 +3212,17 @@ object such as the \"don't ask again\" execpolicy amendment."
 Most requests answer with a `decision' field.  SPEC may carry a
 `:responder' function instead, for requests whose reply has a different
 shape, such as an elicitation's `action'."
-  (let* ((choices (plist-get spec :choices))
-         (chosen (read-multiple-choice
-                  (plist-get spec :prompt)
-                  (mapcar (lambda (c) (list (nth 0 c) (nth 1 c) (nth 2 c)))
-                          choices)))
-         (value (nth 3 (assq (car chosen) choices))))
-    (if-let* ((responder (plist-get spec :responder)))
-        (funcall responder value)
-      `((decision . ,value)))))
+  (if-let* ((ask (plist-get spec :ask)))
+      (funcall ask)
+    (let* ((choices (plist-get spec :choices))
+           (chosen (read-multiple-choice
+                    (plist-get spec :prompt)
+                    (mapcar (lambda (c) (list (nth 0 c) (nth 1 c) (nth 2 c)))
+                            choices)))
+           (value (nth 3 (assq (car chosen) choices))))
+      (if-let* ((responder (plist-get spec :responder)))
+          (funcall responder value)
+        `((decision . ,value))))))
 
 (defun codex--app-server-send-initialize ()
   "Send the app-server initialize request."
