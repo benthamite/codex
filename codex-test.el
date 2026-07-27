@@ -4976,3 +4976,30 @@ app/list response took over twenty seconds."
      '((method . "app/list/updated")
        (params (data . [((id . "a") (name . "Alpha"))]))))
     (should (= 1 (length codex--app-server-apps)))))
+
+(ert-deftest codex-test-app-server-account-updated-merges-plan ()
+  "Merge a plan change into the recorded account, keeping the email.
+Schema shape (NOT captured -- triggering it needs a real login or logout):
+(:authMode MODE-or-nil :planType PLAN-or-nil), both optional."
+  (with-temp-buffer
+    (setq-local codex--app-server-account
+                '((type . "chatgpt") (email . "a@b.com") (planType . "pro")))
+    (codex--app-server-account-updated '((planType . "plus")))
+    (should (equal (alist-get 'planType codex--app-server-account) "plus"))
+    (should (equal (alist-get 'email codex--app-server-account) "a@b.com"))
+    (should (string-match-p "a@b\\.com (Plus)"
+                            (codex--app-server-status-text)))))
+
+(ert-deftest codex-test-app-server-account-updated-ignores-empty ()
+  "Leave the account alone when the notification carries neither field."
+  (with-temp-buffer
+    (setq-local codex--app-server-account '((email . "a@b.com")))
+    (codex--app-server-account-updated '((planType . nil) (authMode . nil)))
+    (should (equal codex--app-server-account '((email . "a@b.com"))))))
+
+(ert-deftest codex-test-app-server-account-updated-from-empty ()
+  "Record a plan even when no account had been read yet."
+  (with-temp-buffer
+    (setq-local codex--app-server-account nil)
+    (codex--app-server-account-updated '((planType . "pro")))
+    (should (equal (alist-get 'planType codex--app-server-account) "pro"))))

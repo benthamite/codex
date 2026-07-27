@@ -596,6 +596,7 @@ This lets optional fields and protocol booleans flow naturally through
         ("hook/started" (codex--app-server-render-hook-event params ""))
         ("hook/completed" (codex--app-server-render-hook-event params " Completed"))
         ("app/list/updated" (codex--app-server-apps-updated params))
+        ("account/updated" (codex--app-server-account-updated params))
         ("item/started" (codex--app-server-record-terminal-name params))
         ("item/commandExecution/terminalInteraction"
          (codex--app-server-render-terminal-interaction params))
@@ -1031,6 +1032,23 @@ Replaces rather than merges: the notification carries the whole list,
 unpaginated, unlike the paginated `app/list' response."
   (when-let* ((data (alist-get 'data params)))
     (setq codex--app-server-apps (append data nil))))
+
+(defun codex--app-server-account-updated (params)
+  "Merge the account change in PARAMS into the recorded account.
+The server sends this after a login or logout, carrying only the fields
+that changed, so without it `/status' keeps reporting whichever plan was
+active when the thread started.
+
+Not captured from a live server: triggering it means logging the real
+ChatGPT account in or out.  The shape comes from the app-server schema,
+which lists both fields as optional."
+  (let ((plan (alist-get 'planType params))
+        (mode (alist-get 'authMode params)))
+    (when (or plan mode)
+      (let ((account (copy-alist codex--app-server-account)))
+        (when plan (setf (alist-get 'planType account) plan))
+        (when mode (setf (alist-get 'authMode account) mode))
+        (setq codex--app-server-account account)))))
 
 (defun codex--app-server-app-label (app)
   "Return a completion label for APP."

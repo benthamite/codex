@@ -39,8 +39,8 @@
       "status": "wont-implement"
     },
     "account/updated": {
-      "note": "refresh the usage and rate-limit display",
-      "status": "todo"
+      "note": "merged into the recorded account so /status stops reporting a stale plan after a login or logout. NOT captured from a live server -- triggering it means logging the real ChatGPT account in or out; the shape is from the schema, both fields optional.",
+      "status": "handled"
     },
     "account/usage/read": {
       "status": "handled"
