@@ -22,6 +22,16 @@ CWD = os.environ.get("CGT_DIR", "/tmp/codex-gt")
 os.makedirs(CWD, exist_ok=True)
 prompt = sys.argv[1] if len(sys.argv) > 1 else "Say hello, then stop."
 want = sys.argv[2] if len(sys.argv) > 2 else None
+# CGT_TRACE=1 echoes every inbound method to stderr as it arrives, with the
+# params of server->client requests. Use it to capture the reference payload for
+# a method codex-app-server.el does not handle yet: the item/completed dump
+# below only shows finished items, so it cannot show you a request shape.
+TRACE = os.environ.get("CGT_TRACE") == "1"
+# Approval policy for the thread and turn. Defaults to "never", which is right
+# for capturing ordinary item payloads. Set it to "on-request" or "untrusted"
+# (with CGT_SANDBOX=read-only) to make the server actually ask, which is the
+# only way to capture an approval request's shape.
+APPROVAL = os.environ.get("CGT_APPROVAL", "never")
 
 p = subprocess.Popen(["codex", "app-server"], stdin=subprocess.PIPE,
                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -55,6 +65,11 @@ def reader():
         except Exception:
             continue
         meth = m.get("method")
+        if TRACE and meth:
+            kind = "REQUEST " if "id" in m else "notify  "
+            print(f"[trace] {kind}{meth}", file=sys.stderr)
+            if "id" in m:
+                print(json.dumps(m.get("params"), indent=2), file=sys.stderr)
         if meth == "thread/started":
             pr = m["params"]
             tid[0] = (pr.get("thread") or {}).get("id") or pr.get("threadId")
@@ -76,7 +91,7 @@ send("initialize", {"clientInfo": {"name": "cap", "title": "cap",
                     "capabilities": {"experimentalApi": True,
                                      "requestAttestation": False}})
 time.sleep(1)
-send("thread/start", {"cwd": CWD, "approvalPolicy": "never",
+send("thread/start", {"cwd": CWD, "approvalPolicy": APPROVAL,
                       "sandbox": os.environ.get("CGT_SANDBOX",
                                                 "workspace-write")})
 time.sleep(2)
@@ -84,6 +99,6 @@ if not tid[0]:
     print("NO THREAD ID", file=sys.stderr); sys.exit(1)
 send("turn/start", {"threadId": tid[0],
                     "input": [{"type": "text", "text": prompt}],
-                    "cwd": CWD, "approvalPolicy": "never"})
+                    "cwd": CWD, "approvalPolicy": APPROVAL})
 done.wait(timeout=90)
 print(json.dumps({"items": items, "plans": plans}, indent=2))

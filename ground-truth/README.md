@@ -44,6 +44,25 @@ python3 capture_protocol.py "Change four to FOUR on line 4 of lines.txt" fileCha
 Use this to build renderers against real payload shapes (e.g. the unified-diff
 text in a `fileChange`, the `commandActions` of a read), not guessed ones.
 
+`CGT_TRACE=1` echoes every inbound method to stderr as it arrives, printing the
+params of server→client requests. The `item/completed` dump only shows finished
+items, so tracing is the only way to capture a *request* shape — which is what
+you need for any method the client does not handle yet.
+
+`CGT_APPROVAL` sets the approval policy (default `never`). The server only sends
+approval requests when it has to ask, so pair `CGT_APPROVAL=untrusted` with
+`CGT_SANDBOX=read-only` and a prompt that needs a write:
+
+```bash
+CGT_TRACE=1 CGT_SANDBOX=read-only CGT_APPROVAL=untrusted \
+  python3 capture_protocol.py "Append DONE to lines.txt with a shell command."
+```
+
+Note that a scenario does not always reach the method you expected: the above
+escalates through `item/commandExecution/requestApproval`, not through
+`item/permissions/requestApproval`. Finding a trigger is usually the slow part
+of adding support for a method.
+
 ## `protocol_coverage.py` — what Codex offers that codex.el ignores
 
 `codex-app-server.el` reimplements the client rather than hosting the CLI's own
