@@ -87,6 +87,18 @@ diverge from the JSONL transcript.  When non-nil, pass
   :type 'boolean
   :group 'codex)
 
+(defcustom codex-skill-extra-roots nil
+  "Extra directories the app server should scan for skills.
+Sent with `skills/extraRoots/set' when an app-server thread starts, so
+skills kept outside the standard locations become available to the agent.
+Without this the agent only sees the roots the CLI discovers itself, even
+when an Emacs-side integration knows about others.
+
+Only used by the app-server backend; terminal backends inherit whatever
+the CLI discovers."
+  :type '(repeat directory)
+  :group 'codex)
+
 (defcustom codex-term-name nil
   "Terminal type override to use for Codex REPL.
 When nil, Codex uses a backend-appropriate TERM value.  This lets eat

@@ -4732,3 +4732,33 @@ from a live app server."
        (params . ((status . "connected") (serverName . "host")
                   (installationId . "i")))))
     (should (equal codex--app-server-remote-control-status "connected"))))
+
+(ert-deftest codex-test-app-server-sends-skill-extra-roots ()
+  "Send configured extra skill roots as absolute paths under `extraRoots'.
+Captured contract: the server requires the key `extraRoots' (sending
+`roots' errors with \"missing field `extraRoots`\"), returns {}, and then
+emits skills/changed."
+  (let (sent)
+    (cl-letf (((symbol-function 'codex--app-server-send-request)
+               (lambda (method params &rest _) (setq sent (cons method params))))
+              ((symbol-function 'process-live-p) (lambda (_) t)))
+      (with-temp-buffer
+        (let ((codex-skill-extra-roots '("~/skills-a" "/tmp/skills-b")))
+          (codex--app-server-send-skill-extra-roots)))
+      (should (equal (car sent) "skills/extraRoots/set"))
+      (let ((roots (alist-get 'extraRoots (cdr sent))))
+        (should (vectorp roots))
+        (should (= 2 (length roots)))
+        (should (file-name-absolute-p (aref roots 0)))
+        (should-not (string-prefix-p "~" (aref roots 0)))))))
+
+(ert-deftest codex-test-app-server-skips-empty-skill-extra-roots ()
+  "Send nothing when no extra skill roots are configured."
+  (let (sent)
+    (cl-letf (((symbol-function 'codex--app-server-send-request)
+               (lambda (&rest _) (setq sent t)))
+              ((symbol-function 'process-live-p) (lambda (_) t)))
+      (with-temp-buffer
+        (let ((codex-skill-extra-roots nil))
+          (codex--app-server-send-skill-extra-roots)))
+      (should-not sent))))

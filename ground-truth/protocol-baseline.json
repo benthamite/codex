@@ -419,7 +419,7 @@
     },
     "skills/extraRoots/set": {
       "note": "works with field 'extraRoots' (not 'roots') and fires skills/changed. NOT a parity gap but a real capability gap in this setup: agent-codex-skill-directories is used only by agent.el's own skill discovery, so skills in those directories are invisible to the Codex agent in an app-server session. Implementing means a codex.el option for extra roots pushed at thread start -- a new feature, so it needs a decision rather than a capture.",
-      "status": "todo"
+      "status": "handled"
     },
     "skills/list": {
       "status": "handled"

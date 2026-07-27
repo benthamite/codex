@@ -20,6 +20,7 @@
 (defvar codex-model)
 (defvar codex-profile)
 (defvar codex-reasoning-effort)
+(defvar codex-skill-extra-roots)
 (defvar codex-sandbox-mode)
 (defvar codex-hooks-config-path)
 (defvar codex--session-transcript-file)
@@ -663,6 +664,7 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
       (codex--record-session-metadata thread-id thread-path)
       (codex--app-server-render-header thread)
       (codex--app-server-request-account)
+      (codex--app-server-send-skill-extra-roots)
       (unless defer-input
         (codex--app-server-setup-input-region)
         (codex--app-server-flush-queued-commands)))))
@@ -1505,6 +1507,23 @@ The CLI's own `/status' panel reports the account as \"EMAIL (Plan)\", which
 `account/read' supplies.  The rest of that panel -- permissions, the
 AGENTS.md path, per-model limits -- is still missing here."
   (codex--app-server-insert-status (codex--app-server-status-text)))
+
+(defun codex--app-server-send-skill-extra-roots ()
+  "Tell the server about `codex-skill-extra-roots'.
+Skills outside the roots the CLI discovers itself are invisible to the
+agent otherwise, even when Emacs knows where they are.  The server expects
+absolute paths under the key `extraRoots', and answers by emitting
+`skills/changed'."
+  (when (and codex-skill-extra-roots
+             (process-live-p codex--app-server-process))
+    (codex--app-server-send-request
+     "skills/extraRoots/set"
+     `((extraRoots . ,(vconcat (mapcar #'expand-file-name
+                                       codex-skill-extra-roots))))
+     (lambda (_result error)
+       (when error
+         (codex--app-server-insert-status
+          (format "Setting skill roots failed: %S" error)))))))
 
 (defun codex--app-server-request-account ()
   "Ask the server which account is active and record it for `/status'.
