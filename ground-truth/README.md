@@ -108,3 +108,13 @@ once means later runs show only what actually changed.
 - `CGT_DIR` must be an initialized git repo; on first run the CLI shows a trust
   prompt which `codex_gt.py` answers with Enter.
 - Image paste: put a PNG on the clipboard first, then use a `key:ctrlv` step.
+
+`CGT_EXTRA` sends arbitrary requests once the turn finishes and traces the
+responses, so one session can capture several request/response methods instead
+of one session each. `{threadId}` in params is replaced with the live thread id;
+`CGT_EXTRA_WAIT` sets the pause between calls (default 4s).
+
+```bash
+CGT_TRACE=1 CGT_EXTRA='[{"method":"thread/read","params":{"threadId":"{threadId}"}}]' \
+  python3 capture_protocol.py "Say ok."
+```

@@ -37,6 +37,11 @@ APPROVAL = os.environ.get("CGT_APPROVAL", "never")
 # you capture the payload a new renderer must be written against.
 TRACE_ONLY = ([m.strip() for m in os.environ["CGT_TRACE_ONLY"].split(",")]
               if os.environ.get("CGT_TRACE_ONLY") else None)
+# CGT_EXTRA is a JSON array of {"method":..., "params":...} sent after the turn
+# finishes, with responses traced. One session can then capture several
+# request/response methods instead of one session each. "{threadId}" anywhere in
+# a params string is replaced with the live thread id.
+EXTRA = json.loads(os.environ["CGT_EXTRA"]) if os.environ.get("CGT_EXTRA") else []
 
 p = subprocess.Popen(["codex", "app-server"], stdin=subprocess.PIPE,
                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -70,6 +75,10 @@ def reader():
         except Exception:
             continue
         meth = m.get("method")
+        if TRACE and meth is None and ("result" in m or "error" in m):
+            print(f"[trace] RESPONSE id={m.get('id')}", file=sys.stderr)
+            body = m.get("result") if "result" in m else m.get("error")
+            print(json.dumps(body, indent=2)[:4000], file=sys.stderr)
         if TRACE and meth and (TRACE_ONLY is None or meth in TRACE_ONLY):
             kind = "REQUEST " if "id" in m else "notify  "
             print(f"[trace] {kind}{meth}", file=sys.stderr)
@@ -106,4 +115,10 @@ send("turn/start", {"threadId": tid[0],
                     "input": [{"type": "text", "text": prompt}],
                     "cwd": CWD, "approvalPolicy": APPROVAL})
 done.wait(timeout=90)
+for call in EXTRA:
+    params = json.loads(json.dumps(call.get("params", {}))
+                        .replace("{threadId}", tid[0] or ""))
+    print(f"[trace] SENDING {call['method']}", file=sys.stderr)
+    send(call["method"], params)
+    time.sleep(float(os.environ.get("CGT_EXTRA_WAIT", "4")))
 print(json.dumps({"items": items, "plans": plans}, indent=2))

@@ -488,8 +488,8 @@
       "status": "handled"
     },
     "thread/loaded/list": {
-      "note": "list loaded threads",
-      "status": "todo"
+      "note": "captured response is only {data:[threadId],nextCursor} -- ids of in-memory threads, no metadata. thread/list already backs the resume picker with full thread objects including preview.",
+      "status": "wont-implement"
     },
     "thread/metadata/update": {
       "note": "rename or retag a thread",
@@ -502,8 +502,8 @@
       "status": "handled"
     },
     "thread/read": {
-      "note": "needed to display a thread without resuming it",
-      "status": "todo"
+      "note": "captured response returns the same thread object thread/list and thread/start already return (id, preview, forkedFromId, historyMode, timestamps). No surface needs a single-thread fetch.",
+      "status": "wont-implement"
     },
     "thread/realtime/closed": {
       "status": "handled"
