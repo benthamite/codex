@@ -95,7 +95,7 @@
       "status": "handled"
     },
     "config/mcpServer/reload": {
-      "note": "reload an MCP server without restarting",
+      "note": "captured response is {} and it succeeds; would back a command to reload an MCP server without restarting the session. Small, no CLI surface captured yet.",
       "status": "todo"
     },
     "config/read": {
@@ -411,14 +411,14 @@
       "status": "wont-implement"
     },
     "skills/changed": {
-      "note": "refresh the skill list when skills change on disk",
-      "status": "todo"
+      "note": "nothing to invalidate: codex.el never caches skills, it calls skills/list with forceReload each time /skills runs. Verified to fire in response to skills/extraRoots/set.",
+      "status": "wont-implement"
     },
     "skills/config/write": {
       "status": "handled"
     },
     "skills/extraRoots/set": {
-      "note": "agent.el supplies extra skill roots; this is the protocol path for it",
+      "note": "works with field 'extraRoots' (not 'roots') and fires skills/changed. NOT a parity gap but a real capability gap in this setup: agent-codex-skill-directories is used only by agent.el's own skill discovery, so skills in those directories are invisible to the Codex agent in an app-server session. Implementing means a codex.el option for extra roots pushed at thread start -- a new feature, so it needs a decision rather than a capture.",
       "status": "todo"
     },
     "skills/list": {
@@ -492,8 +492,8 @@
       "status": "wont-implement"
     },
     "thread/metadata/update": {
-      "note": "rename or retag a thread",
-      "status": "todo"
+      "note": "captured: params take only gitInfo (branch, originUrl, sha) -- it is for a client to report git metadata to the server, not for renaming a thread. Sending {name:...} errors with 'gitInfo must include at least one field'. No Emacs surface needs it.",
+      "status": "wont-implement"
     },
     "thread/name/set": {
       "status": "handled"
