@@ -32,6 +32,23 @@ a git repo with trust pre-handled).
 
 This is the reference image. codex.el's buffer must match this.
 
+`CGT_FRAMES=SECONDS` records a frame that often while waiting and prints every
+distinct screen, not just the last. Transient states — an approval prompt that
+is answered automatically, a two-second review pause, a spinner — are invisible
+to a single final screenshot, and guessing a wait long enough to land inside one
+costs a session per attempt.
+
+Note that `CGT_APPROVAL` defaults to `never`, which makes the CLI *auto-deny*
+approval requests before any prompt renders. Capturing an approval prompt needs
+`CGT_APPROVAL=on-request` as well as whatever config the prompt itself requires:
+
+```bash
+CGT_FRAMES=0.5 CGT_SANDBOX=read-only CGT_APPROVAL=on-request \
+  CGT_CODEX_ARGS="-c approvals_reviewer=user -c features.request_permissions_tool=true" \
+  python3 codex_gt.py --cwd /tmp/codex-gt wait:6 key:esc wait:2 \
+    "send:Write DONE into a new file called perm.txt." key:enter wait:34
+```
+
 ## `capture_protocol.py` — the data codex.el RENDERS from
 
 Drives `codex app-server` through codex.el's handshake and dumps the raw
@@ -143,25 +160,3 @@ Keep override values free of spaces: `CGT_CODEX_ARGS` is split naively.
   prompt which `codex_gt.py` answers with Enter.
 - Image paste: put a PNG on the clipboard first, then use a `key:ctrlv` step.
 - `elicit_server.py` needs the `mcp` package (`pip install mcp`).
-
-No configured MCP server asks the user anything during an ordinary turn, so
-`mcpServer/elicitation/request` cannot be captured without a server that
-provokes one. This is a minimal MCP server whose only tool elicits input.
-
-Register it for the capture only, via `CGT_CODEX_ARGS`, rather than editing
-`~/.codex/config.toml`. Both capture scripts pass that variable through to the
-CLI, so the same override works for the protocol payload and the TUI reference:
-
-```bash
-S=$PWD/elicit_server.py
-OVERRIDE="-c mcp_servers.elicit_probe={command=\"python3\",args=[\"$S\"]}"
-
-CGT_TRACE=1 CGT_CODEX_ARGS="$OVERRIDE" \
-  python3 capture_protocol.py "Call the elicit_probe ask_colour tool."
-
-CGT_CODEX_ARGS="$OVERRIDE" \
-  python3 codex_gt.py --cwd /tmp/codex-gt wait:6 key:esc wait:2 \
-    "send:Call the elicit_probe ask_colour tool." key:enter wait:24
-```
-
-Keep override values free of spaces: `CGT_CODEX_ARGS` is split naively.

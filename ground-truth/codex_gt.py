@@ -80,8 +80,26 @@ def run(scenario, cols=120, rows=40, cwd=None, resume=None):
                 os.write(fd, resp); s += 1
             answered[tag] = s
 
+    def disp():
+        return "\n".join(l.rstrip() for l in sc.display)
+
+    # CGT_FRAMES=SECONDS records a frame that often while waiting, keeping every
+    # distinct screen instead of only the last. Transient states -- a two-second
+    # approval-review pause, a spinner, a prompt that is answered automatically
+    # -- are invisible to a single final screenshot, and guessing a wait long
+    # enough to land inside one wastes a session per attempt.
+    frame_every = float(os.environ.get("CGT_FRAMES", "0") or 0)
+    frames = []
+
+    def snap():
+        if frame_every:
+            cur = disp()
+            if not frames or frames[-1] != cur:
+                frames.append(cur)
+
     def drain(t):
         end = time.time() + t
+        next_frame = time.time() + frame_every if frame_every else None
         while time.time() < end:
             r, _, _ = select.select([fd], [], [], 0.15)
             if r:
@@ -92,9 +110,8 @@ def run(scenario, cols=120, rows=40, cwd=None, resume=None):
                 if not d:
                     return
                 acc.extend(d); st.feed(d); respond()
-
-    def disp():
-        return "\n".join(l.rstrip() for l in sc.display)
+            if next_frame and time.time() >= next_frame:
+                snap(); next_frame = time.time() + frame_every
 
     keys = {"tab": b"\t", "enter": b"\r", "esc": b"\x1b", "up": b"\x1b[A",
             "down": b"\x1b[B", "bs": b"\x7f", "ctrlc": b"\x03",
@@ -113,7 +130,12 @@ def run(scenario, cols=120, rows=40, cwd=None, resume=None):
         elif k == "key":
             os.write(fd, keys[v]); drain(0.3)
     drain(1.5)
+    snap()
     out = disp()
+    if frame_every and frames:
+        out = "\n".join(
+            f"===== frame {i + 1}/{len(frames)}\n{f}"
+            for i, f in enumerate(frames))
     try:
         os.write(fd, b"\x03"); time.sleep(0.2); os.write(fd, b"\x03")
     except OSError:

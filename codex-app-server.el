@@ -3371,7 +3371,75 @@ when it follows the item bullet, which precedes START on the same line."
              :responder #'codex--app-server-elicitation-response))
       ("item/tool/requestUserInput"
        (list :ask (lambda () (codex--app-server-answer-user-input params))))
+      ("item/permissions/requestApproval"
+       (list :ask (lambda () (codex--app-server-grant-permissions params))))
       (_ nil))))
+
+(defconst codex--app-server-permission-choices
+  '((?y "Yes, grant these permissions for this turn" turn nil)
+    (?r "Yes, grant for this turn with strict auto review" turn t)
+    (?a "Yes, grant these permissions for this session" session nil)
+    (?d "No, continue without permissions" nil nil))
+  "Permission-grant choices, worded and keyed as the CLI words and keys them.
+Each entry is (CHAR LABEL SCOPE STRICT-AUTO-REVIEW); a nil SCOPE denies.
+Captured from the CLI's own prompt.")
+
+(defun codex--app-server-grant-permissions (params)
+  "Ask whether to grant the permissions requested in PARAMS.
+Codex sends this when it wants access the sandbox denies it.  The reply is
+not a decision but a granted profile: you return the subset you allow, so
+denying means returning an empty profile.  Granting echoes back exactly
+what was asked for, since narrowing it silently would leave the agent
+believing it had access it does not have.
+
+Captured CLI prompt:
+
+  Would you like to grant these permissions?
+  Environment: local
+  Reason: Create the requested file with the exact text DONE.
+  Permission rule: write `/private/tmp/codex-gt/perm-tui2.txt`
+  1. Yes, grant these permissions for this turn (y)
+  2. Yes, grant for this turn with strict auto review (r)
+  3. Yes, grant these permissions for this session (a)
+  4. No, continue without permissions (d)"
+  (let* ((chosen (read-multiple-choice
+                  (codex--app-server-permission-prompt params)
+                  (mapcar (lambda (c) (list (nth 0 c) (nth 1 c)))
+                          codex--app-server-permission-choices)))
+         (entry (assq (car chosen) codex--app-server-permission-choices))
+         (scope (nth 2 entry))
+         (strict (nth 3 entry)))
+    (append
+     `((permissions . ,(if scope (alist-get 'permissions params) '())))
+     (when scope `((scope . ,(symbol-name scope))))
+     (when strict '((strictAutoReview . t))))))
+
+(defun codex--app-server-permission-prompt (params)
+  "Return the prompt describing the permissions requested in PARAMS."
+  (let ((reason (alist-get 'reason params))
+        (environment (alist-get 'environmentId params))
+        (rules (codex--app-server-permission-rules
+                (alist-get 'permissions params))))
+    (concat "Grant these permissions?"
+            (when environment (format " [%s]" environment))
+            (when reason (format " %s" reason))
+            (when rules (format " (%s)" rules)))))
+
+(defun codex--app-server-permission-rules (permissions)
+  "Return a human-readable summary of the requested PERMISSIONS, or nil."
+  (let* ((filesystem (alist-get 'fileSystem permissions))
+         (network (alist-get 'network permissions))
+         (entries (append (alist-get 'entries filesystem) nil))
+         (rules (mapcar #'codex--app-server-permission-entry-rule entries)))
+    (when (eq (alist-get 'enabled network) t)
+      (setq rules (append rules '("network access"))))
+    (when rules (string-join (delq nil rules) ", "))))
+
+(defun codex--app-server-permission-entry-rule (entry)
+  "Return \"ACCESS PATH\" for a filesystem permission ENTRY."
+  (when-let* ((access (alist-get 'access entry))
+              (path (alist-get 'path (alist-get 'path entry))))
+    (format "%s %s" access path)))
 
 (defun codex--app-server-answer-user-input (params)
   "Ask the questions in PARAMS and return the answers response body.

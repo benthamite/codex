@@ -5003,3 +5003,78 @@ Schema shape (NOT captured -- triggering it needs a real login or logout):
     (setq-local codex--app-server-account nil)
     (codex--app-server-account-updated '((planType . "pro")))
     (should (equal (alist-get 'planType codex--app-server-account) "pro"))))
+
+(defconst codex-test--permission-request
+  '((threadId . "t") (turnId . "u") (itemId . "call_1")
+    (environmentId . "local") (startedAtMs . 1785176212883)
+    (cwd . "/tmp/codex-gt")
+    (reason . "Create the requested file with the exact text DONE.")
+    (permissions . ((network . nil)
+                    (fileSystem . ((read . nil)
+                                   (write . ["/tmp/codex-gt/perm.txt"])
+                                   (entries . [((path . ((type . "path")
+                                                         (path . "/tmp/codex-gt/perm.txt")))
+                                                (access . "write"))]))))))
+  "Captured item/permissions/requestApproval params, used by the tests below.")
+
+(ert-deftest codex-test-app-server-permission-choices-match-cli ()
+  "Offer the CLI's four grant choices, with its keys and wording.
+Captured CLI prompt keys: y turn, r turn with strict auto review,
+a session, d deny."
+  (should (equal (mapcar #'car codex--app-server-permission-choices)
+                 '(?y ?r ?a ?d)))
+  (should (equal (mapcar (lambda (c) (nth 2 c))
+                         codex--app-server-permission-choices)
+                 '(turn turn session nil))))
+
+(ert-deftest codex-test-app-server-permission-grant-echoes-request ()
+  "Grant exactly what was asked for, with the chosen scope.
+The reply carries no decision field: you return the subset you allow, so
+narrowing it silently would leave the agent thinking it had access it does
+not have."
+  (cl-letf (((symbol-function 'read-multiple-choice)
+             (lambda (&rest _) (list ?y "turn"))))
+    (let ((reply (codex--app-server-grant-permissions
+                  codex-test--permission-request)))
+      (should (equal (alist-get 'scope reply) "turn"))
+      (should-not (alist-get 'strictAutoReview reply))
+      (should (equal (alist-get 'permissions reply)
+                     (alist-get 'permissions codex-test--permission-request))))))
+
+(ert-deftest codex-test-app-server-permission-deny-grants-nothing ()
+  "Deny by returning an empty profile and no scope."
+  (cl-letf (((symbol-function 'read-multiple-choice)
+             (lambda (&rest _) (list ?d "no"))))
+    (let ((reply (codex--app-server-grant-permissions
+                  codex-test--permission-request)))
+      (should (equal (alist-get 'permissions reply) '()))
+      (should-not (assq 'scope reply)))))
+
+(ert-deftest codex-test-app-server-permission-session-and-strict ()
+  "Send session scope for `a', and strict auto review for `r'."
+  (cl-letf (((symbol-function 'read-multiple-choice)
+             (lambda (&rest _) (list ?a "session"))))
+    (should (equal (alist-get 'scope (codex--app-server-grant-permissions
+                                      codex-test--permission-request))
+                   "session")))
+  (cl-letf (((symbol-function 'read-multiple-choice)
+             (lambda (&rest _) (list ?r "strict"))))
+    (let ((reply (codex--app-server-grant-permissions
+                  codex-test--permission-request)))
+      (should (equal (alist-get 'scope reply) "turn"))
+      (should (eq (alist-get 'strictAutoReview reply) t)))))
+
+(ert-deftest codex-test-app-server-permission-prompt-describes-request ()
+  "Name the environment, reason and requested rule in the prompt.
+The CLI shows Environment, Reason and Permission rule lines."
+  (let ((prompt (codex--app-server-permission-prompt
+                 codex-test--permission-request)))
+    (should (string-match-p "local" prompt))
+    (should (string-match-p "exact text DONE" prompt))
+    (should (string-match-p "write /tmp/codex-gt/perm\\.txt" prompt))))
+
+(ert-deftest codex-test-app-server-permission-rules-include-network ()
+  "Summarise a network request as network access."
+  (should (equal (codex--app-server-permission-rules
+                  '((network . ((enabled . t)))))
+                 "network access")))

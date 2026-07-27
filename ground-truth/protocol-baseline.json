@@ -228,8 +228,8 @@
       "status": "wont-implement"
     },
     "item/autoApprovalReview/started": {
-      "note": "the only signal of the 2.0-2.5s pause while auto-review runs (measured 2484ms, 1983ms). Real everyday traffic here, since ~/.codex/config.toml sets approvals_reviewer = auto_review. Payload captured. Needs a screen capture to know how the CLI shows the pause.",
-      "status": "todo"
+      "note": "only signals the 2-second pause while auto-review runs; the outcome is already rendered, since every review also emits guardianWarning, which codex.el shows as a status line with risk and authorization. Added CGT_FRAMES to codex_gt.py to sample the screen every N seconds and tried to catch the pause; no review indicator appeared in the frames, so there is no captured rendering to mirror. Recorded as not observed rather than invented.",
+      "status": "wont-implement"
     },
     "item/commandExecution/outputDelta": {
       "note": "the CLI does not display streaming command output. Captured twice: during a 14s sleep it showed only its Working status line, and for an interactive python3 it showed '\u21b3 Interacted with background terminal \u00b7 python3' plus the stdin, never the streamed output. The gap those deltas hinted at -- an interactive command rendering nothing, because it never sends item/completed -- is closed by handling terminalInteraction instead. Streaming here would also double-render, since concatenated deltas are byte-identical to the completed item's aggregatedOutput.",
@@ -261,8 +261,8 @@
       "status": "wont-implement"
     },
     "item/permissions/requestApproval": {
-      "note": "FIRES, payload captured, but needs two non-default gates: -c features.request_permissions_tool=true plus approvalsReviewer 'user' (this config's auto_review silently approves it). Reply has no decision field -- you grant by returning the subset you allow, confirmed by deliberately mis-granting. CLI's TUI rendering NOT captured; codex_gt.py cannot set approvalsReviewer.",
-      "status": "todo"
+      "note": "captured CLI prompt: 'Would you like to grant these permissions?' with Environment, Reason and Permission rule lines, and four keyed choices -- y turn, r turn with strict auto review, a session, d deny. Those map onto the reply's scope and strictAutoReview. The reply carries no decision: granting echoes the requested profile back, denying returns an empty one. Capturing it needed CGT_APPROVAL=on-request (the harness default 'never' auto-denies before any prompt) plus -c approvals_reviewer=user and -c features.request_permissions_tool=true.",
+      "status": "handled"
     },
     "item/plan/delta": {
       "note": "belongs to plan mode, which an app-server client cannot enter in 0.145.0: the only schema entry point (CollaborationMode) is referenced by no request. turn/plan/updated, already handled, covers the update_plan checklist. Zero events including with -c collaboration_mode=plan.",
