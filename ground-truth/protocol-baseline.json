@@ -425,15 +425,15 @@
       "status": "handled"
     },
     "thread/approveGuardianDeniedAction": {
-      "note": "approval surface",
-      "status": "todo"
+      "note": "blocked: params require echoing back a GuardianAssessmentEvent, which the schema leaves untyped ('Serialized codex_protocol::protocol::GuardianAssessmentEvent'). Probing walked serde errors (missing id, then status, then a source nested in action) without reconstructing it. It can only be answered with an event codex.el received, and no guardian denial could be provoked to capture one.",
+      "status": "wont-implement"
     },
     "thread/archive": {
       "status": "handled"
     },
     "thread/archived": {
-      "note": "confirmation notification; refresh the thread list",
-      "status": "todo"
+      "note": "emits {threadId} right after the thread/archive response. Redundant for codex.el's own /archive, which already reports from the response. Only value would be an archive performed by another client, and there is no cached thread list to refresh -- /resume re-queries thread/list every time.",
+      "status": "wont-implement"
     },
     "thread/closed": {
       "note": "thread closed elsewhere",
@@ -449,8 +449,8 @@
       "status": "handled"
     },
     "thread/deleted": {
-      "note": "confirmation notification; refresh the thread list",
-      "status": "todo"
+      "note": "emits {threadId} after the thread/delete response; /delete already reports from the response. Same reasoning as thread/archived.",
+      "status": "wont-implement"
     },
     "thread/environment/connected": {
       "note": "cloud environments are not used from Emacs",
@@ -465,7 +465,7 @@
     },
     "thread/goal/clear": {
       "note": "goal is partly handled; cleared is, clear is not",
-      "status": "todo"
+      "status": "handled"
     },
     "thread/goal/cleared": {
       "status": "handled"
@@ -535,8 +535,8 @@
       "status": "handled"
     },
     "thread/rollback": {
-      "note": "user-visible undo",
-      "status": "todo"
+      "note": "schema says verbatim 'DEPRECATED: thread/rollback will be removed soon', and it only edits thread history without reverting files the agent wrote. codex.el has no undo surface; building one on a method upstream is removing would be wasted.",
+      "status": "wont-implement"
     },
     "thread/settings/updated": {
       "note": "could not trigger: thread/settings/update from this client returns {} and emits no notification, so it appears to exist for out-of-band changes (another client or remote control) that a single Emacs client will not see. Not observed here, so not implemented rather than guessed.",
@@ -560,11 +560,11 @@
     },
     "thread/unarchive": {
       "note": "archive is handled, unarchive is not",
-      "status": "todo"
+      "status": "handled"
     },
     "thread/unarchived": {
-      "note": "confirmation notification; refresh the thread list",
-      "status": "todo"
+      "note": "emits {threadId} after the thread/unarchive response; /unarchive already reports from the response. Same reasoning as thread/archived.",
+      "status": "wont-implement"
     },
     "thread/unsubscribe": {
       "note": "protocol bookkeeping",

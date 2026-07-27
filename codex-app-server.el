@@ -592,6 +592,9 @@ This lets optional fields and protocol booleans flow naturally through
         ("thread/goal/updated"
          (when-let* ((goal (alist-get 'goal params)))
            (codex--app-server-insert-status (format "Goal: %s" goal))))
+        ;; Deliberately silent: the server sends this during resume, where a
+        ;; status line is startup noise. `/goal-clear' reports from the
+        ;; response instead, so a user-initiated clear is still confirmed.
         ("thread/goal/cleared" nil)
         ("thread/status/changed"
          (codex--app-server-thread-status-changed params))
@@ -836,6 +839,8 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
           (format "Thread renamed: %s" name))))
       ("/archive" (codex--app-server-thread-request
                    "thread/archive" nil "Thread archived"))
+      ("/unarchive" (codex--app-server-unarchive-thread))
+      ("/goal-clear" (codex--app-server-clear-goal))
       ("/memories" (let ((mode (completing-read "Memory mode: "
                                                 '("enabled" "disabled") nil t)))
                      (codex--app-server-thread-request
@@ -1452,6 +1457,62 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
   (when (yes-or-no-p "Permanently delete this Codex thread? ")
     (codex--app-server-thread-request
      "thread/delete" nil "Thread deleted")))
+
+(defun codex--app-server-unarchive-thread ()
+  "Pick an archived thread and unarchive it.
+`thread/list' returns only unarchived threads by default, so `/resume'
+never offers an archived one: archiving used to be a one-way trip out of
+the resume picker with nothing in codex.el able to reverse it."
+  (codex--app-server-send-request
+   "thread/list"
+   `((cwd . ,codex--buffer-directory)
+     (limit . 30)
+     (archived . t)
+     (sortKey . "updated_at")
+     (sortDirection . "desc"))
+   (lambda (result error)
+     (cond
+      (error (codex--app-server-insert-status
+              (format "Archived thread list failed: %S" error)))
+      ((null (append (alist-get 'data result) nil))
+       (codex--app-server-insert-status "No archived Codex threads found"))
+      (t (codex--app-server-prompt-unarchive (alist-get 'data result)))))))
+
+(defun codex--app-server-prompt-unarchive (threads)
+  "Prompt to pick one of THREADS and unarchive it."
+  (let* ((choices (mapcar (lambda (thread)
+                            (cons (codex--app-server-thread-label thread) thread))
+                          (append threads nil)))
+         (selection (completing-read "Unarchive thread: " choices nil t))
+         (thread (cdr (assoc selection choices))))
+    (when-let* ((id (alist-get 'id thread)))
+      (codex--app-server-send-request
+       "thread/unarchive" `((threadId . ,id))
+       (lambda (_result error)
+         (codex--app-server-insert-status
+          (if error (format "Unarchive failed: %S" error)
+            (format "Thread unarchived: %s" id))))))))
+
+(defun codex--app-server-clear-goal ()
+  "Clear this thread's goal.
+The server answers with whether a goal was actually cleared, so nothing is
+reported as cleared when none was set."
+  (codex--app-server-thread-request-with
+   "thread/goal/clear" nil
+   (lambda (result)
+     (if (eq (alist-get 'cleared result) t) "Goal cleared" "No goal was set"))))
+
+(defun codex--app-server-thread-request-with (method extra describe)
+  "Send thread request METHOD with EXTRA, reporting (DESCRIBE RESULT)."
+  (if codex--app-server-thread-id
+      (codex--app-server-send-request
+       method
+       (cons `(threadId . ,codex--app-server-thread-id) extra)
+       (lambda (result error)
+         (codex--app-server-insert-status
+          (if error (format "%s failed: %S" method error)
+            (funcall describe result)))))
+    (message "No active Codex thread")))
 
 (defun codex--app-server-thread-request (method extra ok-message)
   "Send thread request METHOD with EXTRA params, reporting OK-MESSAGE on success."
@@ -2091,9 +2152,10 @@ END is updated to the new end of the replaced region."
 (defconst codex--app-server-slash-commands
   '("/apps" "/archive" "/clear" "/compact" "/copy" "/debug-config" "/delete"
     "/diff" "/exit" "/experimental" "/fast" "/feedback" "/fork" "/goal"
-    "/hooks" "/init" "/logout" "/mcp" "/memories" "/mention" "/model" "/new"
-    "/permissions" "/personality" "/plugins" "/ps" "/quit" "/raw" "/rename"
-    "/resume" "/review" "/skills" "/status" "/stop" "/usage")
+    "/goal-clear" "/hooks" "/init" "/logout" "/mcp" "/memories" "/mention"
+    "/model" "/new" "/permissions" "/personality" "/plugins" "/ps" "/quit"
+    "/raw" "/rename" "/resume" "/review" "/skills" "/status" "/stop"
+    "/unarchive" "/usage")
   "Slash commands recognized by the app-server backend, used for completion.
 Contains only Codex operations implemented with equivalent app-server
 requests or frontend actions with the same user-visible effect.")

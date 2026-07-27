@@ -4762,3 +4762,50 @@ emits skills/changed."
         (let ((codex-skill-extra-roots nil))
           (codex--app-server-send-skill-extra-roots)))
       (should-not sent))))
+
+(ert-deftest codex-test-app-server-unarchive-lists-archived-threads ()
+  "Ask for archived threads when unarchiving.
+`thread/list' returns only unarchived threads unless `archived' is set, so
+without it `/unarchive' would offer exactly the threads that do not need
+unarchiving -- and `/resume' would never see an archived one again."
+  (let (sent)
+    (cl-letf (((symbol-function 'codex--app-server-send-request)
+               (lambda (method params &rest _) (setq sent (cons method params)))))
+      (with-temp-buffer
+        (setq-local codex--buffer-directory "/tmp/x")
+        (codex--app-server-unarchive-thread))
+      (should (equal (car sent) "thread/list"))
+      (should (eq (alist-get 'archived (cdr sent)) t)))))
+
+(ert-deftest codex-test-app-server-unarchive-reports-empty-list ()
+  "Say so when there is nothing archived, instead of prompting."
+  (cl-letf (((symbol-function 'codex--app-server-send-request)
+             (lambda (_m _p callback) (funcall callback '((data . [])) nil)))
+            ((symbol-function 'completing-read)
+             (lambda (&rest _) (error "should not prompt"))))
+    (with-temp-buffer
+      (rename-buffer "*codex:/tmp/app-server-unarch/*" t)
+      (codex--app-server-setup-input-region)
+      (codex--app-server-unarchive-thread)
+      (should (string-match-p "No archived Codex threads found"
+                              (buffer-string))))))
+
+(ert-deftest codex-test-app-server-goal-clear-reports-server-answer ()
+  "Report whether a goal was actually cleared, from the response.
+Captured response is (:cleared BOOL): false when no goal was set."
+  (cl-letf (((symbol-function 'codex--app-server-send-request)
+             (lambda (_m _p callback) (funcall callback '((cleared . :false)) nil))))
+    (with-temp-buffer
+      (rename-buffer "*codex:/tmp/app-server-goal1/*" t)
+      (codex--app-server-setup-input-region)
+      (setq-local codex--app-server-thread-id "t")
+      (codex--app-server-clear-goal)
+      (should (string-match-p "No goal was set" (buffer-string)))))
+  (cl-letf (((symbol-function 'codex--app-server-send-request)
+             (lambda (_m _p callback) (funcall callback '((cleared . t)) nil))))
+    (with-temp-buffer
+      (rename-buffer "*codex:/tmp/app-server-goal2/*" t)
+      (codex--app-server-setup-input-region)
+      (setq-local codex--app-server-thread-id "t")
+      (codex--app-server-clear-goal)
+      (should (string-match-p "Goal cleared" (buffer-string))))))
