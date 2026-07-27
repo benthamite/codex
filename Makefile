@@ -9,7 +9,10 @@ LOAD_PATH := -L "$(CURDIR)" \
              -L "$(DEPS_DIR)cond-let" \
              $(LOAD_PATH_EXTRA)
 
-.PHONY: test compile clean
+.PHONY: test compile clean protocol-coverage
+
+protocol-coverage:
+	python3 ground-truth/protocol_coverage.py
 
 test:
 	$(EMACS) -Q --batch $(LOAD_PATH) \

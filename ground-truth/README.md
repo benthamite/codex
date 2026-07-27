@@ -44,6 +44,33 @@ python3 capture_protocol.py "Change four to FOUR on line 4 of lines.txt" fileCha
 Use this to build renderers against real payload shapes (e.g. the unified-diff
 text in a `fileChange`, the `commandActions` of a read), not guessed ones.
 
+## `protocol_coverage.py` — what Codex offers that codex.el ignores
+
+`codex-app-server.el` reimplements the client rather than hosting the CLI's own
+TUI, so unlike `codex-eat.el` and `codex-vterm.el` it inherits nothing when
+Codex ships a feature. A new protocol method is a feature that exists in Codex
+and silently does not exist here. This script asks the installed CLI for its
+protocol schema, extracts every JSON-RPC method, and diffs that against a
+reviewed baseline in `protocol-baseline.json`.
+
+```bash
+make protocol-coverage          # or: python3 ground-truth/protocol_coverage.py
+python3 ground-truth/protocol_coverage.py --update   # after triaging
+```
+
+Run it after every Codex upgrade. It exits non-zero when the protocol gained or
+lost methods, so it can gate a target.
+
+This finds **candidates, not parity**. A method in the schema tells you it
+exists, not what the CLI does with it, and a method counted as handled may still
+render wrongly — the check is a name match against the source. Anything it
+surfaces still goes through the workflow below before you can claim it works.
+
+Each method carries a decision in the baseline, so the report stays short. Set
+`status` by hand to `handled` (detected automatically), `wont-implement` (with a
+`note` saying why), or `todo`. Everything starts as `unreviewed`; triaging those
+once means later runs show only what actually changed.
+
 ## Workflow
 
 1. `codex_gt.py` → capture what the CLI displays for the interaction.

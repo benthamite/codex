@@ -1,0 +1,515 @@
+{
+  "codex_version": "codex-cli 0.145.0",
+  "methods": {
+    "account/chatgptAuthTokens/refresh": {
+      "status": "unreviewed"
+    },
+    "account/login/cancel": {
+      "status": "unreviewed"
+    },
+    "account/login/completed": {
+      "status": "unreviewed"
+    },
+    "account/login/start": {
+      "status": "unreviewed"
+    },
+    "account/logout": {
+      "status": "handled"
+    },
+    "account/rateLimitResetCredit/consume": {
+      "status": "unreviewed"
+    },
+    "account/rateLimits/read": {
+      "status": "handled"
+    },
+    "account/rateLimits/updated": {
+      "status": "handled"
+    },
+    "account/read": {
+      "status": "unreviewed"
+    },
+    "account/sendAddCreditsNudgeEmail": {
+      "status": "unreviewed"
+    },
+    "account/updated": {
+      "status": "unreviewed"
+    },
+    "account/usage/read": {
+      "status": "handled"
+    },
+    "account/workspaceMessages/read": {
+      "status": "unreviewed"
+    },
+    "app/installed": {
+      "status": "unreviewed"
+    },
+    "app/list": {
+      "status": "handled"
+    },
+    "app/list/updated": {
+      "status": "unreviewed"
+    },
+    "app/read": {
+      "status": "unreviewed"
+    },
+    "applyPatchApproval": {
+      "status": "handled"
+    },
+    "attestation/generate": {
+      "status": "unreviewed"
+    },
+    "command/exec": {
+      "status": "unreviewed"
+    },
+    "command/exec/outputDelta": {
+      "status": "unreviewed"
+    },
+    "command/exec/resize": {
+      "status": "unreviewed"
+    },
+    "command/exec/terminate": {
+      "status": "unreviewed"
+    },
+    "command/exec/write": {
+      "status": "unreviewed"
+    },
+    "config/batchWrite": {
+      "status": "handled"
+    },
+    "config/mcpServer/reload": {
+      "status": "unreviewed"
+    },
+    "config/read": {
+      "status": "handled"
+    },
+    "config/value/write": {
+      "status": "handled"
+    },
+    "configRequirements/read": {
+      "status": "unreviewed"
+    },
+    "configWarning": {
+      "status": "handled"
+    },
+    "deprecationNotice": {
+      "status": "handled"
+    },
+    "error": {
+      "status": "handled"
+    },
+    "execCommandApproval": {
+      "status": "handled"
+    },
+    "experimentalFeature/enablement/set": {
+      "status": "handled"
+    },
+    "experimentalFeature/list": {
+      "status": "handled"
+    },
+    "externalAgentConfig/detect": {
+      "status": "unreviewed"
+    },
+    "externalAgentConfig/import": {
+      "status": "unreviewed"
+    },
+    "externalAgentConfig/import/completed": {
+      "status": "unreviewed"
+    },
+    "externalAgentConfig/import/progress": {
+      "status": "unreviewed"
+    },
+    "externalAgentConfig/import/readHistories": {
+      "status": "unreviewed"
+    },
+    "feedback/upload": {
+      "status": "handled"
+    },
+    "fs/changed": {
+      "status": "unreviewed"
+    },
+    "fs/copy": {
+      "status": "unreviewed"
+    },
+    "fs/createDirectory": {
+      "status": "unreviewed"
+    },
+    "fs/getMetadata": {
+      "status": "unreviewed"
+    },
+    "fs/readDirectory": {
+      "status": "unreviewed"
+    },
+    "fs/readFile": {
+      "status": "unreviewed"
+    },
+    "fs/remove": {
+      "status": "unreviewed"
+    },
+    "fs/unwatch": {
+      "status": "unreviewed"
+    },
+    "fs/watch": {
+      "status": "unreviewed"
+    },
+    "fs/writeFile": {
+      "status": "unreviewed"
+    },
+    "fuzzyFileSearch": {
+      "status": "unreviewed"
+    },
+    "fuzzyFileSearch/sessionCompleted": {
+      "status": "unreviewed"
+    },
+    "fuzzyFileSearch/sessionUpdated": {
+      "status": "unreviewed"
+    },
+    "guardianWarning": {
+      "status": "handled"
+    },
+    "hook/completed": {
+      "status": "handled"
+    },
+    "hook/started": {
+      "status": "handled"
+    },
+    "hooks/list": {
+      "status": "handled"
+    },
+    "initialize": {
+      "status": "handled"
+    },
+    "initialized": {
+      "status": "unreviewed"
+    },
+    "item/agentMessage/delta": {
+      "status": "handled"
+    },
+    "item/autoApprovalReview/completed": {
+      "status": "unreviewed"
+    },
+    "item/autoApprovalReview/started": {
+      "status": "unreviewed"
+    },
+    "item/commandExecution/outputDelta": {
+      "status": "unreviewed"
+    },
+    "item/commandExecution/requestApproval": {
+      "status": "handled"
+    },
+    "item/commandExecution/terminalInteraction": {
+      "status": "unreviewed"
+    },
+    "item/completed": {
+      "status": "handled"
+    },
+    "item/fileChange/outputDelta": {
+      "status": "unreviewed"
+    },
+    "item/fileChange/patchUpdated": {
+      "status": "unreviewed"
+    },
+    "item/fileChange/requestApproval": {
+      "status": "handled"
+    },
+    "item/mcpToolCall/progress": {
+      "status": "unreviewed"
+    },
+    "item/permissions/requestApproval": {
+      "status": "unreviewed"
+    },
+    "item/plan/delta": {
+      "status": "unreviewed"
+    },
+    "item/reasoning/summaryPartAdded": {
+      "status": "handled"
+    },
+    "item/reasoning/summaryTextDelta": {
+      "status": "handled"
+    },
+    "item/reasoning/textDelta": {
+      "status": "unreviewed"
+    },
+    "item/started": {
+      "status": "unreviewed"
+    },
+    "item/tool/call": {
+      "status": "unreviewed"
+    },
+    "item/tool/requestUserInput": {
+      "status": "unreviewed"
+    },
+    "marketplace/add": {
+      "status": "unreviewed"
+    },
+    "marketplace/remove": {
+      "status": "unreviewed"
+    },
+    "marketplace/upgrade": {
+      "status": "unreviewed"
+    },
+    "mcpServer/elicitation/request": {
+      "status": "unreviewed"
+    },
+    "mcpServer/oauth/login": {
+      "status": "unreviewed"
+    },
+    "mcpServer/oauthLogin/completed": {
+      "status": "unreviewed"
+    },
+    "mcpServer/resource/read": {
+      "status": "unreviewed"
+    },
+    "mcpServer/startupStatus/updated": {
+      "status": "handled"
+    },
+    "mcpServer/tool/call": {
+      "status": "unreviewed"
+    },
+    "mcpServerStatus/list": {
+      "status": "handled"
+    },
+    "model/list": {
+      "status": "handled"
+    },
+    "model/rerouted": {
+      "status": "handled"
+    },
+    "model/safetyBuffering/updated": {
+      "status": "unreviewed"
+    },
+    "model/verification": {
+      "status": "unreviewed"
+    },
+    "modelProvider/capabilities/read": {
+      "status": "unreviewed"
+    },
+    "permissionProfile/list": {
+      "status": "handled"
+    },
+    "plugin/install": {
+      "status": "handled"
+    },
+    "plugin/installed": {
+      "status": "unreviewed"
+    },
+    "plugin/list": {
+      "status": "handled"
+    },
+    "plugin/read": {
+      "status": "unreviewed"
+    },
+    "plugin/share/checkout": {
+      "status": "unreviewed"
+    },
+    "plugin/share/delete": {
+      "status": "unreviewed"
+    },
+    "plugin/share/list": {
+      "status": "unreviewed"
+    },
+    "plugin/share/save": {
+      "status": "unreviewed"
+    },
+    "plugin/share/updateTargets": {
+      "status": "unreviewed"
+    },
+    "plugin/skill/read": {
+      "status": "unreviewed"
+    },
+    "plugin/uninstall": {
+      "status": "handled"
+    },
+    "process/exited": {
+      "status": "unreviewed"
+    },
+    "process/outputDelta": {
+      "status": "unreviewed"
+    },
+    "remoteControl/status/changed": {
+      "status": "unreviewed"
+    },
+    "review/start": {
+      "status": "unreviewed"
+    },
+    "serverRequest/resolved": {
+      "status": "unreviewed"
+    },
+    "skills/changed": {
+      "status": "unreviewed"
+    },
+    "skills/config/write": {
+      "status": "handled"
+    },
+    "skills/extraRoots/set": {
+      "status": "unreviewed"
+    },
+    "skills/list": {
+      "status": "handled"
+    },
+    "thread/approveGuardianDeniedAction": {
+      "status": "unreviewed"
+    },
+    "thread/archive": {
+      "status": "handled"
+    },
+    "thread/archived": {
+      "status": "unreviewed"
+    },
+    "thread/closed": {
+      "status": "unreviewed"
+    },
+    "thread/compact/start": {
+      "status": "handled"
+    },
+    "thread/compacted": {
+      "status": "handled"
+    },
+    "thread/delete": {
+      "status": "handled"
+    },
+    "thread/deleted": {
+      "status": "unreviewed"
+    },
+    "thread/environment/connected": {
+      "status": "unreviewed"
+    },
+    "thread/environment/disconnected": {
+      "status": "unreviewed"
+    },
+    "thread/fork": {
+      "status": "handled"
+    },
+    "thread/goal/clear": {
+      "status": "unreviewed"
+    },
+    "thread/goal/cleared": {
+      "status": "handled"
+    },
+    "thread/goal/get": {
+      "status": "unreviewed"
+    },
+    "thread/goal/set": {
+      "status": "handled"
+    },
+    "thread/goal/updated": {
+      "status": "handled"
+    },
+    "thread/inject_items": {
+      "status": "unreviewed"
+    },
+    "thread/list": {
+      "status": "handled"
+    },
+    "thread/loaded/list": {
+      "status": "unreviewed"
+    },
+    "thread/metadata/update": {
+      "status": "unreviewed"
+    },
+    "thread/name/set": {
+      "status": "handled"
+    },
+    "thread/name/updated": {
+      "status": "handled"
+    },
+    "thread/read": {
+      "status": "unreviewed"
+    },
+    "thread/realtime/closed": {
+      "status": "handled"
+    },
+    "thread/realtime/error": {
+      "status": "handled"
+    },
+    "thread/realtime/itemAdded": {
+      "status": "handled"
+    },
+    "thread/realtime/outputAudio/delta": {
+      "status": "unreviewed"
+    },
+    "thread/realtime/sdp": {
+      "status": "unreviewed"
+    },
+    "thread/realtime/started": {
+      "status": "handled"
+    },
+    "thread/realtime/transcript/delta": {
+      "status": "handled"
+    },
+    "thread/realtime/transcript/done": {
+      "status": "handled"
+    },
+    "thread/resume": {
+      "status": "handled"
+    },
+    "thread/rollback": {
+      "status": "unreviewed"
+    },
+    "thread/settings/updated": {
+      "status": "unreviewed"
+    },
+    "thread/shellCommand": {
+      "status": "handled"
+    },
+    "thread/start": {
+      "status": "handled"
+    },
+    "thread/started": {
+      "status": "handled"
+    },
+    "thread/status/changed": {
+      "status": "unreviewed"
+    },
+    "thread/tokenUsage/updated": {
+      "status": "handled"
+    },
+    "thread/unarchive": {
+      "status": "unreviewed"
+    },
+    "thread/unarchived": {
+      "status": "unreviewed"
+    },
+    "thread/unsubscribe": {
+      "status": "unreviewed"
+    },
+    "turn/completed": {
+      "status": "handled"
+    },
+    "turn/diff/updated": {
+      "status": "unreviewed"
+    },
+    "turn/interrupt": {
+      "status": "handled"
+    },
+    "turn/moderationMetadata": {
+      "status": "unreviewed"
+    },
+    "turn/plan/updated": {
+      "status": "handled"
+    },
+    "turn/start": {
+      "status": "handled"
+    },
+    "turn/started": {
+      "status": "handled"
+    },
+    "turn/steer": {
+      "status": "handled"
+    },
+    "warning": {
+      "status": "handled"
+    },
+    "windows/worldWritableWarning": {
+      "status": "handled"
+    },
+    "windowsSandbox/readiness": {
+      "status": "unreviewed"
+    },
+    "windowsSandbox/setupCompleted": {
+      "status": "unreviewed"
+    },
+    "windowsSandbox/setupStart": {
+      "status": "unreviewed"
+    }
+  }
+}
