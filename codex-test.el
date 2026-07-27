@@ -4929,3 +4929,50 @@ The captured pair had a second event with stdin \"\"."
        (params (itemId . "i9") (processId . "1") (stdin . "print(1)\n"))))
     (should (string-match-p "terminal · python3" (buffer-string)))
     (should (string-match-p "print(1)" (buffer-string)))))
+
+(ert-deftest codex-test-app-server-apps-updated-records-snapshot ()
+  "Record the app snapshot the server pushes, replacing any earlier one.
+Captured: app/list/updated carries {data: [AppInfo]} unpaginated -- 2388
+entries in one notification -- and arrives immediately, while the paginated
+app/list response took over twenty seconds."
+  (with-temp-buffer
+    (codex--app-server-apps-updated
+     '((data . [((id . "a") (name . "Alpha"))])))
+    (should (= 1 (length codex--app-server-apps)))
+    (codex--app-server-apps-updated
+     '((data . [((id . "b") (name . "Beta")) ((id . "c") (name . "Gamma"))])))
+    (should (= 2 (length codex--app-server-apps)))
+    (should (equal (alist-get 'name (car codex--app-server-apps)) "Beta"))))
+
+(ert-deftest codex-test-app-server-apps-uses-snapshot-without-request ()
+  "Serve /apps from the pushed snapshot instead of waiting on app/list."
+  (let (requested chosen)
+    (cl-letf (((symbol-function 'codex--app-server-send-request)
+               (lambda (&rest _) (setq requested t)))
+              ((symbol-function 'codex--app-server-choose-app)
+               (lambda (apps) (setq chosen apps))))
+      (with-temp-buffer
+        (setq-local codex--app-server-apps '(((id . "a") (name . "Alpha"))))
+        (codex--app-server-list-apps))
+      (should-not requested)
+      (should (equal (alist-get 'name (car chosen)) "Alpha")))))
+
+(ert-deftest codex-test-app-server-apps-falls-back-to-request ()
+  "Fall back to app/list when no snapshot has arrived yet."
+  (let (requested)
+    (cl-letf (((symbol-function 'codex--app-server-send-request)
+               (lambda (method &rest _) (setq requested method))))
+      (with-temp-buffer
+        (setq-local codex--app-server-apps nil)
+        (codex--app-server-list-apps))
+      (should (equal requested "app/list")))))
+
+(ert-deftest codex-test-app-server-dispatch-routes-apps-updated ()
+  "Route app/list/updated through the dispatch table."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-apps/*" t)
+    (codex--app-server-setup-input-region)
+    (codex--app-server-handle-message
+     '((method . "app/list/updated")
+       (params (data . [((id . "a") (name . "Alpha"))]))))
+    (should (= 1 (length codex--app-server-apps)))))

@@ -207,6 +207,11 @@ before the server has reported.")
 (defvar-local codex--app-server-command-items nil
   "Hash table of rendered app-server command output items.")
 
+(defvar-local codex--app-server-apps nil
+  "Apps last reported by `app/list/updated', or nil before any arrived.
+Used by `/apps' so the picker does not wait on the slow paginated
+`app/list' response.")
+
 (defvar-local codex--app-server-terminal-names nil
   "Hash table mapping command item id to the command it ran.
 Used to name a background terminal when rendering stdin sent to it, since
@@ -590,6 +595,7 @@ This lets optional fields and protocol booleans flow naturally through
          (codex--app-server-rate-limits-updated params))
         ("hook/started" (codex--app-server-render-hook-event params ""))
         ("hook/completed" (codex--app-server-render-hook-event params " Completed"))
+        ("app/list/updated" (codex--app-server-apps-updated params))
         ("item/started" (codex--app-server-record-terminal-name params))
         ("item/commandExecution/terminalInteraction"
          (codex--app-server-render-terminal-interaction params))
@@ -1000,16 +1006,31 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
             (format "%s %s" name (if enabled "enabled" "disabled")))))))))
 
 (defun codex--app-server-list-apps ()
-  "List Codex apps through `app/list' and insert the selected app."
-  (codex--app-server-send-request
-   "app/list"
-   `((threadId . ,codex--app-server-thread-id)
-     (forceRefetch . t))
-   (lambda (result error)
-     (if error
-         (codex--app-server-insert-status
-          (format "App list failed: %S" error))
-       (codex--app-server-choose-app (append (alist-get 'data result) nil))))))
+  "List Codex apps and insert the selected app.
+Uses the snapshot from `app/list/updated' when one has arrived.  The
+server sends that notification with a cached list immediately, and again
+once a refetch lands, whereas the `app/list' response carried thousands of
+apps and took over twenty seconds to arrive.  The filtering is unchanged,
+so the same apps are offered, only without the wait."
+  (if codex--app-server-apps
+      (codex--app-server-choose-app codex--app-server-apps)
+    (codex--app-server-send-request
+     "app/list"
+     `((threadId . ,codex--app-server-thread-id)
+       (forceRefetch . t))
+     (lambda (result error)
+       (if error
+           (codex--app-server-insert-status
+            (format "App list failed: %S" error))
+         (codex--app-server-choose-app
+          (append (alist-get 'data result) nil)))))))
+
+(defun codex--app-server-apps-updated (params)
+  "Record the app snapshot in PARAMS for `/apps'.
+Replaces rather than merges: the notification carries the whole list,
+unpaginated, unlike the paginated `app/list' response."
+  (when-let* ((data (alist-get 'data params)))
+    (setq codex--app-server-apps (append data nil))))
 
 (defun codex--app-server-app-label (app)
   "Return a completion label for APP."

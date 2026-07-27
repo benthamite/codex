@@ -58,7 +58,7 @@
     },
     "app/list/updated": {
       "note": "refresh the app list",
-      "status": "todo"
+      "status": "handled"
     },
     "app/read": {
       "note": "app detail view",
