@@ -1,6 +1,5 @@
 *.elc
 CLAUDE.md
-/ground-truth/
 /logs/
 /session-logs/
 /docs/logs/

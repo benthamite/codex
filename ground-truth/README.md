@@ -81,6 +81,10 @@ once means later runs show only what actually changed.
 
 ## Setup notes
 
+- This directory is tracked. It holds only source: captures go to `CGT_DIR`
+  (default `/tmp/codex-gt`), never here, and `protocol-baseline.json` is a
+  reviewed decision record that is meant to be versioned. The repo's one rule
+  requires this harness, so a clone without it cannot verify a parity claim.
 - Requires `pyte` (`pip install pyte`) and the `codex` CLI on PATH.
 - `CGT_DIR` must be an initialized git repo; on first run the CLI shows a trust
   prompt which `codex_gt.py` answers with Enter.
