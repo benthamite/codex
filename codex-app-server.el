@@ -595,6 +595,7 @@ This lets optional fields and protocol booleans flow naturally through
          (codex--app-server-rate-limits-updated params))
         ("hook/started" (codex--app-server-render-hook-event params ""))
         ("hook/completed" (codex--app-server-render-hook-event params " Completed"))
+        ("thread/closed" (codex--app-server-thread-closed params))
         ("app/list/updated" (codex--app-server-apps-updated params))
         ("account/updated" (codex--app-server-account-updated params))
         ("item/started" (codex--app-server-record-terminal-name params))
@@ -1032,6 +1033,24 @@ Replaces rather than merges: the notification carries the whole list,
 unpaginated, unlike the paginated `app/list' response."
   (when-let* ((data (alist-get 'data params)))
     (setq codex--app-server-apps (append data nil))))
+
+(defun codex--app-server-thread-closed (params)
+  "Note that the server unloaded the thread named in PARAMS.
+The server drops a thread that has had no subscribers and been idle for
+thirty minutes, then sends this.  Captured by starting a thread,
+unsubscribing, and waiting: the notification arrived exactly thirty
+minutes later carrying only the thread id.
+
+Clear the recorded id, so a later request reports that there is no active
+thread instead of failing against one the server has forgotten.
+
+There is no CLI rendering to mirror here: the CLI's own TUI stays
+subscribed for as long as it runs, so its threads are never unloaded this
+way.  The wording below is therefore this client's own."
+  (when (equal (alist-get 'threadId params) codex--app-server-thread-id)
+    (setq codex--app-server-thread-id nil)
+    (codex--app-server-insert-status
+     "Thread closed by the server after being idle; /resume to continue")))
 
 (defun codex--app-server-account-updated (params)
   "Merge the account change in PARAMS into the recorded account.

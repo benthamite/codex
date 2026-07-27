@@ -5078,3 +5078,29 @@ The CLI shows Environment, Reason and Permission rule lines."
   (should (equal (codex--app-server-permission-rules
                   '((network . ((enabled . t)))))
                  "network access")))
+
+(ert-deftest codex-test-app-server-thread-closed-clears-thread ()
+  "Report a server-unloaded thread and forget its id.
+Captured by starting a thread, unsubscribing, and waiting: the server sent
+thread/closed exactly thirty minutes later, carrying only (:threadId ID).
+Keeping the id would make the next request fail against a thread the server
+has forgotten, rather than saying there is no active thread."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-closed/*" t)
+    (codex--app-server-setup-input-region)
+    (setq-local codex--app-server-thread-id "t1")
+    (codex--app-server-handle-message
+     '((method . "thread/closed") (params (threadId . "t1"))))
+    (should-not codex--app-server-thread-id)
+    (should (string-match-p "Thread closed by the server" (buffer-string)))
+    (should (string-match-p "/resume" (buffer-string)))))
+
+(ert-deftest codex-test-app-server-thread-closed-ignores-other-threads ()
+  "Leave this buffer alone when another thread is the one that closed."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-closed2/*" t)
+    (codex--app-server-setup-input-region)
+    (setq-local codex--app-server-thread-id "mine")
+    (codex--app-server-thread-closed '((threadId . "someone-else")))
+    (should (equal codex--app-server-thread-id "mine"))
+    (should-not (string-match-p "Thread closed" (buffer-string)))))

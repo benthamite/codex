@@ -436,8 +436,8 @@
       "status": "wont-implement"
     },
     "thread/closed": {
-      "note": "thread closed elsewhere",
-      "status": "todo"
+      "note": "captured by starting a thread, unsubscribing, and waiting: the notification arrived exactly 30 minutes later carrying only {threadId}. Clears the recorded thread id so a later request reports no active thread instead of failing against one the server has forgotten. No CLI rendering exists to mirror -- the CLI TUI stays subscribed while it runs, so its threads are never unloaded this way.",
+      "status": "handled"
     },
     "thread/compact/start": {
       "status": "handled"
