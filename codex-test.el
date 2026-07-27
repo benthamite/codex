@@ -4708,3 +4708,27 @@ could reference could not be @-mentioned here."
               (should (member "fresh.txt" files))
               (should-not (member "hidden.txt" files)))))
       (delete-directory dir t))))
+
+(ert-deftest codex-test-app-server-dispatch-routes-new-notifications ()
+  "Route the newly handled notifications through `handle-message'.
+The other tests call handlers directly, so a wrong method string in the
+dispatch table would not be caught.  Payloads here are the ones captured
+from a live app server."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-dispatch/*" t)
+    (codex--app-server-setup-input-region)
+    (setq-local codex--app-server-turn-active-p t)
+    (codex--app-server-handle-message
+     '((method . "thread/status/changed")
+       (params . ((threadId . "t") (status . ((type . "idle")))))))
+    (should-not codex--app-server-turn-active-p)
+    (codex--app-server-handle-message
+     '((method . "turn/diff/updated")
+       (params . ((threadId . "t") (turnId . "u")
+                  (diff . "diff --git a/x b/x\n-a\n+b\n")))))
+    (should (string-match-p "\\+b" codex--app-server-turn-diff))
+    (codex--app-server-handle-message
+     '((method . "remoteControl/status/changed")
+       (params . ((status . "connected") (serverName . "host")
+                  (installationId . "i")))))
+    (should (equal codex--app-server-remote-control-status "connected"))))
