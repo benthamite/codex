@@ -4660,3 +4660,29 @@ reply (:answers (ID (:answers [ANSWER])))."
                  (params . ((questions . [])))))))
     (should (plist-get spec :ask))
     (should (equal (codex--app-server-read-approval spec) '((answers))))))
+
+(ert-deftest codex-test-app-server-status-includes-account ()
+  "Report the active account in /status, as the CLI's panel does.
+Captured CLI panel line: \"Account: pablo@stafforini.com (Pro)\".
+Captured account/read response: (:account (:type \"chatgpt\"
+:email EMAIL :planType \"pro\") :requiresOpenaiAuth t)."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-status/*" t)
+    (setq-local codex--app-server-account
+                '((type . "chatgpt") (email . "a@b.com") (planType . "pro")))
+    (let ((text (codex--app-server-status-text)))
+      (should (string-match-p "a@b\\.com (Pro)" text)))))
+
+(ert-deftest codex-test-app-server-status-without-account ()
+  "Omit the account segment when the server has not reported one."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-status2/*" t)
+    (setq-local codex--app-server-account nil)
+    (should-not (codex--app-server-account-text))
+    (should (string-match-p "^model " (codex--app-server-status-text)))))
+
+(ert-deftest codex-test-app-server-account-text-without-plan ()
+  "Show just the email when no plan type is reported."
+  (with-temp-buffer
+    (setq-local codex--app-server-account '((email . "a@b.com")))
+    (should (equal (codex--app-server-account-text) " · a@b.com"))))

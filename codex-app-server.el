@@ -182,6 +182,11 @@ because per-tool hooks can be frequent."
 (defvar-local codex--app-server-current-turn-id nil
   "Current app-server turn id.")
 
+(defvar-local codex--app-server-account nil
+  "Active account as reported by `account/read'.
+An alist with `type', `email', and `planType', or nil before the server
+has been asked.")
+
 (defvar-local codex--app-server-turn-diff nil
   "Cumulative diff of agent changes reported by `turn/diff/updated'.
 Covers only what the agent changed, unlike the working-tree git diff.
@@ -657,6 +662,7 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
       (setq codex--app-server-thread-id thread-id)
       (codex--record-session-metadata thread-id thread-path)
       (codex--app-server-render-header thread)
+      (codex--app-server-request-account)
       (unless defer-input
         (codex--app-server-setup-input-region)
         (codex--app-server-flush-queued-commands)))))
@@ -1494,15 +1500,45 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
     (message "No active Codex thread")))
 
 (defun codex--app-server-show-status ()
-  "Insert a session status line with model, tokens, rate limit, and directory."
-  (codex--app-server-insert-status
-   (format "model %s · %s tokens%s · %s"
-           (or codex-model "default")
-           (or codex--app-server-token-usage 0)
-           (if codex--app-server-rate-limit
-               (format " · %s%% rate limit" codex--app-server-rate-limit)
-             "")
-           (abbreviate-file-name (or codex--buffer-directory default-directory)))))
+  "Insert a session status line, asking the server which account is active.
+The CLI's own `/status' panel reports the account as \"EMAIL (Plan)\", which
+`account/read' supplies.  The rest of that panel -- permissions, the
+AGENTS.md path, per-model limits -- is still missing here."
+  (codex--app-server-insert-status (codex--app-server-status-text)))
+
+(defun codex--app-server-request-account ()
+  "Ask the server which account is active and record it for `/status'.
+Asked once when the thread starts, so `/status' can stay synchronous:
+fetching on demand would leave the first `/status' of a session with
+nothing to print until the reply landed."
+  (when (process-live-p codex--app-server-process)
+    (let ((buffer (current-buffer)))
+      (codex--app-server-send-request
+       "account/read" nil
+       (lambda (result _error)
+         (when (and result (buffer-live-p buffer))
+           (with-current-buffer buffer
+             (setq codex--app-server-account
+                   (alist-get 'account result)))))))))
+
+(defun codex--app-server-status-text ()
+  "Return the session status line."
+  (format "model %s · %s tokens%s%s · %s"
+          (or codex-model "default")
+          (or codex--app-server-token-usage 0)
+          (if codex--app-server-rate-limit
+              (format " · %s%% rate limit" codex--app-server-rate-limit)
+            "")
+          (or (codex--app-server-account-text) "")
+          (abbreviate-file-name (or codex--buffer-directory default-directory))))
+
+(defun codex--app-server-account-text ()
+  "Return \" · EMAIL (PLAN)\" for the active account, or nil when unknown."
+  (when-let* ((account codex--app-server-account)
+              (email (alist-get 'email account)))
+    (let ((plan (alist-get 'planType account)))
+      (format " · %s%s" email
+              (if plan (format " (%s)" (capitalize plan)) "")))))
 
 (defun codex--app-server-show-diff ()
   "Render the diff of changes made in this thread, as the CLI's `/diff' does.
