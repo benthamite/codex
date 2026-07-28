@@ -5131,7 +5131,7 @@ listed \"Browser [Plugin]\" above \"Browser [Skill]\"."
   (let ((rows (codex--app-server-mention-candidates
                codex-test--plugin-list-result
                codex-test--skill-list-result)))
-    (should (equal (mapcar #'cdr rows)
+    (should (equal (mapcar #'car rows)
                    '("browser" "visualize"
                      "superpowers:brainstorming"
                      "browser:control-in-app-browser"
@@ -5141,45 +5141,52 @@ listed \"Browser [Plugin]\" above \"Browser [Skill]\"."
   "Leave a disabled skill out of the menu."
   (should-not
    (assoc "retired-skill"
-          (mapcar (lambda (row) (cons (cdr row) row))
-                  (codex--app-server-mention-candidates
-                   codex-test--plugin-list-result
-                   codex-test--skill-list-result)))))
+          (codex--app-server-mention-candidates
+           codex-test--plugin-list-result
+           codex-test--skill-list-result))))
 
-(ert-deftest codex-test-app-server-mention-inserts-identifier ()
-  "Insert the identifier at point, not the display name.
-Captured: picking Browser in the CLI's $ menu inserts `$browser', and
-picking the row shown as Brainstorming inserts
-`$superpowers:brainstorming'."
-  (with-temp-buffer
-    (rename-buffer "*codex:/tmp/app-server-mention/*" t)
-    (codex--app-server-setup-input-region)
-    (codex--app-server-replace-input "$")
-    (cl-letf (((symbol-function 'completing-read)
-               (lambda (_prompt collection &rest _)
-                 (car (last (all-completions "" collection))))))
-      (codex--app-server-choose-mention
-       (codex--app-server-mention-candidates
-        codex-test--plugin-list-result codex-test--skill-list-result)))
-    (should (string-match-p "\\$add-bib-entry "
-                            (codex--app-server-input-text)))))
-
-(ert-deftest codex-test-app-server-mention-keeps-typed-text ()
-  "Insert the mention at point, leaving what was already typed.
-Captured: typing `please use ' then `$brainst' and picking the row left
-the composer reading `please use $superpowers:brainstorming'."
+(ert-deftest codex-test-app-server-mention-completes-in-the-composer ()
+  "Complete the identifier where it is typed, not through a prompt.
+The CLI filters its menu as the characters arrive in the composer, so the
+completion happens there: typing `please use $brainst' and accepting
+leaves `please use $superpowers:brainstorming'."
   (with-temp-buffer
     (rename-buffer "*codex:/tmp/app-server-mention-typed/*" t)
     (codex--app-server-setup-input-region)
-    (codex--app-server-replace-input "please use $")
-    (cl-letf (((symbol-function 'completing-read)
-               (lambda (_prompt collection &rest _)
-                 (car (all-completions "Brainstorming" collection)))))
-      (codex--app-server-choose-mention
-       (codex--app-server-mention-candidates
-        codex-test--plugin-list-result codex-test--skill-list-result)))
-    (should (string-prefix-p "please use $superpowers:brainstorming"
-                             (codex--app-server-input-text)))))
+    (setq-local codex--app-server-mention-rows
+                (codex--app-server-mention-candidates
+                 codex-test--plugin-list-result codex-test--skill-list-result))
+    (codex--app-server-replace-input "please use $brainst")
+    (codex--app-server-complete-mention)
+    (should (equal (codex--app-server-input-text)
+                   "please use $superpowers:brainstorming"))))
+
+(ert-deftest codex-test-app-server-mention-completion-at-point-offers-menu ()
+  "Offer the menu identifiers, in order, to completion at point."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-mention-capf/*" t)
+    (codex--app-server-setup-input-region)
+    (setq-local codex--app-server-mention-rows
+                (codex--app-server-mention-candidates
+                 codex-test--plugin-list-result codex-test--skill-list-result))
+    (codex--app-server-replace-input "$")
+    (pcase-let ((`(,_start ,_end ,table . ,plist)
+                 (codex--app-server-completion-at-point)))
+      (should (equal (all-completions "" table)
+                     '("browser" "visualize" "superpowers:brainstorming"
+                       "browser:control-in-app-browser" "add-bib-entry")))
+      (should (equal (funcall (plist-get plist :annotation-function)
+                              "superpowers:brainstorming")
+                     "  Brainstorming  [Skill] Explore intent")))))
+
+(ert-deftest codex-test-app-server-mention-names-fall-back-to-directories ()
+  "Fall back to the local skill directories before the server answers."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-mention-fallback/*" t)
+    (setq-local codex--app-server-mention-rows nil)
+    (cl-letf (((symbol-function 'codex--app-server-skill-names)
+               (lambda () '("local-only-skill"))))
+      (should (equal (codex--app-server-mention-names) '("local-only-skill"))))))
 
 (ert-deftest codex-test-app-server-mention-label-matches-cli ()
   "Label a plugin as the CLI does: display name, [Plugin], description."
@@ -5193,13 +5200,13 @@ the composer reading `please use $superpowers:brainstorming'."
 
 (ert-deftest codex-test-app-server-skill-mention-label-matches-cli ()
   "Label a skill as the CLI does: display name, [Skill], description.
-A plain skill shows its identifier and its own description; a
-plugin-provided one shows the interface display name and short
-description."
+The display name is dropped when it only repeats the identifier, which
+the completion candidate itself already shows; a plugin-provided skill
+keeps it, along with the interface's short description."
   (should (equal (codex--app-server-skill-mention-label
                   '((name . "add-bib-entry")
                     (description . "Use when adding works")))
-                 "add-bib-entry  [Skill] Use when adding works"))
+                 "[Skill] Use when adding works"))
   (should (equal (codex--app-server-skill-mention-label
                   '((name . "browser:control-in-app-browser")
                     (description . "Control the in-app Browser for")
@@ -5207,19 +5214,32 @@ description."
                                (shortDescription . "Browser lets ChatGPT open"))))
                  "Browser  [Skill] Browser lets ChatGPT open")))
 
-(ert-deftest codex-test-app-server-mention-reports-when-none ()
-  "Say so when nothing is mentionable, instead of prompting."
+(ert-deftest codex-test-app-server-mention-prefetch-needs-a-process ()
+  "Ask for the menu only when a server is there to answer.
+The thread-started path runs in buffers that have no process yet."
   (with-temp-buffer
-    (rename-buffer "*codex:/tmp/app-server-mention2/*" t)
+    (rename-buffer "*codex:/tmp/app-server-mention-noproc/*" t)
+    (cl-letf (((symbol-function 'codex--app-server-request-mention-rows)
+               (lambda () (error "should not request"))))
+      (should-not (codex--app-server-refresh-mention-rows)))))
+
+(ert-deftest codex-test-app-server-dollar-inserts-the-character ()
+  "Type `$' into the composer, as the CLI does, and start completing.
+The CLI leaves the character in the composer and filters its menu from
+there, so `$' must reach the buffer rather than open a prompt."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-dollar/*" t)
     (codex--app-server-setup-input-region)
-    (cl-letf (((symbol-function 'completing-read)
-               (lambda (&rest _) (error "should not prompt"))))
-      (codex--app-server-choose-mention nil))
-    (should (string-match-p "No mentionable Codex plugins or skills"
-                            (buffer-string)))))
+    (codex--app-server-replace-input "please use ")
+    (let (completed)
+      (cl-letf (((symbol-function 'completion-at-point)
+                 (lambda () (setq completed t))))
+        (codex-app-server-insert-mention))
+      (should completed))
+    (should (equal (codex--app-server-input-text) "please use $"))))
 
 (ert-deftest codex-test-app-server-dollar-key-inserts-mention ()
-  "Bind `$' to the mention picker, as the CLI triggers it.
+  "Bind `$' to the mention command, as the CLI triggers it.
 The CLI has no slash command for this: typing `$' in the composer opens
 the menu, exactly as `@' opens the file equivalent."
   (with-temp-buffer
@@ -5235,7 +5255,7 @@ the menu, exactly as `@' opens the file equivalent."
   (should (commandp #'codex-app-server-insert-mention)))
 
 (ert-deftest codex-test-app-server-mention-requests-plugins-and-skills ()
-  "Ask for both halves of the menu, not plugins alone."
+  "Ask for both halves of the menu, not plugins alone, and cache them."
   (with-temp-buffer
     (rename-buffer "*codex:/tmp/app-server-mention-requests/*" t)
     (setq-local codex--buffer-directory "/tmp/project")
@@ -5248,8 +5268,9 @@ the menu, exactly as `@' opens the file equivalent."
                             (if (equal method "plugin/list")
                                 codex-test--plugin-list-result
                               codex-test--skill-list-result)
-                            nil)))
-                ((symbol-function 'codex--app-server-choose-mention)
-                 #'ignore))
-        (codex-app-server-insert-mention))
-      (should (equal (nreverse methods) '("plugin/list" "skills/list"))))))
+                            nil))))
+        (codex--app-server-request-mention-rows))
+      (should (equal (nreverse methods) '("plugin/list" "skills/list")))
+      (should (equal (mapcar #'car codex--app-server-mention-rows)
+                     '("browser" "visualize" "superpowers:brainstorming"
+                       "browser:control-in-app-browser" "add-bib-entry"))))))

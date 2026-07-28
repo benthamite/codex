@@ -296,6 +296,9 @@ Used to name a background terminal when rendering stdin sent to it, since
 (defvar-local codex--app-server-service-tier nil
   "Service tier selected for the current app-server thread.")
 
+(defvar-local codex--app-server-mention-rows nil
+  "Cached `$' menu rows, each pairing an identifier with its annotation.")
+
 (defvar codex--app-server-skill-cache nil
   "Cached list of Codex skill names for app-server completion.")
 
@@ -680,6 +683,7 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
       (codex--app-server-render-header thread)
       (codex--app-server-request-account)
       (codex--app-server-send-skill-extra-roots)
+      (codex--app-server-refresh-mention-rows)
       (unless defer-input
         (codex--app-server-setup-input-region)
         (codex--app-server-flush-queued-commands)))))
@@ -1014,44 +1018,29 @@ reaches the skills, and typing `$add-bib' filters to \"add-bib-entry
 
 Both groups insert an identifier rather than a display name: picking
 Browser inserts `$browser', and picking the skill shown as Brainstorming
-inserts `$superpowers:brainstorming'."
+inserts `$superpowers:brainstorming'.
+
+The menu is the composer's own completion rather than a minibuffer
+prompt, so the name is typed where the CLI types it and the candidates
+narrow as the characters arrive."
   (interactive)
   (insert "$")
-  (codex--app-server-send-request
-   "plugin/list"
-   `((cwds . ,(vector (codex--app-server-current-cwd))))
-   (lambda (plugins error)
-     (if error
-         (codex--app-server-insert-status
-          (format "Plugin list failed: %S" error))
-       (codex--app-server-request-mention-skills plugins)))))
-
-(defun codex--app-server-request-mention-skills (plugin-result)
-  "Add the skill group to PLUGIN-RESULT and offer the whole `$' menu."
-  (codex--app-server-send-request
-   "skills/list"
-   `((cwds . ,(vector (codex--app-server-current-cwd))))
-   (lambda (skill-result error)
-     (if error
-         (codex--app-server-insert-status
-          (format "Skill list failed: %S" error))
-       (codex--app-server-choose-mention
-        (codex--app-server-mention-candidates plugin-result skill-result))))))
+  (completion-at-point))
 
 (defun codex--app-server-mention-candidates (plugin-result skill-result)
   "Return the `$' menu rows for PLUGIN-RESULT and SKILL-RESULT.
-Each row pairs the label shown with the identifier inserted.  Plugins
-come first, as captured: filtering on `brow' listed \"Browser [Plugin]\"
-above \"Browser [Skill]\", the plugin and the plugin-provided skill
-sharing a display name."
+Each row pairs the identifier inserted with the annotation shown beside
+it.  Plugins come first, as captured: filtering on `brow' listed
+\"Browser [Plugin]\" above \"Browser [Skill]\", the plugin and the
+plugin-provided skill sharing a display name."
   (append
    (mapcar (lambda (plugin)
-             (cons (codex--app-server-plugin-mention-label plugin)
-                   (alist-get 'name plugin)))
+             (cons (alist-get 'name plugin)
+                   (codex--app-server-plugin-mention-label plugin)))
            (codex--app-server-mentionable-plugins plugin-result))
    (mapcar (lambda (skill)
-             (cons (codex--app-server-skill-mention-label skill)
-                   (alist-get 'name skill)))
+             (cons (alist-get 'name skill)
+                   (codex--app-server-skill-mention-label skill)))
            (codex--app-server-mentionable-skills skill-result))))
 
 (defun codex--app-server-mentionable-plugins (result)
@@ -1128,12 +1117,23 @@ which lists both fields as optional."
   "Return a completion label for PLUGIN, as the CLI's `$' menu labels it.
 The captured menu showed the display name, the tag [Plugin], and the
 description: \"Browser  [Plugin] Control the in-app browser with ChatGPT\"."
-  (let ((description (codex--app-server-plugin-mention-description plugin)))
-    (format "%s  [Plugin]%s"
-            (codex--app-server-plugin-display-name plugin)
-            (if (and description (not (string-empty-p description)))
-                (format " %s" description)
-              ""))))
+  (codex--app-server-mention-label
+   (alist-get 'name plugin)
+   (codex--app-server-plugin-display-name plugin)
+   "[Plugin]"
+   (codex--app-server-plugin-mention-description plugin)))
+
+(defun codex--app-server-mention-label (name display tag description)
+  "Return the `$' menu annotation for NAME, which the menu shows as DISPLAY.
+TAG reads [Plugin] or [Skill], and DESCRIPTION is the wording the CLI
+puts after it.  DISPLAY is left out when it only repeats NAME, which the
+candidate itself already shows; the CLI has no such column and always
+prints it."
+  (concat (if (equal display name) "" (format "%s  " display))
+          tag
+          (if (and description (not (string-empty-p description)))
+              (format " %s" description)
+            "")))
 
 (defun codex--app-server-plugin-mention-description (plugin)
   "Return the description the `$' menu shows for PLUGIN.
@@ -1148,12 +1148,11 @@ captured row showed, and carries no top-level description at all."
 The captured rows showed the display name, the tag [Skill], and the
 description: \"add-bib-entry  [Skill] Use when adding works to Pablo's
 bibliography ...\"."
-  (let ((description (codex--app-server-skill-mention-description skill)))
-    (format "%s  [Skill]%s"
-            (codex--app-server-skill-display-name skill)
-            (if (and description (not (string-empty-p description)))
-                (format " %s" description)
-              ""))))
+  (codex--app-server-mention-label
+   (alist-get 'name skill)
+   (codex--app-server-skill-display-name skill)
+   "[Skill]"
+   (codex--app-server-skill-mention-description skill)))
 
 (defun codex--app-server-skill-mention-description (skill)
   "Return the description the `$' menu shows for SKILL.
@@ -1171,28 +1170,35 @@ plain skill has no such block and shows its identifier."
       (alist-get 'name skill)
       "?"))
 
-(defun codex--app-server-choose-mention (rows)
-  "Insert one of ROWS into the composer as a `$' mention.
-Each row of ROWS pairs the label shown with the identifier inserted.  The
-identifier is what goes in, not the display name: picking Browser in the
-CLI inserts `$browser'."
-  (if (null rows)
-      (codex--app-server-insert-status
-       "No mentionable Codex plugins or skills available")
-    (let ((label (completing-read "Mention: "
-                                  (codex--app-server-ordered-table rows)
-                                  nil t)))
-      (insert (alist-get label rows "" nil #'equal) " "))))
+(defun codex--app-server-refresh-mention-rows ()
+  "Fetch the `$' menu rows from the server into the buffer's cache.
+Asked for once when the thread starts, so the first `$' completes against
+the same set the CLI menu shows instead of waiting on two requests."
+  (when (process-live-p codex--app-server-process)
+    (codex--app-server-request-mention-rows)))
 
-(defun codex--app-server-ordered-table (rows)
-  "Return a completion table over ROWS that keeps them in order.
-The `$' menu is ordered by group -- every plugin, then every skill -- so
-the table declines the sorting completion would otherwise apply."
-  (lambda (string predicate action)
-    (if (eq action 'metadata)
-        '(metadata (display-sort-function . identity)
-                   (cycle-sort-function . identity))
-      (complete-with-action action rows string predicate))))
+(defun codex--app-server-request-mention-rows ()
+  "Send the two requests the `$' menu is built from."
+  (let ((buffer (current-buffer)))
+    (codex--app-server-send-request
+     "plugin/list"
+     `((cwds . ,(vector (codex--app-server-current-cwd))))
+     (lambda (plugins plugin-error)
+       (unless plugin-error
+         (codex--app-server-send-request
+          "skills/list"
+          `((cwds . ,(vector (codex--app-server-current-cwd))))
+          (lambda (skills skill-error)
+            (unless skill-error
+              (codex--app-server-store-mention-rows
+               buffer
+               (codex--app-server-mention-candidates plugins skills))))))))))
+
+(defun codex--app-server-store-mention-rows (buffer rows)
+  "Record ROWS as BUFFER's `$' menu cache."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq codex--app-server-mention-rows rows))))
 
 (defun codex--app-server-list-plugins ()
   "Open the native plugin workflow using `plugin/list'."
@@ -2386,7 +2392,8 @@ and queues follow-up input while a turn is in progress."
      (codex--app-server-turn-active-p (codex--app-server-queue-input))
      ((string-empty-p text) (codex--app-server-accept-idle-suggestion))
      ((string-prefix-p "/" text) (codex--app-server-complete-slash text))
-     ((string-prefix-p "$" text) (codex--app-server-complete-skill text))
+     ((codex--app-server-completion-bounds "$")
+      (codex--app-server-complete-mention))
      (t (message "Nothing to complete")))))
 
 (defun codex--app-server-accept-idle-suggestion ()
@@ -2411,24 +2418,32 @@ and queues follow-up input while a turn is in progress."
                common
              (completing-read "Command: " matches nil t token))))))))
 
-(defun codex--app-server-complete-skill (text)
-  "Complete the skill reference TEXT in the input region."
-  (let* ((token (string-trim text))
-         (prefix (string-remove-prefix "$" token))
-         (matches (seq-filter
-                   (lambda (skill) (string-prefix-p prefix skill))
-                   (codex--app-server-skill-names))))
+(defun codex--app-server-complete-mention ()
+  "Complete the `$' mention before point, leaving the rest of the input.
+Matches any part of an identifier rather than only its start, as the CLI
+menu does: filtering it with `brow' listed Codex App Browser, and the
+qualified name of a plugin-provided skill begins with its plugin, so
+`brainst' has to reach `superpowers:brainstorming'."
+  (pcase-let* ((`(,start . ,end) (codex--app-server-completion-bounds "$"))
+               (prefix (buffer-substring-no-properties start end))
+               (matches (seq-filter (lambda (name) (string-search prefix name))
+                                    (codex--app-server-mention-names))))
     (cond
-     ((null matches) (message "No matching skill: %s" token))
+     ((null matches) (message "No matching mention: $%s" prefix))
      ((= 1 (length matches))
-      (codex--app-server-replace-input (concat "$" (car matches))))
+      (codex--app-server-replace-mention start end (car matches)))
      (t (let ((common (try-completion prefix matches)))
-          (codex--app-server-replace-input
-           (concat "$"
-                   (if (and (stringp common)
-                            (> (length common) (length prefix)))
-                       common
-                     (completing-read "Skill: " matches nil t prefix)))))))))
+          (codex--app-server-replace-mention
+           start end
+           (if (and (stringp common) (> (length common) (length prefix)))
+               common
+             (completing-read "Mention: " matches nil t))))))))
+
+(defun codex--app-server-replace-mention (start end name)
+  "Replace the mention text between START and END with NAME."
+  (delete-region start end)
+  (goto-char start)
+  (insert name))
 
 (defun codex--app-server-completion-at-point ()
   "Return app-server input completion data at point, or nil."
@@ -2444,13 +2459,42 @@ and queues follow-up input while a turn is in progress."
      ((codex--app-server-completion-bounds "$")
       (pcase-let ((`(,start . ,end)
                    (codex--app-server-completion-bounds "$")))
-        (list start end (codex--app-server-skill-names)
+        (list start end (codex--app-server-mention-table)
+              :annotation-function #'codex--app-server-mention-annotation
               :exclusive 'no)))
      ((codex--app-server-completion-bounds "/")
       (pcase-let ((`(,start . ,end)
                    (codex--app-server-completion-bounds "/")))
         (list start end codex--app-server-slash-commands
               :exclusive 'no))))))
+
+(defun codex--app-server-mention-table ()
+  "Return a completion table over the identifiers the `$' menu offers.
+Keeps the CLI's order -- every plugin, then every skill -- rather than
+the sorting completion would otherwise impose."
+  (let ((names (codex--app-server-mention-names)))
+    (lambda (string predicate action)
+      (if (eq action 'metadata)
+          '(metadata (display-sort-function . identity)
+                     (cycle-sort-function . identity))
+        (complete-with-action action names string predicate)))))
+
+(defun codex--app-server-mention-names ()
+  "Return the identifiers the `$' menu offers.
+These come from the server once it has answered the two requests the
+thread sends at startup.  Until then the local skill directories stand
+in: they name a plain skill the same way, but cannot know a plugin, and
+give a plugin-provided skill its bare directory name rather than the
+qualified `superpowers:brainstorming' the CLI inserts."
+  (if codex--app-server-mention-rows
+      (mapcar #'car codex--app-server-mention-rows)
+    (codex--app-server-skill-names)))
+
+(defun codex--app-server-mention-annotation (name)
+  "Return the `$' menu annotation shown beside NAME, or nil."
+  (when-let* ((annotation (alist-get name codex--app-server-mention-rows
+                                     nil nil #'equal)))
+    (concat "  " annotation)))
 
 (defun codex--app-server-completion-bounds (leader)
   "Return completion bounds after LEADER at point, or nil."
