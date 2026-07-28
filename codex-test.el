@@ -1601,7 +1601,6 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (setq-local codex--buffer-directory "/tmp/project")
     (codex--app-server-setup-input-region)
     (dolist (case '(("/skills" . "skills/list")
-                    ("/plugin-mention" . "plugin/list")
                     ("/plugins" . "plugin/list")
                     ("/hooks" . "hooks/list")
                     ("/mcp" . "mcpServerStatus/list")
@@ -5068,19 +5067,27 @@ has forgotten, rather than saying there is no active thread."
                (list (cons 'name "openai-primary-runtime")
                      (cons 'plugins
                            (vector
-                            '((name . "browser") (displayName . "Browser")
-                              (description . "Control the in-app browser with ChatGPT")
+                            '((name . "browser")
+                              (interface
+                               (displayName . "Browser")
+                               (shortDescription
+                                . "Control the in-app browser with ChatGPT"))
                               (installed . t) (enabled . t))
-                            '((name . "visualize") (displayName . "Visualize")
-                              (description . "Make charts")
+                            '((name . "visualize")
+                              (interface (displayName . "Visualize")
+                                         (shortDescription . "Make charts"))
                               (installed . t) (enabled . t))
-                            '((name . "latex") (displayName . "LaTeX")
-                              (description . "Typeset")
+                            '((name . "latex")
+                              (interface (displayName . "LaTeX")
+                                         (shortDescription . "Typeset"))
                               (installed . t) (enabled . :false))
-                            '((name . "linear") (displayName . "Linear")
-                              (description . "Issues")
+                            '((name . "linear")
+                              (interface (displayName . "Linear")
+                                         (shortDescription . "Issues"))
                               (installed . :false) (enabled . :false))))))))
-  "Plugin list result shaped like the captured plugin/list response.")
+  "Plugin list result shaped like the captured plugin/list response.
+A plugin keeps its display name and description in an `interface' block,
+as the live records do; neither field exists at the top level.")
 
 (ert-deftest codex-test-app-server-mentionable-plugins-filters-and-sorts ()
   "Offer only installed and enabled plugins, alphabetically.
@@ -5092,48 +5099,157 @@ alphabetical order."
     (should (equal (mapcar (lambda (p) (alist-get 'name p)) plugins)
                    '("browser" "visualize")))))
 
+(defconst codex-test--skill-list-result
+  (list (cons 'data
+              (vector
+               (list (cons 'cwd "/tmp/project")
+                     (cons 'skills
+                           (vector
+                            '((name . "add-bib-entry")
+                              (description . "Use when adding works")
+                              (enabled . t))
+                            '((name . "browser:control-in-app-browser")
+                              (description . "Control the in-app Browser for")
+                              (interface
+                               (displayName . "Browser")
+                               (shortDescription . "Browser lets ChatGPT open"))
+                              (enabled . t))
+                            '((name . "superpowers:brainstorming")
+                              (description . "Explore intent")
+                              (interface (displayName . "Brainstorming"))
+                              (enabled . t))
+                            '((name . "retired-skill")
+                              (description . "Disabled in config")
+                              (enabled . :false))))))))
+  "Skill list result shaped like the captured skills/list response.")
+
+(ert-deftest codex-test-app-server-mention-menu-lists-plugins-then-skills ()
+  "Offer plugins first, then skills, as the CLI's $ menu does.
+Captured: the menu shows eight rows at a time, and scrolling past
+Visualize -- the last plugin -- reaches the skills.  Filtering on `brow'
+listed \"Browser [Plugin]\" above \"Browser [Skill]\"."
+  (let ((rows (codex--app-server-mention-candidates
+               codex-test--plugin-list-result
+               codex-test--skill-list-result)))
+    (should (equal (mapcar #'cdr rows)
+                   '("browser" "visualize"
+                     "superpowers:brainstorming"
+                     "browser:control-in-app-browser"
+                     "add-bib-entry")))))
+
+(ert-deftest codex-test-app-server-mention-menu-omits-disabled-skills ()
+  "Leave a disabled skill out of the menu."
+  (should-not
+   (assoc "retired-skill"
+          (mapcar (lambda (row) (cons (cdr row) row))
+                  (codex--app-server-mention-candidates
+                   codex-test--plugin-list-result
+                   codex-test--skill-list-result)))))
+
 (ert-deftest codex-test-app-server-mention-inserts-identifier ()
-  "Insert the lowercase identifier, not the display name.
-Captured: picking Browser in the CLI's $ menu inserts `$browser'."
+  "Insert the identifier at point, not the display name.
+Captured: picking Browser in the CLI's $ menu inserts `$browser', and
+picking the row shown as Brainstorming inserts
+`$superpowers:brainstorming'."
   (with-temp-buffer
     (rename-buffer "*codex:/tmp/app-server-mention/*" t)
     (codex--app-server-setup-input-region)
-    (cl-letf (((symbol-function 'codex--app-server-read-object)
-               (lambda (_prompt items _label) (car items))))
-      (codex--app-server-choose-plugin-mention
-       (codex--app-server-mentionable-plugins codex-test--plugin-list-result)))
-    (should (string-match-p "\\$browser " (codex--app-server-input-text)))))
+    (codex--app-server-replace-input "$")
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_prompt collection &rest _)
+                 (car (last (all-completions "" collection))))))
+      (codex--app-server-choose-mention
+       (codex--app-server-mention-candidates
+        codex-test--plugin-list-result codex-test--skill-list-result)))
+    (should (string-match-p "\\$add-bib-entry "
+                            (codex--app-server-input-text)))))
+
+(ert-deftest codex-test-app-server-mention-keeps-typed-text ()
+  "Insert the mention at point, leaving what was already typed.
+Captured: typing `please use ' then `$brainst' and picking the row left
+the composer reading `please use $superpowers:brainstorming'."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-mention-typed/*" t)
+    (codex--app-server-setup-input-region)
+    (codex--app-server-replace-input "please use $")
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_prompt collection &rest _)
+                 (car (all-completions "Brainstorming" collection)))))
+      (codex--app-server-choose-mention
+       (codex--app-server-mention-candidates
+        codex-test--plugin-list-result codex-test--skill-list-result)))
+    (should (string-prefix-p "please use $superpowers:brainstorming"
+                             (codex--app-server-input-text)))))
 
 (ert-deftest codex-test-app-server-mention-label-matches-cli ()
   "Label a plugin as the CLI does: display name, [Plugin], description."
   (should (equal (codex--app-server-plugin-mention-label
-                  '((name . "browser") (displayName . "Browser")
-                    (description . "Control the in-app browser with ChatGPT")))
+                  '((name . "browser")
+                    (interface
+                     (displayName . "Browser")
+                     (shortDescription
+                      . "Control the in-app browser with ChatGPT"))))
                  "Browser  [Plugin] Control the in-app browser with ChatGPT")))
 
+(ert-deftest codex-test-app-server-skill-mention-label-matches-cli ()
+  "Label a skill as the CLI does: display name, [Skill], description.
+A plain skill shows its identifier and its own description; a
+plugin-provided one shows the interface display name and short
+description."
+  (should (equal (codex--app-server-skill-mention-label
+                  '((name . "add-bib-entry")
+                    (description . "Use when adding works")))
+                 "add-bib-entry  [Skill] Use when adding works"))
+  (should (equal (codex--app-server-skill-mention-label
+                  '((name . "browser:control-in-app-browser")
+                    (description . "Control the in-app Browser for")
+                    (interface (displayName . "Browser")
+                               (shortDescription . "Browser lets ChatGPT open"))))
+                 "Browser  [Skill] Browser lets ChatGPT open")))
+
 (ert-deftest codex-test-app-server-mention-reports-when-none ()
-  "Say so when nothing is installed and enabled, instead of prompting."
+  "Say so when nothing is mentionable, instead of prompting."
   (with-temp-buffer
     (rename-buffer "*codex:/tmp/app-server-mention2/*" t)
     (codex--app-server-setup-input-region)
-    (cl-letf (((symbol-function 'codex--app-server-read-object)
+    (cl-letf (((symbol-function 'completing-read)
                (lambda (&rest _) (error "should not prompt"))))
-      (codex--app-server-choose-plugin-mention nil))
-    (should (string-match-p "No installed and enabled Codex plugins"
+      (codex--app-server-choose-mention nil))
+    (should (string-match-p "No mentionable Codex plugins or skills"
                             (buffer-string)))))
 
-(ert-deftest codex-test-app-server-dollar-key-inserts-plugin-mention ()
-  "Bind `$' to the plugin mention picker, as the CLI triggers it.
+(ert-deftest codex-test-app-server-dollar-key-inserts-mention ()
+  "Bind `$' to the mention picker, as the CLI triggers it.
 The CLI has no slash command for this: typing `$' in the composer opens
 the menu, exactly as `@' opens the file equivalent."
   (with-temp-buffer
     (codex--term-setup-keymap 'app-server)
     (let ((map (current-local-map)))
       (should (eq (lookup-key map (kbd "$"))
-                  #'codex-app-server-insert-plugin-mention))
+                  #'codex-app-server-insert-mention))
       (should (eq (lookup-key map (kbd "@"))
                   #'codex-app-server-insert-file-reference)))))
 
-(ert-deftest codex-test-app-server-plugin-mention-command-is-interactive ()
+(ert-deftest codex-test-app-server-mention-command-is-interactive ()
   "Keep the mention picker callable as a command, since a key is bound to it."
-  (should (commandp #'codex-app-server-insert-plugin-mention)))
+  (should (commandp #'codex-app-server-insert-mention)))
+
+(ert-deftest codex-test-app-server-mention-requests-plugins-and-skills ()
+  "Ask for both halves of the menu, not plugins alone."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-mention-requests/*" t)
+    (setq-local codex--buffer-directory "/tmp/project")
+    (codex--app-server-setup-input-region)
+    (let (methods)
+      (cl-letf (((symbol-function 'codex--app-server-send-request)
+                 (lambda (method _params callback)
+                   (push method methods)
+                   (funcall callback
+                            (if (equal method "plugin/list")
+                                codex-test--plugin-list-result
+                              codex-test--skill-list-result)
+                            nil)))
+                ((symbol-function 'codex--app-server-choose-mention)
+                 #'ignore))
+        (codex-app-server-insert-mention))
+      (should (equal (nreverse methods) '("plugin/list" "skills/list"))))))

@@ -834,7 +834,6 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
       ("/model" (codex--app-server-change-model))
       ("/mention" (codex-app-server-attach-mention))
       ("/skills" (codex--app-server-list-skills))
-      ("/plugin-mention" (codex-app-server-insert-plugin-mention))
       ("/raw" (codex--app-server-toggle-raw))
       ("/goal" (let ((objective (if (string-empty-p argument)
                                     (read-string "Goal: ")
@@ -1001,26 +1000,59 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
            (codex--app-server-insert-status
             (format "%s %s" name (if enabled "enabled" "disabled")))))))))
 
-(defun codex-app-server-insert-plugin-mention ()
-  "Offer the mentionable plugins and insert the chosen one as `$name'.
+(defun codex-app-server-insert-mention ()
+  "Offer the mentionable plugins and skills, inserting the choice as `$name'.
 Bound to `$' in the composer, mirroring the CLI, where typing `$' opens
 this menu; `@' opens the file equivalent the same way.
 
-The CLI's menu is plugin-driven: every captured row was tagged [Plugin],
-and picking Browser inserted the lowercase identifier `$browser'.  This
-read `app/list' before, a different and far larger set -- thousands of
-entries, two of which survived its filter, arriving twenty seconds later.
-Those are apps, not the plugins the CLI mentions."
+The captured menu is one list of two groups: the installed and enabled
+plugins first, tagged [Plugin], then the enabled skills, tagged [Skill].
+Only eight rows show at a time, so a capture reading just the first
+screen sees plugins alone; scrolling past Visualize, the last plugin,
+reaches the skills, and typing `$add-bib' filters to \"add-bib-entry
+[Skill]\".
+
+Both groups insert an identifier rather than a display name: picking
+Browser inserts `$browser', and picking the skill shown as Brainstorming
+inserts `$superpowers:brainstorming'."
   (interactive)
+  (insert "$")
   (codex--app-server-send-request
    "plugin/list"
    `((cwds . ,(vector (codex--app-server-current-cwd))))
-   (lambda (result error)
+   (lambda (plugins error)
      (if error
          (codex--app-server-insert-status
           (format "Plugin list failed: %S" error))
-       (codex--app-server-choose-plugin-mention
-        (codex--app-server-mentionable-plugins result))))))
+       (codex--app-server-request-mention-skills plugins)))))
+
+(defun codex--app-server-request-mention-skills (plugin-result)
+  "Add the skill group to PLUGIN-RESULT and offer the whole `$' menu."
+  (codex--app-server-send-request
+   "skills/list"
+   `((cwds . ,(vector (codex--app-server-current-cwd))))
+   (lambda (skill-result error)
+     (if error
+         (codex--app-server-insert-status
+          (format "Skill list failed: %S" error))
+       (codex--app-server-choose-mention
+        (codex--app-server-mention-candidates plugin-result skill-result))))))
+
+(defun codex--app-server-mention-candidates (plugin-result skill-result)
+  "Return the `$' menu rows for PLUGIN-RESULT and SKILL-RESULT.
+Each row pairs the label shown with the identifier inserted.  Plugins
+come first, as captured: filtering on `brow' listed \"Browser [Plugin]\"
+above \"Browser [Skill]\", the plugin and the plugin-provided skill
+sharing a display name."
+  (append
+   (mapcar (lambda (plugin)
+             (cons (codex--app-server-plugin-mention-label plugin)
+                   (alist-get 'name plugin)))
+           (codex--app-server-mentionable-plugins plugin-result))
+   (mapcar (lambda (skill)
+             (cons (codex--app-server-skill-mention-label skill)
+                   (alist-get 'name skill)))
+           (codex--app-server-mentionable-skills skill-result))))
 
 (defun codex--app-server-mentionable-plugins (result)
   "Return the installed and enabled plugins in plugin list RESULT.
@@ -1036,8 +1068,26 @@ Sorted by display name, matching the CLI's alphabetical `$' menu."
                      (codex--app-server-plugin-display-name b))))))
 
 (defun codex--app-server-plugin-display-name (plugin)
-  "Return the display label for PLUGIN in the mention picker."
-  (or (alist-get 'displayName plugin) (alist-get 'name plugin) "?"))
+  "Return the display name the `$' menu shows for PLUGIN.
+A plugin carries its presentation in an `interface' block, as a
+plugin-provided skill does: the live record for `browser' holds no
+top-level display name or description, and reads \"Browser\" there."
+  (or (alist-get 'displayName (alist-get 'interface plugin))
+      (alist-get 'name plugin)
+      "?"))
+
+(defun codex--app-server-mentionable-skills (result)
+  "Return the enabled skills in skill list RESULT.
+Sorted by display name as the CLI sorts them, which is by plain string
+comparison: the capitalized display names of plugin-provided skills all
+precede the lowercase identifiers of the rest.  The captured menu ran
+Analytics Dashboard, Brainstorming, Browser, Business Review ... with
+add-bib-entry far below, not first."
+  (sort (seq-filter (lambda (skill) (eq (alist-get 'enabled skill) t))
+                    (codex--app-server-list-entry-items result 'skills))
+        (lambda (a b)
+          (string< (codex--app-server-skill-display-name a)
+                   (codex--app-server-skill-display-name b)))))
 
 (defun codex--app-server-thread-closed (params)
   "Note that the server unloaded the thread named in PARAMS.
@@ -1078,26 +1128,71 @@ which lists both fields as optional."
   "Return a completion label for PLUGIN, as the CLI's `$' menu labels it.
 The captured menu showed the display name, the tag [Plugin], and the
 description: \"Browser  [Plugin] Control the in-app browser with ChatGPT\"."
-  (let ((description (alist-get 'description plugin)))
+  (let ((description (codex--app-server-plugin-mention-description plugin)))
     (format "%s  [Plugin]%s"
             (codex--app-server-plugin-display-name plugin)
             (if (and description (not (string-empty-p description)))
                 (format " %s" description)
               ""))))
 
-(defun codex--app-server-choose-plugin-mention (plugins)
-  "Insert one of PLUGINS into the composer as a `$' mention.
-The identifier is inserted, not the display name: picking Browser in the
+(defun codex--app-server-plugin-mention-description (plugin)
+  "Return the description the `$' menu shows for PLUGIN.
+Held in the `interface' block: the live `browser' record describes itself
+there as \"Control the in-app browser with ChatGPT\", the wording the
+captured row showed, and carries no top-level description at all."
+  (or (alist-get 'shortDescription (alist-get 'interface plugin))
+      (alist-get 'description plugin)))
+
+(defun codex--app-server-skill-mention-label (skill)
+  "Return a completion label for SKILL, as the CLI's `$' menu labels it.
+The captured rows showed the display name, the tag [Skill], and the
+description: \"add-bib-entry  [Skill] Use when adding works to Pablo's
+bibliography ...\"."
+  (let ((description (codex--app-server-skill-mention-description skill)))
+    (format "%s  [Skill]%s"
+            (codex--app-server-skill-display-name skill)
+            (if (and description (not (string-empty-p description)))
+                (format " %s" description)
+              ""))))
+
+(defun codex--app-server-skill-mention-description (skill)
+  "Return the description the `$' menu shows for SKILL.
+A plugin-provided skill describes itself twice; the menu showed the
+`interface' wording, not the agent-facing `description'."
+  (or (alist-get 'shortDescription (alist-get 'interface skill))
+      (alist-get 'description skill)))
+
+(defun codex--app-server-skill-display-name (skill)
+  "Return the display name the `$' menu shows for SKILL.
+A plugin-provided skill carries an `interface' block whose `displayName'
+the CLI shows -- \"Browser\" for `browser:control-in-app-browser'.  A
+plain skill has no such block and shows its identifier."
+  (or (alist-get 'displayName (alist-get 'interface skill))
+      (alist-get 'name skill)
+      "?"))
+
+(defun codex--app-server-choose-mention (rows)
+  "Insert one of ROWS into the composer as a `$' mention.
+Each row of ROWS pairs the label shown with the identifier inserted.  The
+identifier is what goes in, not the display name: picking Browser in the
 CLI inserts `$browser'."
-  (let ((plugin (and plugins
-                     (codex--app-server-read-object
-                      "Mention plugin: " plugins
-                      #'codex--app-server-plugin-mention-label))))
-    (if plugin
-        (codex--app-server-replace-input
-         (format "$%s " (alist-get 'name plugin)))
+  (if (null rows)
       (codex--app-server-insert-status
-       "No installed and enabled Codex plugins available"))))
+       "No mentionable Codex plugins or skills available")
+    (let ((label (completing-read "Mention: "
+                                  (codex--app-server-ordered-table rows)
+                                  nil t)))
+      (insert (alist-get label rows "" nil #'equal) " "))))
+
+(defun codex--app-server-ordered-table (rows)
+  "Return a completion table over ROWS that keeps them in order.
+The `$' menu is ordered by group -- every plugin, then every skill -- so
+the table declines the sorting completion would otherwise apply."
+  (lambda (string predicate action)
+    (if (eq action 'metadata)
+        '(metadata (display-sort-function . identity)
+                   (cycle-sort-function . identity))
+      (complete-with-action action rows string predicate))))
 
 (defun codex--app-server-list-plugins ()
   "Open the native plugin workflow using `plugin/list'."
@@ -2275,7 +2370,7 @@ END is updated to the new end of the replaced region."
   '("/archive" "/clear" "/compact" "/copy" "/debug-config" "/delete"
     "/diff" "/exit" "/experimental" "/fast" "/feedback" "/fork" "/goal"
     "/goal-clear" "/hooks" "/init" "/logout" "/mcp" "/memories" "/mention"
-    "/model" "/new" "/permissions" "/personality" "/plugin-mention" "/plugins" "/ps" "/quit"
+    "/model" "/new" "/permissions" "/personality" "/plugins" "/ps" "/quit"
     "/raw" "/rename" "/resume" "/review" "/skills" "/status" "/stop"
     "/unarchive" "/usage")
   "Slash commands recognized by the app-server backend, used for completion.
