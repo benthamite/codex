@@ -985,6 +985,19 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
          (format "$%s " (alist-get 'name skill)))
       (codex--app-server-insert-status "No enabled Codex skills available"))))
 
+(defun codex-app-server-insert-slash ()
+  "Insert slash and start command completion at the composer beginning."
+  (interactive)
+  (let ((at-input-start
+         (and (codex--app-server-input-active-p)
+              (= (point) codex--app-server-input-marker))))
+    (insert "/")
+    (when at-input-start
+      (completion-at-point))))
+
+(define-key codex-app-server-mode-map (kbd "/")
+            #'codex-app-server-insert-slash)
+
 (defun codex--app-server-toggle-skill (skills)
   "Toggle one skill from SKILLS using `skills/config/write'."
   (when-let* ((skill (codex--app-server-read-object
@@ -2462,11 +2475,17 @@ qualified name of a plugin-provided skill begins with its plugin, so
         (list start end (codex--app-server-mention-table)
               :annotation-function #'codex--app-server-mention-annotation
               :exclusive 'no)))
-     ((codex--app-server-completion-bounds "/")
+     ((codex--app-server-slash-completion-bounds)
       (pcase-let ((`(,start . ,end)
-                   (codex--app-server-completion-bounds "/")))
+                   (codex--app-server-slash-completion-bounds)))
         (list start end codex--app-server-slash-commands
               :exclusive 'no))))))
+
+(defun codex--app-server-slash-completion-bounds ()
+  "Return bounds including a slash at the composer beginning, or nil."
+  (when-let ((bounds (codex--app-server-completion-bounds "/")))
+    (when (= (car bounds) (1+ codex--app-server-input-marker))
+      (cons (1- (car bounds)) (cdr bounds)))))
 
 (defun codex--app-server-mention-table ()
   "Return a completion table over the identifiers the `$' menu offers.

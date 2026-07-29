@@ -2458,9 +2458,42 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (insert "/resu")
     (pcase-let ((`(,start ,end ,collection . ,_)
                  (codex--app-server-completion-at-point)))
-      (should (= start (- (point) 4)))
+      (should (= start (- (point) 5)))
       (should (= end (point)))
-      (should (member "/resume" (all-completions "/resu" collection))))))
+      (should
+       (member "/resume"
+               (all-completions
+                (buffer-substring-no-properties start end)
+                collection))))))
+
+(ert-deftest codex-test-app-server-slash-key-starts-completion ()
+  "Typing slash at the start of the composer opens command completion."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-slash-key/*" t)
+    (setq-local codex--app-server-turn-active-p nil)
+    (codex-app-server-mode)
+    (codex--app-server-setup-input-region)
+    (should (eq (lookup-key codex-app-server-mode-map (kbd "/"))
+                #'codex-app-server-insert-slash))
+    (goto-char (point-max))
+    (let (completed)
+      (cl-letf (((symbol-function 'completion-at-point)
+                 (lambda () (setq completed t))))
+        (call-interactively (key-binding (kbd "/"))))
+      (should completed))
+    (should (equal (codex--app-server-input-text) "/"))))
+
+(ert-deftest codex-test-app-server-slash-before-composer-does-not-error ()
+  "Typing slash during startup inserts it without trying completion."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-slash-startup/*" t)
+    (codex-app-server-mode)
+    (let (completed)
+      (cl-letf (((symbol-function 'completion-at-point)
+                 (lambda () (setq completed t))))
+        (codex-app-server-insert-slash))
+      (should-not completed))
+    (should (equal (buffer-string) "/"))))
 
 (ert-deftest codex-test-app-server-capf-completes-skill-when-idle ()
   "Completion candidates are offered after a skill prefix."
