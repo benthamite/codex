@@ -124,6 +124,9 @@ theme, those backgrounds render as visible rectangles regardless
 of which direction the mismatch runs (light-on-dark or
 dark-on-light).
 
+The option keeps its historical name, but remapping works in both
+directions.
+
 When non-nil, backgrounds whose WCAG contrast against the Emacs
 default background exceeds `codex-background-contrast-threshold'
 are replaced with `codex-card-background' (or stripped entirely
@@ -431,9 +434,15 @@ _BACKEND is the terminal backend type (should be \\='eat)."
 _BACKEND is the terminal backend type (should be \\='eat)."
   (not eat--semi-char-mode))
 
+(defconst codex--eat-terminal-tail-tolerance 2
+  "Characters from buffer end treated as the live Eat terminal tail.")
+
 (defun codex--eat-synchronize-scroll (windows)
   "Synchronize scrolling and point between terminal and WINDOWS.
-Custom version that keeps the prompt at the bottom of the window."
+The symbol `buffer' in WINDOWS requests current-buffer point
+synchronization; window objects request window-point synchronization.
+Keep the prompt at the bottom when the cursor is within
+`codex--eat-terminal-tail-tolerance' characters of the terminal tail."
   (dolist (window windows)
     (if (eq window 'buffer)
         (goto-char (eat-term-display-cursor eat-terminal))
@@ -441,7 +450,8 @@ Custom version that keeps the prompt at the bottom of the window."
         (let ((cursor-pos (eat-term-display-cursor eat-terminal)))
           (set-window-point window cursor-pos)
           (cond
-           ((>= cursor-pos (- (point-max) 2))
+           ((>= cursor-pos
+                (- (point-max) codex--eat-terminal-tail-tolerance))
             (with-selected-window window
               (goto-char cursor-pos)
               (recenter -1)))
@@ -471,7 +481,7 @@ _BACKEND is the terminal backend type (should be \\='eat)."
   (when codex-remap-light-backgrounds
     (codex--acquire-managed-advice 'eat--process-output-queue
                                    :after
-                                   #'codex--remap-light-backgrounds-after-output))
+                                   #'codex--remap-clashing-backgrounds-after-output))
   (when codex-enable-prompt-autosuggestions
     (codex--acquire-managed-advice 'eat--process-output-queue
                                    :after
@@ -557,7 +567,7 @@ _BACKEND is the terminal backend type (should be \\='eat)."
       (funcall orig-fun terminal output)
     (codex--with-debug-stepping-inhibited
       (pcase-let ((`(,complete . ,pending)
-                   (codex--split-incomplete-terminal-output
+                   (codex--split-incomplete-csi-output
                     (codex--sanitize-eat-output
                      (concat codex--eat-pending-output output)))))
         (setq codex--eat-pending-output pending)
@@ -584,19 +594,24 @@ _BACKEND is the terminal backend type (should be \\='eat)."
    (codex--strip-terminal-control-sequences output)
    t t))
 
+(defconst codex--terminal-control-sequence-regexps
+  '(("complete OSC" . "\e\\][^\a\e]*\\(?:\a\\|\e\\\\\\)")
+    ("complete string control" . "\e[PX^_].*?\e\\\\")
+    ("open OSC" . "\e\\].*\\'")
+    ("open string control" . "\e[PX^_].*\\'")
+    ("complete CSI" . "\e\\[[0-?]*[ -/]*[@-~]")
+    ("open CSI" . "\e\\[[0-?]*[ -/]*\\'")
+    ("two-byte ESC" . "\e[@-_]"))
+  "Named ANSI control families removed from malformed terminal output.
+Complete and unterminated string controls are separate because parser
+errors can leave an open control at the end of a chunk.")
+
 (defun codex--strip-terminal-control-sequences (output)
   "Return OUTPUT without ANSI escape control sequences."
   (let ((text output))
-    (setq text (replace-regexp-in-string
-                "\e\\][^\a\e]*\\(?:\a\\|\e\\\\\\)" "" text t t))
-    (setq text (replace-regexp-in-string
-                "\e[PX^_].*?\e\\\\" "" text t t))
-    (setq text (replace-regexp-in-string "\e\\].*\\'" "" text t t))
-    (setq text (replace-regexp-in-string "\e[PX^_].*\\'" "" text t t))
-    (setq text (replace-regexp-in-string
-                "\e\\[[0-?]*[ -/]*[@-~]" "" text t t))
-    (setq text (replace-regexp-in-string "\e\\[[0-?]*[ -/]*\\'" "" text t t))
-    (replace-regexp-in-string "\e[@-_]" "" text t t)))
+    (dolist (control codex--terminal-control-sequence-regexps text)
+      (setq text
+            (replace-regexp-in-string (cdr control) "" text t t)))))
 
 (defun codex--sanitize-eat-output (output)
   "Return OUTPUT with Codex-inappropriate terminal commands removed."
@@ -626,15 +641,16 @@ cursor tracking from buffer position and tripping an assertion in
        (bound-and-true-p eat-terminal)
        (eq terminal eat-terminal)))
 
-(defun codex--split-incomplete-terminal-output (output)
-  "Split OUTPUT into complete text and an incomplete trailing escape."
-  (if-let* ((tail-start (codex--incomplete-terminal-tail-start output)))
+(defun codex--split-incomplete-csi-output (output)
+  "Split OUTPUT before a trailing bare ESC or incomplete CSI sequence."
+  (if-let* ((tail-start
+             (codex--incomplete-escape-or-csi-tail-start output)))
       (cons (substring output 0 tail-start)
             (substring output tail-start))
     (cons output nil)))
 
-(defun codex--incomplete-terminal-tail-start (output)
-  "Return the start of OUTPUT's incomplete trailing escape sequence."
+(defun codex--incomplete-escape-or-csi-tail-start (output)
+  "Return the start of OUTPUT's trailing bare ESC or incomplete CSI."
   (let ((esc (codex--last-escape-position output)))
     (when esc
       (cond
@@ -1023,8 +1039,10 @@ cannot be resolved."
           (setq result (nconc result (list k v))))))
     result))
 
-(defun codex--face-inherit-only-p (face)
-  "Return non-nil if FACE is a plist with only :inherit and no visual attributes."
+(defun codex--face-lacks-preserved-attributes-p (face)
+  "Return non-nil when FACE has no visual attributes this remapper preserves.
+The preserved attributes are foreground, background, weight, slant,
+underline, overline, strike-through, box, and inverse video."
   (and (consp face)
        (not (plist-get face :foreground))
        (not (plist-get face :background))
@@ -1050,7 +1068,7 @@ cannot be resolved."
   (put-text-property beg end 'face face)
   (put-text-property beg end 'font-lock-face face))
 
-(defun codex--remap-light-backgrounds-in-region (beg end card-bg threshold)
+(defun codex--remap-clashing-backgrounds-in-region (beg end card-bg threshold)
   "Replace clashing backgrounds between BEG and END with CARD-BG.
 CARD-BG is the replacement color, or nil to strip backgrounds entirely.
 Backgrounds whose WCAG contrast against the Emacs default
@@ -1081,14 +1099,15 @@ attributes, since these can cause font-weight mismatches."
   (let ((new-face (if card-bg
                       (plist-put (copy-sequence face) :background card-bg)
                     (codex--strip-plist-key face :background))))
-    (if (and (null card-bg) (codex--face-inherit-only-p new-face))
+    (if (and (null card-bg)
+             (codex--face-lacks-preserved-attributes-p new-face))
         nil
       new-face)))
 
 (defun codex--strip-inherit-only-trailing-face (face card-bg pos)
   "Return nil for inherit-only trailing FACE at POS when CARD-BG is nil."
   (if (and (null card-bg)
-           (codex--face-inherit-only-p face)
+           (codex--face-lacks-preserved-attributes-p face)
            (codex--trailing-whitespace-span-p pos))
       nil
     face))
@@ -1110,8 +1129,8 @@ visible rectangle against THEME-BG."
               (ratio (codex--contrast-ratio bg theme-bg)))
     (> ratio threshold)))
 
-(defun codex--remap-light-backgrounds-after-output (buffer)
-  "Remap light backgrounds and low-contrast foregrounds in BUFFER.
+(defun codex--remap-clashing-backgrounds-after-output (buffer)
+  "Remap clashing backgrounds and low-contrast foregrounds in BUFFER.
 Intended as :after advice on `eat--process-output-queue'.
 BUFFER is the eat buffer whose output was just processed."
   (when (and codex-remap-light-backgrounds
@@ -1125,7 +1144,7 @@ BUFFER is the eat buffer whose output was just processed."
                  (inhibit-read-only t)
                  (inhibit-modification-hooks t))
             (when (and beg end (< beg end))
-              (codex--remap-light-backgrounds-in-region
+              (codex--remap-clashing-backgrounds-in-region
                beg end
                codex-card-background
                codex-background-contrast-threshold)

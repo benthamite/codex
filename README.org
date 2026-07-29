@@ -181,7 +181,7 @@ The user option ~codex-emacsclient-program~ specifies the =emacsclient= executab
 
 The Codex CLI has its own theme system, and the colors it emits do not always match the Emacs theme.  Mismatches make terminal text unreadable in two directions: the CLI may paint light backgrounds on a dark Emacs theme (bright rectangles containing dark text), or dark backgrounds on a light Emacs theme (dark rectangles containing light text).  A third kind of mismatch is low-contrast foreground colors that wash out against the effective background (e.g. bright cyan on a light default background, or dark red on a dark diff background).  The remapping system runs after each batch of terminal output and addresses all three.
 
-The user option ~codex-remap-light-backgrounds~ is the master switch.  The default is ~t~.  When non-nil, background colors whose WCAG contrast against the Emacs default background exceeds ~codex-background-contrast-threshold~ are stripped (or replaced), and --- when ~codex-minimum-contrast-ratio~ is also non-nil --- low-contrast foregrounds are stripped as well.
+The user option ~codex-remap-light-backgrounds~ is the master switch.  The default is ~t~.  Its name is historical: the remapper handles both light CLI backgrounds on dark Emacs themes and dark CLI backgrounds on light Emacs themes.  When non-nil, background colors whose WCAG contrast against the Emacs default background exceeds ~codex-background-contrast-threshold~ are stripped (or replaced), and --- when ~codex-minimum-contrast-ratio~ is also non-nil --- low-contrast foregrounds are stripped as well.
 
 The user option ~codex-card-background~ specifies the replacement color for clashing backgrounds.  When ~nil~ (the default), clashing backgrounds are stripped entirely so the Emacs buffer background shows through.  Set this to a color string (e.g. ~"#1a1b2e"~) to use a fixed replacement color instead.
 
@@ -460,7 +460,7 @@ The function ~codex-start-session~ starts a Codex session from explicit keyword 
 
 The function ~codex-prompt-input~ returns the pending prompt input text in a Codex session buffer, or nil when the prompt is empty.
 
-The function ~codex-session-identity~ returns a session buffer's identity as a plist with keys ~:directory~, ~:instance~, ~:session-id~, and ~:terminal-backend~, or nil for buffers that are not Codex sessions.
+The function ~codex-session-identity~ returns a session buffer's identity as a plist with keys ~:directory~, ~:instance~, ~:session-id~, and ~:terminal-backend~, or nil for buffers that are not Codex sessions.  When recorded session metadata is incomplete, it can discover the session id from the app-server thread or the session transcript path and retain that canonical identity for later backend-independent calls.
 
 ** Notification functions
 :PROPERTIES:

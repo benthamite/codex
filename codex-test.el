@@ -1645,7 +1645,7 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (should (member "do the thing"
                     (mapcar (lambda (submission)
                               (plist-get submission :text))
-                            codex--app-server-queued-commands)))))
+                            codex--app-server-startup-submissions)))))
 
 (ert-deftest codex-test-app-server-history-is-read-only ()
   "Rendered app-server history cannot be edited interactively."
@@ -3041,7 +3041,7 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (setq-local codex--app-server-reasoning-items (make-hash-table :test 'equal))
     (codex--app-server-setup-input-region)
     (codex--app-server-submit-command "/status")
-    (should (null codex--app-server-queued-commands))
+    (should (null codex--app-server-startup-submissions))
     (should (string-match-p "tokens" (buffer-string)))
     (should-not (string-match-p "^User$" (buffer-string)))))
 
@@ -3384,7 +3384,7 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (should (member "next thing"
                     (mapcar (lambda (submission)
                               (plist-get submission :text))
-                            codex--app-server-queued-commands)))
+                            codex--app-server-startup-submissions)))
     ;; the queued-inputs block is removed once the queue drains
     (should-not (string-match-p "Queued follow-up inputs" (buffer-string)))))
 
@@ -5181,7 +5181,7 @@ When only :inherit remains, the face is removed entirely."
     (with-temp-buffer
       (insert "hello")
       (put-text-property 1 6 'face '(:background "#EEEEEE" :inherit (eat-term-font-0)))
-      (codex--remap-light-backgrounds-in-region 1 6 nil 3.0)
+      (codex--remap-clashing-backgrounds-in-region 1 6 nil 3.0)
       (should-not (get-text-property 1 'face)))))
 
 (ert-deftest codex-test-remap-strips-dark-bg-on-light-theme ()
@@ -5190,7 +5190,7 @@ When only :inherit remains, the face is removed entirely."
     (with-temp-buffer
       (insert "hello")
       (put-text-property 1 6 'face '(:background "#2a2a37" :inherit (eat-term-font-0)))
-      (codex--remap-light-backgrounds-in-region 1 6 nil 3.0)
+      (codex--remap-clashing-backgrounds-in-region 1 6 nil 3.0)
       (should-not (get-text-property 1 'face)))))
 
 (ert-deftest codex-test-remap-preserves-matching-bg-on-dark-theme ()
@@ -5199,7 +5199,7 @@ When only :inherit remains, the face is removed entirely."
     (with-temp-buffer
       (insert "hello")
       (put-text-property 1 6 'face '(:background "#1a1a2e"))
-      (codex--remap-light-backgrounds-in-region 1 6 nil 3.0)
+      (codex--remap-clashing-backgrounds-in-region 1 6 nil 3.0)
       (should (equal (plist-get (get-text-property 1 'face) :background) "#1a1a2e")))))
 
 (ert-deftest codex-test-remap-preserves-matching-bg-on-light-theme ()
@@ -5208,7 +5208,7 @@ When only :inherit remains, the face is removed entirely."
     (with-temp-buffer
       (insert "hello")
       (put-text-property 1 6 'face '(:background "#ede7da"))
-      (codex--remap-light-backgrounds-in-region 1 6 nil 3.0)
+      (codex--remap-clashing-backgrounds-in-region 1 6 nil 3.0)
       (should (equal (plist-get (get-text-property 1 'face) :background) "#ede7da")))))
 
 (ert-deftest codex-test-remap-keeps-foreground-when-stripping-bg ()
@@ -5219,7 +5219,7 @@ When only :inherit remains, the face is removed entirely."
       (put-text-property 1 6 'face
                          '(:background "#EEEEEE" :foreground "#00ff00"
                                        :inherit (eat-term-font-0)))
-      (codex--remap-light-backgrounds-in-region 1 6 nil 3.0)
+      (codex--remap-clashing-backgrounds-in-region 1 6 nil 3.0)
       (let ((face (get-text-property 1 'face)))
         (should-not (plist-get face :background))
         (should (equal (plist-get face :foreground) "#00ff00"))))))
@@ -5230,7 +5230,7 @@ When only :inherit remains, the face is removed entirely."
     (with-temp-buffer
       (insert "hello")
       (put-text-property 1 6 'face '(:background "#EEEEEE"))
-      (codex--remap-light-backgrounds-in-region 1 6 "#1c1d2b" 3.0)
+      (codex--remap-clashing-backgrounds-in-region 1 6 "#1c1d2b" 3.0)
       (should (equal (plist-get (get-text-property 1 'face) :background) "#1c1d2b")))))
 
 (ert-deftest codex-test-remap-no-face ()
@@ -5238,7 +5238,7 @@ When only :inherit remains, the face is removed entirely."
   (cl-letf (((symbol-function 'face-background) (lambda (&rest _) "#0d0e1c")))
     (with-temp-buffer
       (insert "hello")
-      (codex--remap-light-backgrounds-in-region 1 6 nil 3.0)
+      (codex--remap-clashing-backgrounds-in-region 1 6 nil 3.0)
       (should-not (get-text-property 1 'face)))))
 
 (ert-deftest codex-test-remap-after-output-skips-old-scrollback ()
@@ -5269,7 +5269,7 @@ When only :inherit remains, the face is removed entirely."
             (setq-local eat-terminal 'fake)
             (setq-local codex--remapped-output-end
                         (copy-marker old-remapped-end nil)))
-          (codex--remap-light-backgrounds-after-output buf)
+          (codex--remap-clashing-backgrounds-after-output buf)
           (with-current-buffer buf
             (should (plist-get (get-text-property 1 'face) :background))
             (should-not (get-text-property old-remapped-end 'face))

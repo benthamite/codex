@@ -69,10 +69,13 @@ _BACKEND is the terminal backend type (should be \\='vterm)."
          (vterm-max-scrollback codex-vterm-max-scrollback)
          (buffer (get-buffer-create buffer-name)))
     (inheritenv
-     (codex--vterm-start-hidden-buffer buffer))))
+     (codex--vterm-start-in-temporary-window buffer))))
 
-(defun codex--vterm-start-hidden-buffer (buffer)
-  "Start vterm in BUFFER without making it the final displayed buffer."
+(defun codex--vterm-start-in-temporary-window (buffer)
+  "Start vterm in BUFFER through a temporary live window.
+`vterm-mode' reads window width and height while creating the terminal,
+so BUFFER must be displayed during startup.  Remove that provisional
+window before the caller applies the normal Codex display policy."
   (with-current-buffer buffer
     (pop-to-buffer buffer)
     (if codex-term-name
@@ -167,7 +170,10 @@ _BACKEND is the terminal backend type (should be \\='vterm)."
   nil)
 
 (defvar-local codex--vterm-control-state nil
-  "Parser state carried across vterm output chunks for OSC detection.")
+  "Parser state carried across vterm output chunks for OSC detection.
+Nil means ordinary text; `escape' means ESC was seen outside an OSC
+string; `osc' means inside OSC; and `osc-escape' means ESC was seen
+inside OSC and may start its ESC-backslash terminator.")
 
 (cl-defmethod codex--term-cleanup ((_backend (eql vterm)))
   "Clean up vterm buffer-local state."

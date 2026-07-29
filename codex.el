@@ -1155,12 +1155,12 @@ appended CLI switches.  RESUME-ID resumes that session id.
 INITIAL-PROMPT is the opening user message.  SWITCH-AFTER non-nil pops
 to the new buffer."
   (let* ((buffer-name (codex--buffer-name-for-directory dir instance))
-         (prompt-arg (and initial-prompt
-                          (not resume-id)
-                          (not (eq backend 'app-server))))
+         (prompt-via-cli-p (and initial-prompt
+                                (not resume-id)
+                                (not (eq backend 'app-server))))
          (switches (codex--start-session-switches
                     backend extra-switches resume-id
-                    (and prompt-arg initial-prompt)))
+                    (and prompt-via-cli-p initial-prompt)))
          (codex--app-server-pending-startup-action
           (if (and resume-id (eq backend 'app-server))
               'resume-session
@@ -1171,7 +1171,7 @@ to the new buffer."
             codex--app-server-pending-startup-session-id))
          (buffer (codex--launch-session dir backend buffer-name instance
                                         switches switch-after)))
-    (when (and initial-prompt (not prompt-arg))
+    (when (and initial-prompt (not prompt-via-cli-p))
       (codex--send-command-to-buffer initial-prompt buffer))
     buffer))
 
@@ -1958,7 +1958,11 @@ transcript file.  Interactively, prompt only when neither is known."
         (codex--cache-session-transcript codex--session-id file)))))
 
 (defun codex--current-session-identity ()
-  "Return the current Codex session identity, or nil when unavailable."
+  "Discover, record, and return the current Codex session identity.
+The discovery checks recorded state, the app-server thread id, and the
+visible or recorded transcript path.  It canonicalizes any discovered
+id and path in buffer-local state and the transcript cache.  Return nil
+when no session id is available."
   (let* ((file (codex--current-session-transcript-file))
          (session-id (or (codex--nonempty-session-id codex--session-id)
                          (and (boundp 'codex--app-server-thread-id)
@@ -2000,12 +2004,19 @@ transcript file.  Interactively, prompt only when neither is known."
               file))
     (match-string 1 file)))
 
+(defconst codex--visible-session-header-scan-limit 5000
+  "Maximum initial buffer characters scanned for a visible Session header.
+Terminal backends print session metadata near startup; bounding this scan
+avoids treating later transcript text as authoritative session metadata.")
+
 (defun codex--visible-session-transcript-file ()
   "Return a visible session transcript path from the current buffer."
   (save-excursion
     (goto-char (point-min))
     (when (re-search-forward "^Session[ \t]+\\(.+\\.jsonl\\)$"
-                             (min (point-max) 5000) t)
+                             (min (point-max)
+                                  codex--visible-session-header-scan-limit)
+                             t)
       (codex--usable-transcript-file
        (string-trim (match-string-no-properties 1))))))
 
@@ -2130,6 +2141,11 @@ Return non-nil when text was inserted."
                       (codex--transcript-display-line line))))
               (split-string message "\n")))))
 
+(defconst codex--transcript-line-match-prefix-length 60
+  "Maximum normalized characters used to match one transcript line.
+A stable prefix still identifies a line when terminal wrapping makes its
+rendered suffix differ from the JSONL transcript.")
+
 (defun codex--buffer-display-line-position (line &optional after)
   "Return end position of rendered transcript LINE in the buffer.
 When AFTER is non-nil, return the first occurrence after AFTER.
@@ -2140,8 +2156,11 @@ Otherwise return the last occurrence in the buffer."
            (save-restriction
              (widen)
              (goto-char (or after (point-min)))
-             (let ((query (if (> (length needle) 60)
-                              (substring needle 0 60)
+             (let ((query (if (> (length needle)
+                                 codex--transcript-line-match-prefix-length)
+                              (substring
+                               needle 0
+                               codex--transcript-line-match-prefix-length)
                             needle))
                    position)
                (if after
@@ -2200,10 +2219,12 @@ Otherwise return the last occurrence in the buffer."
 
 (defun codex--transcript-final-message (file)
   "Return the final agent message recorded in transcript FILE."
-  (car (last (codex--transcript-agent-messages file))))
+  (car (last (codex--transcript-completion-messages file))))
 
-(defun codex--transcript-agent-messages (file)
-  "Return agent messages recorded in transcript FILE, in order."
+(defun codex--transcript-completion-messages (file)
+  "Return completion messages recorded in transcript FILE, in order.
+Prefer `task_complete.last_agent_message' values.  When none exist,
+return only the last `agent_message' as the fallback completion."
   (let (messages fallback)
     (with-temp-buffer
       (insert-file-contents file)
@@ -2321,6 +2342,13 @@ Only runs when `codex-enable-hooks' is non-nil."
         (buffer-string))
     ""))
 
+;; This is a preservation-oriented structural scanner, not a general TOML
+;; parser.  It finds assignments and table headers without reserializing the
+;; user's config, while ignoring apparent structure inside strings, arrays,
+;; inline tables, and comments.  Editing an inline `features' table would
+;; require a fuller parser, so `codex--config-toml-with-hooks-enabled' refuses
+;; that shape instead of risking a destructive rewrite.
+
 (defun codex--toml-skip-horizontal-space (text position)
   "Return the first non-space position in TEXT at or after POSITION."
   (let ((length (length text)))
@@ -2433,7 +2461,7 @@ Return a plist containing semantic `:keys' and the `:end' position."
           (codex--toml-skip-horizontal-space line (1+ position)))))
 
 (defun codex--toml-assignment-line-positions (predicate start end)
-  "Return top-level assignment line positions satisfying PREDICATE.
+  "Return structural assignment line positions satisfying PREDICATE.
 Only inspect lines at or after START and before END.  PREDICATE receives
 the assignment's semantic key path."
   (let (positions)
@@ -2520,7 +2548,7 @@ The result contains `:keys' and a boolean `:array' value."
       (while (and (< position length) (not closed))
         (let ((character (aref line position)))
           (pcase mode
-            ('basic
+            ('basic-string
              (cond
               ((eq character ?\\)
                (setq position (min length (+ position 2))))
@@ -2529,7 +2557,7 @@ The result contains `:keys' and a boolean `:array' value."
                      position (1+ position)))
               (t
                (setq position (1+ position)))))
-            ('literal
+            ('literal-string
              (if (eq character ?')
                  (setq mode nil
                        position (1+ position))
@@ -2537,10 +2565,10 @@ The result contains `:keys' and a boolean `:array' value."
             (_
              (cond
               ((eq character ?\")
-               (setq mode 'basic
+               (setq mode 'basic-string
                      position (1+ position)))
               ((eq character ?')
-               (setq mode 'literal
+               (setq mode 'literal-string
                      position (1+ position)))
               ((and (eq character ?\])
                     (or (not array)
@@ -2583,20 +2611,20 @@ The result contains `:keys' and a boolean `:array' value."
       (setq end (1+ end)))
     (- end position)))
 
-(defun codex--toml-scan-line (line state square-depth curly-depth)
-  "Scan TOML LINE from STATE and return lexical state and container depths.
-STATE is nil, `basic', or `literal'.  SQUARE-DEPTH and CURLY-DEPTH
-track multiline arrays and inline tables so their contents cannot be
-mistaken for root assignments or table headers."
+(defun codex--toml-scan-line (line multiline-string-state
+                                   array-depth inline-table-depth)
+  "Scan TOML LINE from MULTILINE-STRING-STATE.
+Return `(STATE ARRAY-DEPTH INLINE-TABLE-DEPTH)'.  STATE is nil,
+`multiline-basic-string', or `multiline-literal-string'.  ARRAY-DEPTH
+and INLINE-TABLE-DEPTH track containers whose contents cannot be
+mistaken for structural assignments or table headers."
   (let ((position 0)
         (length (length line))
-        (mode state)
-        (square square-depth)
-        (curly curly-depth))
+        (string-state multiline-string-state))
     (while (< position length)
       (let ((character (aref line position)))
-        (pcase mode
-          ('basic
+        (pcase string-state
+          ('multiline-basic-string
            (if (and (eq character ?\")
                     (not (codex--toml-escaped-p line position))
                     (>= (codex--toml-quote-run-length
@@ -2604,31 +2632,31 @@ mistaken for root assignments or table headers."
                         3))
                (let ((run (codex--toml-quote-run-length
                            line position ?\")))
-                 (setq mode nil
+                 (setq string-state nil
                        position (+ position run)))
              (setq position (1+ position))))
-          ('literal
+          ('multiline-literal-string
            (if (and (eq character ?')
                     (>= (codex--toml-quote-run-length
                          line position ?')
                         3))
                (let ((run (codex--toml-quote-run-length
                            line position ?')))
-                 (setq mode nil
+                 (setq string-state nil
                        position (+ position run)))
              (setq position (1+ position))))
-          ('quoted-basic
+          ('basic-string
            (cond
             ((eq character ?\\)
              (setq position (min length (+ position 2))))
             ((eq character ?\")
-             (setq mode nil
+             (setq string-state nil
                    position (1+ position)))
             (t
              (setq position (1+ position)))))
-          ('quoted-literal
+          ('literal-string
            (if (eq character ?')
-               (setq mode nil
+               (setq string-state nil
                      position (1+ position))
              (setq position (1+ position))))
           (_
@@ -2639,52 +2667,65 @@ mistaken for root assignments or table headers."
                   (>= (codex--toml-quote-run-length
                        line position ?\")
                       3))
-             (setq mode 'basic
+             (setq string-state 'multiline-basic-string
                    position (+ position 3)))
             ((and (eq character ?')
                   (>= (codex--toml-quote-run-length
                        line position ?')
                       3))
-             (setq mode 'literal
+             (setq string-state 'multiline-literal-string
                    position (+ position 3)))
             ((eq character ?\")
-             (setq mode 'quoted-basic
+             (setq string-state 'basic-string
                    position (1+ position)))
             ((eq character ?')
-             (setq mode 'quoted-literal
+             (setq string-state 'literal-string
                    position (1+ position)))
             ((eq character ?\[)
-             (setq square (1+ square)
+             (setq array-depth (1+ array-depth)
                    position (1+ position)))
             ((eq character ?\])
-             (setq square (max 0 (1- square))
+             (setq array-depth (max 0 (1- array-depth))
                    position (1+ position)))
             ((eq character ?{)
-             (setq curly (1+ curly)
+             (setq inline-table-depth (1+ inline-table-depth)
                    position (1+ position)))
             ((eq character ?})
-             (setq curly (max 0 (1- curly))
+             (setq inline-table-depth
+                   (max 0 (1- inline-table-depth))
                    position (1+ position)))
             (t
              (setq position (1+ position))))))))
-    (list (and (memq mode '(basic literal)) mode) square curly)))
+    (list (and (memq string-state
+                     '(multiline-basic-string multiline-literal-string))
+               string-state)
+          array-depth
+          inline-table-depth)))
 
 (defun codex--toml-outside-line-positions ()
   "Return TOML line starts outside multiline strings and container values."
   (save-excursion
     (goto-char (point-min))
-    (let (positions state (square 0) (curly 0))
+    (let (positions
+          multiline-string-state
+          (array-depth 0)
+          (inline-table-depth 0))
       (while (not (eobp))
         (let ((line (buffer-substring-no-properties
                      (line-beginning-position) (line-end-position))))
-          (when (and (null state) (zerop square) (zerop curly))
+          (when (and (null multiline-string-state)
+                     (zerop array-depth)
+                     (zerop inline-table-depth))
             (push (line-beginning-position) positions))
-          (pcase-let ((`(,next-state ,next-square ,next-curly)
+          (pcase-let ((`(,next-string-state
+                         ,next-array-depth
+                         ,next-inline-table-depth)
                        (codex--toml-scan-line
-                        line state square curly)))
-            (setq state next-state
-                  square next-square
-                  curly next-curly)))
+                        line multiline-string-state
+                        array-depth inline-table-depth)))
+            (setq multiline-string-state next-string-state
+                  array-depth next-array-depth
+                  inline-table-depth next-inline-table-depth)))
         (forward-line 1))
       (nreverse positions))))
 
@@ -2868,10 +2909,10 @@ mistaken for root assignments or table headers."
   (let ((hooks (copy-tree (alist-get 'hooks existing)))
         (modified nil))
     (dolist (spec codex--hook-specs)
-      (pcase-let ((`(,updated-hooks . ,changed)
+      (pcase-let ((`(,updated-hooks . ,changed-p)
                    (codex--merge-hook-entry hooks spec wrapper-path)))
         (setq hooks updated-hooks
-              modified (or modified changed))))
+              modified (or modified changed-p))))
     (if (or modified (not existing))
         (let ((output (copy-tree existing)))
           (setf (alist-get 'hooks output) hooks)
@@ -2879,7 +2920,9 @@ mistaken for root assignments or table headers."
       existing)))
 
 (defun codex--merge-hook-entry (hooks spec wrapper-path)
-  "Return HOOKS with SPEC installed for WRAPPER-PATH."
+  "Merge SPEC into HOOKS for WRAPPER-PATH.
+Return `(UPDATED-HOOKS . CHANGED-P)', where CHANGED-P is non-nil only
+when the returned hook data differs from HOOKS."
   (let* ((hook-type (plist-get spec :type))
          (hook-key (intern hook-type))
          (existing-entries (alist-get hook-key hooks))

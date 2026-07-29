@@ -185,8 +185,9 @@ because per-tool hooks can be frequent."
 
 (defvar-local codex--app-server-account nil
   "Active account as reported by `account/read'.
-An alist with `type', `email', and `planType', or nil before the server
-has been asked.")
+An alist with `type', `email', and `planType', or nil when no usable
+account is known because it has not been read, the read failed, or the
+user is logged out.")
 
 (defvar-local codex--app-server-turn-diff nil
   "Cumulative diff of agent changes reported by `turn/diff/updated'.
@@ -257,11 +258,15 @@ Used to name a background terminal when rendering stdin sent to it, since
 (defvar-local codex--app-server-compose-target nil
   "Codex buffer that a compose buffer sends its prompt back to.")
 
-(defvar-local codex--app-server-queued-commands nil
-  "Commands waiting for app-server thread startup.")
+(defvar-local codex--app-server-startup-submissions nil
+  "Submission plists waiting for app-server thread startup.
+Each plist has `:text', `:images', `:mentions', and `:owned-images'
+keys; see `codex--app-server-take-submission'.")
 
 (defvar-local codex--app-server-queued-turn-inputs nil
-  "Inputs queued with Tab to send after the active turn completes.")
+  "Submission plists queued with Tab until the active turn completes.
+Each plist has `:text', `:images', `:mentions', and `:owned-images'
+keys; see `codex--app-server-take-submission'.")
 
 (defvar-local codex--app-server-queue-start nil
   "Marker at the start of the rendered queued-inputs block.")
@@ -333,10 +338,14 @@ Used to name a background terminal when rendering stdin sent to it, since
   "Directory state key for `codex--app-server-skill-cache'.")
 
 (defvar codex--app-server-pending-startup-action 'start
-  "Startup action for the next app-server session: \\='start, \\='resume, or \\='fork.")
+  "Startup action for the next app-server session.
+One of `start', `resume', `resume-session', or `fork'.  `resume'
+prompts for a thread; `resume-session' resumes a known session id.")
 
 (defvar-local codex--app-server-startup-action 'start
-  "Startup action for this app-server buffer: \\='start, \\='resume, or \\='fork.")
+  "Startup action for this app-server buffer.
+One of `start', `resume', `resume-session', or `fork'.  `resume'
+prompts for a thread; `resume-session' resumes a known session id.")
 
 (defvar codex--app-server-pending-startup-session-id nil
   "Session id for the next app-server resume-by-id startup.")
@@ -600,7 +609,9 @@ This lets optional fields and protocol booleans flow naturally through
       (alist-get 'threadId (alist-get 'item params))))
 
 (defun codex--app-server-current-thread-notification-p (params)
-  "Return non-nil when notification PARAMS belong in this buffer."
+  "Return non-nil when notification PARAMS belong in this buffer.
+Server-wide notifications carry no thread id, and startup notifications
+can arrive before this buffer has learned its thread id; both belong here."
   (let ((thread-id (codex--app-server-notification-thread-id params)))
     (or (null thread-id)
         (null codex--app-server-thread-id)
@@ -744,7 +755,7 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
       (codex--app-server-refresh-mention-rows)
       (unless defer-input
         (codex--app-server-setup-input-region)
-        (codex--app-server-flush-queued-commands)))))
+        (codex--app-server-flush-startup-submissions)))))
 
 (defun codex--app-server-setup-input-region ()
   "Render the app-server input prompt and initialize input markers."
@@ -2619,14 +2630,14 @@ qualified `superpowers:brainstorming' the CLI inserts."
 
 (defun codex--app-server-skill-names ()
   "Return locally available Codex skill names."
-  (let ((key (codex--app-server-skill-cache-key)))
+  (let ((key (codex--app-server-current-skill-cache-key)))
     (unless (equal key codex--app-server-skill-cache-key)
       (setq codex--app-server-skill-cache-key key
             codex--app-server-skill-cache
             (codex--app-server-read-skill-names)))
     codex--app-server-skill-cache))
 
-(defun codex--app-server-skill-cache-key ()
+(defun codex--app-server-current-skill-cache-key ()
   "Return a cache key for current skill directory state."
   (mapcar (lambda (dir)
             (when (file-directory-p dir)
@@ -3097,8 +3108,8 @@ the way the Codex CLI groups them onto one `└ Read FILE, FILE' line."
 
 (defun codex--app-server-string-or-empty (value)
   "Return VALUE when it is a string, otherwise return the empty string.
-App-server JSON null values decode as `:null', which optional string
-fields use to mean absent."
+Optional string fields can decode as nil; any non-string value is
+treated as absent."
   (if (stringp value) value ""))
 
 (defun codex--app-server-command-reads (item)
@@ -4014,7 +4025,7 @@ shape, such as an elicitation's `action'."
        (codex--app-server-render-resumed-history
         (alist-get 'data (alist-get 'initialTurnsPage result)))
        (codex--app-server-setup-input-region)
-       (codex--app-server-flush-queued-commands)))))
+       (codex--app-server-flush-startup-submissions)))))
 
 (defun codex--app-server-begin-resume-session-id (session-id)
   "Resume SESSION-ID in the current app-server buffer."
@@ -4091,7 +4102,7 @@ attachments."
         (codex--app-server-ensure-trailing-newline)
         (if codex--app-server-thread-id
             (codex--app-server-send-turn-input submission)
-          (push submission codex--app-server-queued-commands)))))))
+          (push submission codex--app-server-startup-submissions)))))))
 
 (defun codex--app-server-record-input (command)
   "Record COMMAND in this buffer's input history."
@@ -4186,8 +4197,9 @@ When FRONT is non-nil, preserve it ahead of already queued submissions."
 
 (defun codex--app-server-user-input-vector (submission-or-text)
   "Return the app-server input vector for SUBMISSION-OR-TEXT.
-A string captures the current pending attachments for compatibility with
-callers that only need to build one input vector."
+When given a string for compatibility, take and clear the current
+pending attachments before building the vector.  Normal send paths pass
+an already captured submission plist and do not consume buffer state."
   (let* ((submission
           (if (stringp submission-or-text)
               (codex--app-server-take-submission submission-or-text)
@@ -4208,7 +4220,11 @@ callers that only need to build one input vector."
                            (text_elements . [])))))))
 
 (defun codex--app-server-take-submission (text)
-  "Capture TEXT and the pending attachments as one submission."
+  "Take TEXT and pending attachments as one submission plist.
+The result has `:text', `:images', `:mentions', and `:owned-images'
+keys.  Taking a submission clears the buffer's pending images and
+mentions; `:owned-images' identifies clipboard files whose lifetime
+must follow server acceptance and turn completion."
   (let ((submission
          (list :text text
                :images codex--app-server-pending-images
@@ -4446,12 +4462,12 @@ returns untracked files, verified against a freshly created one."
   (interactive)
   (kill-buffer (current-buffer)))
 
-(defun codex--app-server-flush-queued-commands ()
-  "Submit commands queued before app-server thread startup."
-  (let ((commands (nreverse codex--app-server-queued-commands)))
-    (setq codex--app-server-queued-commands nil)
-    (dolist (command commands)
-      (codex--app-server-send-turn-input command))))
+(defun codex--app-server-flush-startup-submissions ()
+  "Submit captured submissions queued before app-server thread startup."
+  (let ((submissions (nreverse codex--app-server-startup-submissions)))
+    (setq codex--app-server-startup-submissions nil)
+    (dolist (submission submissions)
+      (codex--app-server-send-turn-input submission))))
 
 (defun codex--app-server-interrupt-turn ()
   "Interrupt the active app-server turn."
