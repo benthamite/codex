@@ -15,6 +15,7 @@ ITEM_TYPE filters item/completed payloads (default: all). Examples:
 Env:
     CGT_DIR      working dir for the thread (default: /tmp/codex-gt)
     CGT_SANDBOX  sandbox mode (default: workspace-write)
+    CGT_TURN_TIMEOUT seconds to wait for turn completion (default: 90)
 """
 import subprocess, json, threading, sys, os, time
 
@@ -52,6 +53,7 @@ CODEX_ARGS = (os.environ["CGT_CODEX_ARGS"].split()
 # the default silently cut a plugin list mid-object and made it unparseable.
 # Raise it with CGT_TRACE_MAX when you need the whole thing.
 TRACE_MAX = int(os.environ.get("CGT_TRACE_MAX", "4000"))
+TURN_TIMEOUT = float(os.environ.get("CGT_TURN_TIMEOUT", "90"))
 
 p = subprocess.Popen(["codex", "app-server", *CODEX_ARGS], stdin=subprocess.PIPE,
                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -124,7 +126,10 @@ if not tid[0]:
 send("turn/start", {"threadId": tid[0],
                     "input": [{"type": "text", "text": prompt}],
                     "cwd": CWD, "approvalPolicy": APPROVAL})
-done.wait(timeout=90)
+if not done.wait(timeout=TURN_TIMEOUT):
+    p.terminate()
+    print(f"Turn timed out after {TURN_TIMEOUT:g} seconds", file=sys.stderr)
+    sys.exit(1)
 for call in EXTRA:
     params = json.loads(json.dumps(call.get("params", {}))
                         .replace("{threadId}", tid[0] or ""))

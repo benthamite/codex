@@ -20,6 +20,7 @@ test:
 	  -l codex-test.el \
 	  -f ert-run-tests-batch-and-exit
 	bash codex-hook-wrapper-test.sh
+	python3 -m unittest discover -s ground-truth -p '*_test.py'
 
 compile:
 	$(EMACS) -Q --batch $(LOAD_PATH) \

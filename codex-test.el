@@ -349,6 +349,225 @@
   (should (equal (codex--config-toml-with-hooks-enabled "[features]")
                  "[features]\nhooks = true\n")))
 
+(ert-deftest codex-test-config-toml-hooks-preserves-dotted-features ()
+  "Enable hooks without redeclaring a dotted `features' table."
+  (should
+   (equal
+    (codex--config-toml-with-hooks-enabled
+     "features.other = true\n[model]\nname = \"gpt\"\n")
+    "features.other = true\nfeatures.hooks = true\n[model]\nname = \"gpt\"\n")))
+
+(ert-deftest codex-test-config-toml-hooks-refuses-inline-features ()
+  "Refuse to corrupt a config that defines `features' as an inline table."
+  (let ((file (make-temp-file "codex-test-config" nil ".toml"))
+        original)
+    (unwind-protect
+        (let ((codex-hooks-config-path file))
+          (setq original "features = { other = true }\n")
+          (with-temp-file file
+            (insert original))
+          (should-error (codex--ensure-config-toml-hooks) :type 'user-error)
+          (should
+           (equal
+            (with-temp-buffer
+              (insert-file-contents file)
+              (buffer-string))
+            original)))
+      (delete-file file))))
+
+(ert-deftest codex-test-config-toml-hooks-stops-at-array-table ()
+  "Do not rewrite a hooks key in a later array-of-tables entry."
+  (should
+   (equal
+    (codex--config-toml-with-hooks-enabled
+     "[features]\nother = true\n[[agents]]\nhooks = false\n")
+    "[features]\nhooks = true\nother = true\n[[agents]]\nhooks = false\n")))
+
+(ert-deftest codex-test-config-toml-hooks-supports-quoted-features ()
+  "Handle quoted table and dotted-key spellings of `features'."
+  (should
+   (equal
+    (codex--config-toml-with-hooks-enabled
+     "[\"features\"]\nhooks = false\n")
+    "[\"features\"]\nhooks = true\n"))
+  (should
+   (equal
+    (codex--config-toml-with-hooks-enabled
+    "\"features\".other = true\n[model]\nname = \"gpt\"\n")
+    "\"features\".other = true\nfeatures.hooks = true\n[model]\nname = \"gpt\"\n")))
+
+(ert-deftest codex-test-config-toml-hooks-ignores-profile-dotted-key ()
+  "Do not mistake a profile-local dotted key for root features."
+  (let* ((content "[profiles.work]\nfeatures.hooks = false\n")
+         (output (codex--config-toml-with-hooks-enabled content)))
+    (should (string-match-p
+             "\\[profiles\\.work\\]\nfeatures\\.hooks = false"
+             output))
+    (should (string-match-p "\\[features\\]\nhooks = true" output))))
+
+(ert-deftest codex-test-config-toml-hooks-handles-bracket-in-quoted-table-key ()
+  "A bracket inside a quoted table key does not hide the table boundary."
+  (let* ((content
+          "[profiles.\"x]y\"]\nfeatures.hooks = false\n")
+         (output (codex--config-toml-with-hooks-enabled content)))
+    (should
+     (equal output
+            (concat content "\n[features]\nhooks = true\n")))))
+
+(ert-deftest codex-test-config-toml-hooks-supports-spaced-dotted-key ()
+  "Update a root dotted key whose TOML dot has surrounding whitespace."
+  (let ((output
+         (codex--config-toml-with-hooks-enabled
+          "features . hooks = false\n[profiles.work]\nmodel = \"x\"\n")))
+    (should (string-prefix-p
+             "features.hooks = true\n[profiles.work]"
+             output))
+    (should-not (string-match-p "\\[features\\]" output))))
+
+(ert-deftest codex-test-config-toml-hooks-supports-escaped-dotted-subkey ()
+  "Recognize a valid quoted dotted subkey containing an escaped quote."
+  (let ((output
+         (codex--config-toml-with-hooks-enabled
+          "features.\"a\\\"b\" = true\n")))
+    (should
+     (equal output
+            "features.\"a\\\"b\" = true\nfeatures.hooks = true\n"))))
+
+(ert-deftest codex-test-config-toml-hooks-supports-hash-in-dotted-subkey ()
+  "Recognize a quoted dotted subkey containing a literal hash."
+  (dolist (content
+           '("features.\"a#b\" = true\n"
+             "features.'a#b' = true\n"))
+    (should
+     (equal (codex--config-toml-with-hooks-enabled content)
+            (concat content "features.hooks = true\n")))))
+
+(ert-deftest codex-test-config-toml-hooks-decodes-basic-quoted-keys ()
+  "Compare escaped TOML basic keys by their semantic values."
+  (dolist
+      (case
+       '(("\"feat\\u0075res\".other = true\n"
+          . "\"feat\\u0075res\".other = true\nfeatures.hooks = true\n")
+         ("[\"feat\\u0075res\"]\nother = true\n"
+          . "[\"feat\\u0075res\"]\nhooks = true\nother = true\n")
+         ("[features]\n\"hoo\\u006bs\" = false\n"
+          . "[features]\nhooks = true\n")
+         ("features.\"hoo\\u006bs\" = false\n"
+          . "features.hooks = true\n")))
+    (should
+     (equal (codex--config-toml-with-hooks-enabled (car case))
+            (cdr case)))))
+
+(ert-deftest codex-test-config-toml-hooks-supports-quoted-hooks-key ()
+  "Update a quoted hooks key inside the features table."
+  (let ((output
+         (codex--config-toml-with-hooks-enabled
+          "[features]\n\"hooks\" = false\nother = true\n")))
+    (should (equal output
+                   "[features]\nhooks = true\nother = true\n"))))
+
+(ert-deftest codex-test-config-toml-hooks-removes-legacy-table-duplicate ()
+  "Leave one current hooks key when legacy and current table keys coexist."
+  (should
+   (equal
+    (codex--config-toml-with-hooks-enabled
+    "[features]\ncodex_hooks = false\nhooks = false\n")
+    "[features]\nhooks = true\n")))
+
+(ert-deftest codex-test-config-toml-hooks-keeps-legacy-key-in-next-table ()
+  "Removing a long features key must not cross into the next TOML table."
+  (let ((content
+         (concat "[features]\n"
+                 "codex_hooks = false # this is a very long legacy line\n"
+                 "[other]\n"
+                 "codex_hooks = false\n")))
+    (should
+     (equal (codex--config-toml-with-hooks-enabled content)
+            "[features]\nhooks = true\n[other]\ncodex_hooks = false\n"))))
+
+(ert-deftest codex-test-config-toml-hooks-removes-legacy-dotted-duplicate ()
+  "Leave one current hooks key when legacy and current dotted keys coexist."
+  (should
+   (equal
+    (codex--config-toml-with-hooks-enabled
+    "features.codex_hooks = false\nfeatures.hooks = false\n")
+    "features.hooks = true\n")))
+
+(ert-deftest codex-test-config-toml-hooks-skips-tables-in-multiline-string ()
+  "Do not insert a root dotted key inside a TOML multiline string."
+  (let* ((content
+          (concat "features.web_search = true\n"
+                  "developer_instructions = \"\"\"\n"
+                  "[not-a-table]\n"
+                  "keep this text\n"
+                  "\"\"\"\n"))
+         (output (codex--config-toml-with-hooks-enabled content)))
+    (should (equal
+             output
+             (concat "features.web_search = true\n"
+                     "developer_instructions = \"\"\"\n"
+                     "[not-a-table]\n"
+                     "keep this text\n"
+                     "\"\"\"\n"
+                     "features.hooks = true\n")))))
+
+(ert-deftest codex-test-config-toml-hooks-skips-features-table-in-multiline-string ()
+  "Do not update a `[features]' line that is multiline string content."
+  (let* ((content
+          (concat "developer_instructions = \"\"\"\n"
+                  "[features]\n"
+                  "hooks = false\n"
+                  "\"\"\"\n"))
+         (output (codex--config-toml-with-hooks-enabled content)))
+    (should
+     (equal output
+            (concat content "\n[features]\nhooks = true\n")))))
+
+(ert-deftest codex-test-config-toml-hooks-ignores-triple-quotes-in-comments ()
+  "Do not let a comment hide later TOML table headers."
+  (let ((content
+         (concat "features.web_search = true # example: \"\"\"\n"
+                 "[model]\n"
+                 "name = \"gpt\"\n")))
+    (should
+     (equal
+      (codex--config-toml-with-hooks-enabled content)
+      (concat "features.web_search = true # example: \"\"\"\n"
+              "features.hooks = true\n"
+              "[model]\n"
+              "name = \"gpt\"\n")))))
+
+(ert-deftest codex-test-config-toml-hooks-handles-long-quote-closers ()
+  "Recognize TOML multiline strings closed by four or five quotes."
+  (dolist (case
+           `(("\"\"\"" . ,(concat "developer_instructions = \"\"\"\n"
+                                  "text\"\"\"\"\n"))
+             ("'''" . ,(concat "developer_instructions = '''\n"
+                               "text'''''\n"))))
+    (let ((content (cdr case)))
+      (should
+       (equal (codex--config-toml-with-hooks-enabled content)
+              (concat content "\n[features]\nhooks = true\n"))))))
+
+(ert-deftest codex-test-config-toml-hooks-skips-brackets-inside-array-values ()
+  "Do not mistake a nested array element for a TOML table header."
+  (let ((content
+         (concat "features.web_search = true\n"
+                 "items = [\n"
+                 "  [1]\n"
+                 "]\n")))
+    (should
+     (equal
+      (codex--config-toml-with-hooks-enabled content)
+      (concat content "features.hooks = true\n")))))
+
+(ert-deftest codex-test-config-toml-hooks-refuses-quoted-inline-features ()
+  "Refuse a quoted inline `features' table without changing the file."
+  (should-error
+   (codex--config-toml-with-hooks-enabled
+    "\"features\" = { other = true }\n")
+   :type 'user-error))
+
 ;;;; hooks.json merging tests
 
 (ert-deftest codex-test-hooks-json-creates-new-file ()
@@ -1060,6 +1279,65 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (delete-file file)
       (delete-file config)))
 
+(ert-deftest codex-test-app-server-transcript-metadata-uses-latest-turn ()
+  "Use the latest turn context for mutable transcript header fields."
+  (let ((file (make-temp-file "codex-metadata" nil ".jsonl")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (dolist (context '(((model . "gpt-old") (effort . "low"))
+                               ((model . "gpt-new") (effort . "high"))))
+              (insert (json-encode
+                       `((type . "turn_context") (payload . ,context)))
+                      "\n")))
+          (let ((metadata
+                 (codex--app-server-transcript-header-metadata file)))
+            (should (equal (alist-get 'model metadata) "gpt-new"))
+            (should (equal (alist-get 'effort metadata) "high"))))
+      (delete-file file))))
+
+(ert-deftest codex-test-app-server-resume-header-uses-active-thread-settings ()
+  "A resumed thread's model and effort override configured new-thread values."
+  (let ((file (make-temp-file "codex-resume-header" nil ".jsonl"))
+        (codex-model "configured-model")
+        (codex-reasoning-effort "high"))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert
+             (json-encode
+              '((type . "turn_context")
+                (payload (model . "resumed-model") (effort . "low"))))
+             "\n"))
+          (with-temp-buffer
+            (rename-buffer "*codex:/tmp/app-server-resume-header/*" t)
+            (setq-local codex--buffer-directory "/tmp")
+            (codex--app-server-thread-started
+             `((thread (id . "thread-1") (path . ,file))) t)
+            (let ((text
+                   (buffer-substring-no-properties (point-min) (point-max))))
+              (should (string-match-p
+                       "model:     resumed-model low" text))
+              (should-not (string-match-p "configured-model" text)))
+            (should (string-match-p
+                     "^model resumed-model"
+                     (codex--app-server-status-text)))
+            (should (equal codex-reasoning-effort "low"))))
+      (delete-file file))))
+
+(ert-deftest codex-test-app-server-config-string-reads-literal-string ()
+  "Read a valid top-level TOML literal string from config.toml."
+  (let ((file (make-temp-file "codex-config" nil ".toml")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "service_tier = 'fast'\n[features]\nfoo = true\n"))
+          (let ((codex-hooks-config-path file))
+            (should (equal
+                     (codex--app-server-config-string "service_tier")
+                     "fast"))))
+      (delete-file file))))
+
 (ert-deftest codex-test-app-server-thread-started-records-core-session-metadata ()
   "App-server thread startup records the generic Codex session identity."
   (let* ((dir (make-temp-file "codex-app-server-thread" t))
@@ -1364,7 +1642,10 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (let ((text (buffer-substring-no-properties (point-min) (point-max))))
       (should (string-match-p "› do the thing" text)))
     (should (equal (codex--app-server-input-text) ""))
-    (should (member "do the thing" codex--app-server-queued-commands))))
+    (should (member "do the thing"
+                    (mapcar (lambda (submission)
+                              (plist-get submission :text))
+                            codex--app-server-queued-commands)))))
 
 (ert-deftest codex-test-app-server-history-is-read-only ()
   "Rendered app-server history cannot be edited interactively."
@@ -1554,6 +1835,7 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (unwind-protect
           (progn
             (should (file-exists-p file))
+            (should (member file codex--app-server-owned-image-files))
             (should (string-suffix-p ".png" file))
             (with-temp-buffer
               (set-buffer-multibyte nil)
@@ -1591,6 +1873,296 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (should mention)
       (should (equal (alist-get 'path mention) "/tmp/foo.el")))
     (should (null codex--app-server-pending-mentions))))
+
+(ert-deftest codex-test-app-server-image-attachments-preserve-order ()
+  "Send explicitly attached images in the order the user chose them."
+  (with-temp-buffer
+    (codex-app-server-attach-image "/tmp/first.png")
+    (codex-app-server-attach-image "/tmp/second.png")
+    (let ((vec (codex--app-server-user-input-vector "look")))
+      (should (equal (mapcar (lambda (item) (alist-get 'path item))
+                             (seq-take (append vec nil) 2))
+                     '("/tmp/first.png" "/tmp/second.png"))))))
+
+(ert-deftest codex-test-app-server-queued-input-owns-its-attachments ()
+  "Keep each Tab-queued message paired with its own attachments."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-queue-attachments/*" t)
+    (codex--app-server-setup-input-region)
+    (setq-local codex--app-server-turn-active-p t)
+    (setq-local codex--app-server-pending-images '("/tmp/first.png"))
+    (goto-char (point-max))
+    (insert "first")
+    (codex--app-server-queue-input)
+    (should-not codex--app-server-pending-images)
+    (setq-local codex--app-server-pending-images '("/tmp/second.png"))
+    (goto-char (point-max))
+    (insert "second")
+    (codex--app-server-queue-input)
+    (should (equal
+             (mapcar (lambda (submission)
+                       (list (plist-get submission :text)
+                             (plist-get submission :images)))
+                     codex--app-server-queued-turn-inputs)
+             '(("first" ("/tmp/first.png"))
+               ("second" ("/tmp/second.png")))))
+    (codex-app-server-edit-last-queued)
+    (should (equal (codex--app-server-input-text) "second"))
+    (should (equal codex--app-server-pending-images
+                   '("/tmp/second.png")))))
+
+(ert-deftest codex-test-app-server-queued-local-command-keeps-attachments ()
+  "A queued slash or shell command must not consume the next prompt's files."
+  (dolist (command '("/status" "!echo hi"))
+    (with-temp-buffer
+      (rename-buffer (format "*codex:/tmp/app-server-local-%s/*" command) t)
+      (codex--app-server-setup-input-region)
+      (setq-local codex--app-server-turn-active-p t)
+      (setq-local codex--app-server-thread-id "thread-1")
+      (setq-local codex--app-server-pending-images '("/tmp/next.png"))
+      (setq-local codex--app-server-pending-mentions
+                  '(("next.el" . "/tmp/next.el")))
+      (goto-char (point-max))
+      (insert command)
+      (codex--app-server-queue-input)
+      (should (equal codex--app-server-pending-images '("/tmp/next.png")))
+      (should (equal codex--app-server-pending-mentions
+                     '(("next.el" . "/tmp/next.el"))))
+      (cl-letf (((symbol-function 'codex--app-server-show-status) #'ignore)
+                ((symbol-function 'codex--app-server-run-shell-command) #'ignore))
+        (codex--app-server-flush-turn-queue))
+      (should (equal codex--app-server-pending-images '("/tmp/next.png")))
+      (should (equal codex--app-server-pending-mentions
+                     '(("next.el" . "/tmp/next.el")))))))
+
+(ert-deftest codex-test-app-server-failed-turn-restores-submission ()
+  "Restore composer text and attachments when turn/start is rejected."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-retry/*" t)
+    (codex--app-server-setup-input-region)
+    (setq-local codex--app-server-thread-id "thread-1")
+    (setq-local codex--buffer-directory "/tmp")
+    (setq-local codex--app-server-pending-images '("/tmp/retry.png"))
+    (goto-char (point-max))
+    (insert "try this")
+    (cl-letf (((symbol-function 'codex--app-server-send-request)
+               (lambda (_method _params callback)
+                 (funcall callback nil '((message . "rejected")))))
+              ((symbol-function 'codex--app-server-insert-status) #'ignore)
+              ((symbol-function 'codex--app-server-insert-message) #'ignore))
+      (codex--app-server-send-input))
+    (should (equal (codex--app-server-input-text) "try this"))
+    (should (equal codex--app-server-pending-images
+                   '("/tmp/retry.png")))))
+
+(ert-deftest codex-test-app-server-failed-turn-preserves-newer-draft ()
+  "A delayed failure restores the sent message without losing a newer draft."
+  (let (callback)
+    (with-temp-buffer
+      (rename-buffer "*codex:/tmp/app-server-delayed-retry/*" t)
+      (codex--app-server-setup-input-region)
+      (setq-local codex--app-server-thread-id "thread-1")
+      (setq-local codex--buffer-directory "/tmp")
+      (setq-local codex--app-server-pending-images '("/tmp/old.png"))
+      (goto-char (point-max))
+      (insert "failed message")
+      (cl-letf (((symbol-function 'codex--app-server-send-request)
+                 (lambda (_method _params cb) (setq callback cb)))
+                ((symbol-function 'codex--app-server-insert-message) #'ignore)
+                ((symbol-function 'codex--app-server-insert-status) #'ignore))
+        (codex--app-server-send-input)
+        (setq-local codex--app-server-pending-images '("/tmp/new.png"))
+        (goto-char (point-max))
+        (insert "  newer draft  ")
+        (funcall callback nil '((message . "rejected"))))
+      (should (equal (codex--app-server-input-text) "failed message"))
+      (should (equal codex--app-server-pending-images '("/tmp/old.png")))
+      (should (equal
+               (mapcar (lambda (submission)
+                         (list (plist-get submission :text)
+                               (plist-get submission :images)))
+                       codex--app-server-queued-turn-inputs)
+               '(("  newer draft  " ("/tmp/new.png"))))))))
+
+(ert-deftest codex-test-app-server-failed-turn-separates-newer-attachments ()
+  "Do not merge an attachment-only newer draft into the failed submission."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-attachment-retry/*" t)
+    (codex--app-server-setup-input-region)
+    (setq-local codex--app-server-pending-images '("/tmp/new.png"))
+    (setq-local codex--app-server-pending-mentions
+                '(("new.el" . "/tmp/new.el")))
+    (codex--app-server-restore-submission
+     '(:text "failed message" :images ("/tmp/old.png")
+       :mentions (("old.el" . "/tmp/old.el")) :owned-images nil))
+    (should (equal (codex--app-server-input-text) "failed message"))
+    (should (equal codex--app-server-pending-images '("/tmp/old.png")))
+    (should (equal codex--app-server-pending-mentions
+                   '(("old.el" . "/tmp/old.el"))))
+    (let ((newer (car codex--app-server-queued-turn-inputs)))
+      (should (equal (plist-get newer :text) ""))
+      (should (equal (plist-get newer :images) '("/tmp/new.png")))
+      (should (equal (plist-get newer :mentions)
+                     '(("new.el" . "/tmp/new.el")))))))
+
+(ert-deftest codex-test-app-server-failed-steer-preserves-message-order ()
+  "Retry a failed steer before any newer composer draft."
+  (let (callback submitted)
+    (with-temp-buffer
+      (rename-buffer "*codex:/tmp/app-server-steer-order/*" t)
+      (codex--app-server-setup-input-region)
+      (setq-local codex--app-server-turn-active-p t)
+      (setq-local codex--app-server-thread-id "thread-1")
+      (setq-local codex--app-server-current-turn-id "turn-1")
+      (cl-letf (((symbol-function 'codex--app-server-send-request)
+                 (lambda (_method _params cb) (setq callback cb)))
+                ((symbol-function 'codex--app-server-insert-status) #'ignore))
+        (codex--app-server-send-turn-steer
+         '(:text "failed steer" :images nil :mentions nil
+           :owned-images nil))
+        (goto-char (point-max))
+        (insert "newer draft")
+        (funcall callback nil '((message . "turn ended"))))
+      (should (equal (codex--app-server-input-text) "newer draft"))
+      (should
+       (equal (mapcar (lambda (submission)
+                        (plist-get submission :text))
+                      codex--app-server-queued-turn-inputs)
+              '("failed steer")))
+      (cl-letf (((symbol-function 'codex--app-server-submit-command)
+                 (lambda (command &optional _submission)
+                   (setq submitted command)))
+                ((symbol-function 'codex--app-server-update-status-overlay)
+                 #'ignore)
+                ((symbol-function 'codex--app-server-refresh-status-timer)
+                 #'ignore))
+        (codex--app-server-turn-completed nil))
+      (should (equal submitted "failed steer"))
+      (should (equal (codex--app-server-input-text) "newer draft")))))
+
+(ert-deftest codex-test-app-server-serializes-pending-turn-starts ()
+  "Queue later submissions until the outstanding `turn/start' is accepted."
+  (let (requests callback)
+    (with-temp-buffer
+      (rename-buffer "*codex:/tmp/app-server-start-serialization/*" t)
+      (codex--app-server-setup-input-region)
+      (setq-local codex--app-server-thread-id "thread-1")
+      (setq-local codex--buffer-directory "/tmp")
+      (cl-letf (((symbol-function 'codex--app-server-send-request)
+                 (lambda (method _params cb)
+                   (push method requests)
+                   (setq callback cb)))
+                ((symbol-function 'codex--app-server-start-status-timer)
+                 #'ignore)
+                ((symbol-function 'codex--app-server-update-status-overlay)
+                 #'ignore))
+        (codex--app-server-send-turn-input
+         '(:text "first" :images nil :mentions nil :owned-images nil))
+        (codex--app-server-send-turn-input
+         '(:text "second" :images nil :mentions nil :owned-images nil))
+        (should (equal requests '("turn/start")))
+        (should codex--app-server-turn-start-pending-p)
+        (should
+         (equal (mapcar (lambda (submission)
+                          (plist-get submission :text))
+                        codex--app-server-queued-turn-inputs)
+                '("second")))
+        (funcall callback '((turn . ((id . "turn-1")))) nil)
+        (should codex--app-server-turn-active-p)
+        (should-not codex--app-server-turn-start-pending-p)))))
+
+(ert-deftest codex-test-app-server-synchronous-send-failure-restores-submission ()
+  "Restore input and remove its callback when transport sending fails."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-send-error/*" t)
+    (codex--app-server-setup-input-region)
+    (setq-local codex--app-server-thread-id "thread-1")
+    (setq-local codex--buffer-directory "/tmp")
+    (setq-local codex--app-server-next-request-id 0)
+    (setq-local codex--app-server-pending-requests
+                (make-hash-table :test 'equal))
+    (cl-letf (((symbol-function 'codex--app-server-send-json)
+               (lambda (_message) (error "transport closed"))))
+      (should-error
+       (codex--app-server-send-turn-start
+        '(:text "retry me" :images ("/tmp/retry.png")
+          :mentions nil :owned-images nil))
+       :type 'error))
+    (should (zerop (hash-table-count codex--app-server-pending-requests)))
+    (should (equal (codex--app-server-input-text) "retry me"))
+    (should (equal codex--app-server-pending-images
+                   '("/tmp/retry.png")))))
+
+(ert-deftest codex-test-app-server-cleanup-deletes-only-owned-images ()
+  "Cleanup removes clipboard temps but leaves user-selected images alone."
+  (let ((owned (make-temp-file "codex-owned-" nil ".png"))
+        (user-file (make-temp-file "codex-user-" nil ".png")))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local codex--app-server-owned-image-files (list owned))
+          (setq-local codex--app-server-pending-images
+                      (list owned user-file))
+          (codex--term-cleanup 'app-server)
+          (should-not (file-exists-p owned))
+          (should (file-exists-p user-file)))
+      (when (file-exists-p owned) (delete-file owned))
+      (when (file-exists-p user-file) (delete-file user-file)))))
+
+(ert-deftest codex-test-app-server-keeps-image-until-turn-completes ()
+  "A successful request response must not delete an image before worker use."
+  (let ((owned (make-temp-file "codex-owned-active-" nil ".png")))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local codex--app-server-thread-id "thread-1")
+          (setq-local codex--buffer-directory "/tmp")
+          (setq-local codex--app-server-owned-image-files (list owned))
+          (cl-letf (((symbol-function 'codex--app-server-send-request)
+                     (lambda (_method _params callback)
+                       (funcall callback '((turn . ((id . "turn-1")))) nil)))
+                    ((symbol-function 'codex--app-server-turn-started) #'ignore)
+                    ((symbol-function 'codex--app-server-update-status-overlay)
+                     #'ignore)
+                    ((symbol-function 'codex--app-server-refresh-status-timer)
+                     #'ignore)
+                    ((symbol-function 'codex--app-server-flush-turn-queue)
+                     #'ignore))
+            (codex--app-server-send-turn-start
+             `(:text "sent" :images (,owned) :mentions nil
+               :owned-images (,owned)))
+            (should (file-exists-p owned))
+            (should
+             (equal codex--app-server-active-owned-image-files (list owned)))
+            (codex--app-server-turn-completed nil)
+            (should-not (file-exists-p owned))
+            (should-not codex--app-server-owned-image-files)
+            (should-not codex--app-server-active-owned-image-files)))
+      (when (file-exists-p owned) (delete-file owned)))))
+
+(ert-deftest codex-test-app-server-image-cleanup-retries-delete-failure ()
+  "Keep ownership after a delete failure so later cleanup can retry."
+  (let ((owned (make-temp-file "codex-owned-retry-" nil ".png"))
+        (attempts 0)
+        (real-delete (symbol-function 'delete-file)))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local codex--app-server-owned-image-files (list owned))
+          (setq-local codex--app-server-active-owned-image-files (list owned))
+          (cl-letf (((symbol-function 'delete-file)
+                     (lambda (file &optional trash)
+                       (setq attempts (1+ attempts))
+                       (if (= attempts 1)
+                           (error "busy")
+                         (funcall real-delete file trash)))))
+            (codex--app-server-cleanup-active-image-files)
+            (should (member owned codex--app-server-owned-image-files))
+            (should
+             (member owned codex--app-server-active-owned-image-files))
+            (should (file-exists-p owned))
+            (codex--app-server-cleanup-owned-image-files)
+            (should-not codex--app-server-owned-image-files)
+            (should-not codex--app-server-active-owned-image-files)
+            (should-not (file-exists-p owned))))
+      (when (file-exists-p owned) (delete-file owned)))))
 
 (ert-deftest codex-test-app-server-protocol-slash-commands-send-requests ()
   "Protocol-backed slash commands send their native app-server requests."
@@ -1680,7 +2252,7 @@ assertion in `eat--t-cur-left' on the following cursor move."
 
 (ert-deftest codex-test-app-server-skills-toggle-through-config-request ()
   "/skills toggles the selected skill through `skills/config/write'."
-  (let (sent)
+  (let (sent refreshed)
     (cl-letf (((symbol-function 'completing-read)
                (lambda (prompt _choices &rest _)
                  (if (equal prompt "Skills: ")
@@ -1690,6 +2262,8 @@ assertion in `eat--t-cur-left' on the following cursor move."
                (lambda (method params callback)
                  (setq sent (cons method params))
                  (funcall callback nil nil)))
+              ((symbol-function 'codex--app-server-refresh-mention-rows)
+               (lambda () (setq refreshed t)))
               ((symbol-function 'codex--app-server-insert-status) #'ignore))
       (codex--app-server-handle-skills
        '(((name . "proofread")
@@ -1700,7 +2274,18 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (should (equal (car sent) "skills/config/write"))
     (should (equal (alist-get 'path (cdr sent))
                    "/tmp/proofread/SKILL.md"))
-    (should (eq (alist-get 'enabled (cdr sent)) t))))
+    (should (eq (alist-get 'enabled (cdr sent)) t))
+    (should refreshed)))
+
+(ert-deftest codex-test-app-server-skills-changed-refreshes-mentions ()
+  "Refresh mention candidates when the server reports changed skills."
+  (let (refreshed)
+    (cl-letf (((symbol-function 'codex--app-server-refresh-mention-rows)
+               (lambda () (setq refreshed t))))
+      (with-temp-buffer
+        (codex--app-server-handle-notification
+         '((method . "skills/changed") (params)))
+        (should refreshed)))))
 
 (ert-deftest codex-test-app-server-plugin-installs-through-native-request ()
   "/plugins installs the selected catalog plugin through `plugin/install'."
@@ -1728,17 +2313,101 @@ assertion in `eat--t-cur-left' on the following cursor move."
 
 (ert-deftest codex-test-app-server-plugin-enablement-matches-native-request ()
   "Plugin enablement uses the same config object write as the Codex TUI."
-  (let (sent)
+  (let (sent refreshed)
     (cl-letf (((symbol-function 'codex--app-server-send-request)
-               (lambda (method params _callback)
-                 (setq sent (cons method params)))))
+               (lambda (method params callback)
+                 (setq sent (cons method params))
+                 (funcall callback nil nil)))
+              ((symbol-function 'codex--app-server-refresh-mention-rows)
+               (lambda () (setq refreshed t)))
+              ((symbol-function 'codex--app-server-insert-status) #'ignore))
       (codex--app-server-set-plugin-enabled
        '((id . "documents@openai") (name . "documents")) t))
     (should (equal (car sent) "config/value/write"))
     (should (equal (alist-get 'keyPath (cdr sent))
                    "plugins.documents@openai"))
     (should (equal (alist-get 'value (cdr sent)) '((enabled . t))))
-    (should (equal (alist-get 'mergeStrategy (cdr sent)) "upsert"))))
+    (should (equal (alist-get 'mergeStrategy (cdr sent)) "upsert"))
+    (should refreshed)))
+
+(ert-deftest codex-test-app-server-background-stop-waits-for-all-results ()
+  "Report stopped only after every terminate request succeeds."
+  (let (callbacks statuses)
+    (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+              ((symbol-function 'codex--app-server-send-request)
+               (lambda (method _params callback)
+                 (should (equal method
+                                "thread/backgroundTerminals/terminate"))
+                 (setq callbacks (append callbacks (list callback)))))
+              ((symbol-function 'codex--app-server-insert-status)
+               (lambda (status) (push status statuses))))
+      (with-temp-buffer
+        (setq-local codex--app-server-thread-id "thread-1")
+        (codex--app-server-confirm-stop-background-terminals
+         '(((processId . "p1")) ((processId . "p2"))))
+        (should-not statuses)
+        (funcall (nth 0 callbacks) nil nil)
+        (should-not statuses)
+        (funcall (nth 1 callbacks) nil nil)
+        (should (equal statuses '("Background terminals stopped")))))))
+
+(ert-deftest codex-test-app-server-background-stop-does-not-mask-failure ()
+  "Do not claim all terminals stopped when one terminate request fails."
+  (let (callbacks statuses)
+    (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+              ((symbol-function 'codex--app-server-send-request)
+               (lambda (_method _params callback)
+                 (setq callbacks (append callbacks (list callback)))))
+              ((symbol-function 'codex--app-server-insert-status)
+               (lambda (status) (push status statuses))))
+      (with-temp-buffer
+        (setq-local codex--app-server-thread-id "thread-1")
+        (codex--app-server-confirm-stop-background-terminals
+         '(((processId . "p1")) ((processId . "p2"))))
+        (funcall (nth 0 callbacks) nil nil)
+        (funcall (nth 1 callbacks) nil '((message . "denied")))
+        (should (seq-some
+                 (lambda (status)
+                   (string-match-p "Background terminal stop failed" status))
+                 statuses))
+        (should-not (member "Background terminals stopped" statuses))))))
+
+(ert-deftest codex-test-app-server-process-exit-clears-transient-state ()
+  "A dead app server clears working state and fails pending requests."
+  (let (callback-error)
+    (with-temp-buffer
+      (rename-buffer "*codex:/tmp/app-server-dead/*" t)
+      (codex--app-server-setup-input-region)
+      (setq-local codex--app-server-turn-active-p t)
+      (setq-local codex--app-server-current-turn-id "turn-1")
+      (setq-local codex--app-server-turn-start-time (float-time))
+      (setq-local codex--app-server-mcp-statuses
+                  '(("server" . "starting")))
+      (setq-local codex--app-server-mcp-start-time (float-time))
+      (setq-local codex--app-server-status-timer
+                  (run-at-time 3600 nil #'ignore))
+      (setq-local codex--app-server-status-overlay
+                  (make-overlay (point-min) (point-min)))
+      (setq-local codex--app-server-pending-requests
+                  (make-hash-table :test 'equal))
+      (puthash 1
+               (lambda (_result error) (setq callback-error error))
+               codex--app-server-pending-requests)
+      (cl-letf (((symbol-function 'process-buffer)
+                 (lambda (_process) (current-buffer)))
+                ((symbol-function 'process-live-p) (lambda (_process) nil)))
+        (codex--app-server-process-sentinel 'fake "exited abnormally\n"))
+      (should-not codex--app-server-turn-active-p)
+      (should-not codex--app-server-current-turn-id)
+      (should-not codex--app-server-turn-start-time)
+      (should-not codex--app-server-mcp-statuses)
+      (should-not codex--app-server-mcp-start-time)
+      (should-not codex--app-server-status-timer)
+      (should-not codex--app-server-status-overlay)
+      (should (zerop (hash-table-count
+                      codex--app-server-pending-requests)))
+      (should (equal (alist-get 'message callback-error)
+                     "Codex app-server exited abnormally")))))
 
 (ert-deftest codex-test-app-server-experimental-toggle-persists-then-applies ()
   "Experimental toggles persist through config before runtime enablement."
@@ -2072,19 +2741,98 @@ assertion in `eat--t-cur-left' on the following cursor move."
                    "          \n› $cmd    \n          "))))
 
 (ert-deftest codex-test-app-server-reasoning-up-down ()
-  "Reasoning up/down cycle the effort levels and clamp at the ends."
-  (let ((codex-reasoning-effort nil))
-    (codex-app-server-reasoning-up)
-    (should (equal codex-reasoning-effort "high"))
-    (codex-app-server-reasoning-up)
-    (should (equal codex-reasoning-effort "xhigh"))
-    (codex-app-server-reasoning-up)
-    (should (equal codex-reasoning-effort "xhigh"))
-    (codex-app-server-reasoning-down)
-    (should (equal codex-reasoning-effort "high"))
-    (setq codex-reasoning-effort "minimal")
-    (codex-app-server-reasoning-down)
-    (should (equal codex-reasoning-effort "minimal"))))
+  "Reasoning up/down uses the current model's advertised effort levels."
+  (with-temp-buffer
+    (setq-local codex--app-server-current-model-id "gpt-5.6-sol")
+    (let ((codex-reasoning-effort nil)
+          (model
+           '((id . "gpt-5.6-sol")
+             (model . "gpt-5.6-sol")
+             (defaultReasoningEffort . "medium")
+             (supportedReasoningEfforts
+              . [((reasoningEffort . "low"))
+                 ((reasoningEffort . "medium"))
+                 ((reasoningEffort . "high"))
+                 ((reasoningEffort . "xhigh"))
+                 ((reasoningEffort . "max"))
+                 ((reasoningEffort . "ultra"))]))))
+      (cl-letf (((symbol-function 'codex--app-server-send-request)
+                 (lambda (method _params callback)
+                   (should (equal method "model/list"))
+                   (funcall callback `((data . [,model])) nil))))
+        (codex-app-server-reasoning-up)
+        (should (equal codex-reasoning-effort "high"))
+        (codex-app-server-reasoning-up)
+        (should (equal codex-reasoning-effort "xhigh"))
+        (codex-app-server-reasoning-up)
+        (should (equal codex-reasoning-effort "max"))
+        (codex-app-server-reasoning-up)
+        (should (equal codex-reasoning-effort "ultra"))
+        (codex-app-server-reasoning-up)
+        (should (equal codex-reasoning-effort "ultra"))
+        (codex-app-server-reasoning-down)
+        (should (equal codex-reasoning-effort "max"))
+        (setq codex-reasoning-effort "low")
+        (codex-app-server-reasoning-down)
+        (should (equal codex-reasoning-effort "low"))))))
+
+(ert-deftest codex-test-app-server-reasoning-step-delays-next-turn ()
+  "Do not send the next turn with stale effort while model levels load."
+  (let (model-callback sent-effort)
+    (with-temp-buffer
+      (setq-local codex--app-server-current-model-id "gpt-5.6-sol")
+      (setq-local codex--app-server-thread-id "thread-1")
+      (setq-local codex--buffer-directory "/tmp")
+      (let ((codex-reasoning-effort "medium"))
+        (cl-letf (((symbol-function 'codex--app-server-send-request)
+                   (lambda (method params callback)
+                     (pcase method
+                       ("model/list" (setq model-callback callback))
+                       ("turn/start"
+                        (setq sent-effort (alist-get 'effort params))
+                        (funcall callback '((turn . ((id . "turn-1"))))
+                                 nil))))))
+          (codex-app-server-reasoning-up)
+          (codex--app-server-send-turn-input
+           '(:text "next" :images nil :mentions nil :owned-images nil))
+          (should-not sent-effort)
+          (funcall
+           model-callback
+           '((data
+              . [((id . "gpt-5.6-sol")
+                  (defaultReasoningEffort . "medium")
+                  (supportedReasoningEfforts
+                   . [((reasoningEffort . "low"))
+                      ((reasoningEffort . "medium"))
+                      ((reasoningEffort . "high"))]))]))
+           nil)
+          (should (equal codex-reasoning-effort "high"))
+          (should (equal sent-effort "high")))))))
+
+(ert-deftest codex-test-app-server-reasoning-steps-share-one-model-read ()
+  "Serialize rapid reasoning steps behind one model-list response."
+  (let (model-callback (requests 0))
+    (with-temp-buffer
+      (setq-local codex--app-server-current-model-id "gpt-5.6-sol")
+      (let ((codex-reasoning-effort "medium"))
+        (cl-letf (((symbol-function 'codex--app-server-send-request)
+                   (lambda (_method _params callback)
+                     (setq requests (1+ requests)
+                           model-callback callback))))
+          (codex-app-server-reasoning-down)
+          (codex-app-server-reasoning-up)
+          (should (= requests 1))
+          (funcall
+           model-callback
+           '((data
+              . [((id . "gpt-5.6-sol")
+                  (defaultReasoningEffort . "medium")
+                  (supportedReasoningEfforts
+                   . [((reasoningEffort . "low"))
+                      ((reasoningEffort . "medium"))
+                      ((reasoningEffort . "high"))]))]))
+           nil)
+          (should (equal codex-reasoning-effort "medium")))))))
 
 (ert-deftest codex-test-app-server-model-picker-applies-reasoning-effort ()
   "/model applies the selected model and reasoning effort together."
@@ -2137,18 +2885,30 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (codex--app-server-dispatch-slash "/raw")
     (should codex-app-server-render-markdown)))
 
-(ert-deftest codex-test-app-server-renders-thread-name-and-goal ()
-  "Thread name and goal updates render as status lines."
+(ert-deftest codex-test-app-server-renders-thread-metadata-updates ()
+  "Thread metadata notifications render their schema-defined fields."
   (with-temp-buffer
     (rename-buffer "*codex:/tmp/app-server-meta/*" t)
     (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
     (codex--app-server-setup-input-region)
     (codex--app-server-handle-message
-     '((method . "thread/name/updated") (params (name . "My Task"))))
+     '((method . "thread/name/updated")
+       (params (threadId . "thread-1") (threadName . "My Task"))))
     (should (string-match-p "Thread renamed: My Task" (buffer-string)))
     (codex--app-server-handle-message
-     '((method . "thread/goal/updated") (params (goal . "Ship the feature"))))
-    (should (string-match-p "Goal: Ship the feature" (buffer-string)))))
+     '((method . "thread/goal/updated")
+       (params (threadId . "thread-1")
+               (goal . ((objective . "Ship the feature")
+                        (createdAt . 123))))))
+    (should (string-match-p "Goal: Ship the feature" (buffer-string)))
+    (codex--app-server-handle-message
+     '((method . "model/rerouted")
+       (params (threadId . "thread-1")
+               (fromModel . "gpt-old")
+               (toModel . "gpt-new")
+               (reason . "capacity"))))
+    (should (string-match-p "Model rerouted to gpt-new" (buffer-string)))
+    (should (equal codex--app-server-current-model-id "gpt-new"))))
 
 (ert-deftest codex-test-app-server-renders-realtime-transcript ()
   "Realtime lifecycle and transcript events render in the buffer."
@@ -2595,7 +3355,10 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (goto-char (point-max))
     (insert "next msg")
     (codex--app-server-complete-or-queue)
-    (should (member "next msg" codex--app-server-queued-turn-inputs))
+    (should (equal (mapcar (lambda (submission)
+                             (plist-get submission :text))
+                           codex--app-server-queued-turn-inputs)
+                   '("next msg")))
     (should (equal (codex--app-server-input-text) ""))))
 
 (ert-deftest codex-test-app-server-tab-queues-input-for-next-turn ()
@@ -2609,13 +3372,19 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (goto-char (point-max))
     (insert "next thing")
     (codex--app-server-queue-input)
-    (should (equal codex--app-server-queued-turn-inputs '("next thing")))
+    (should (equal (mapcar (lambda (submission)
+                             (plist-get submission :text))
+                           codex--app-server-queued-turn-inputs)
+                   '("next thing")))
     (should (equal (codex--app-server-input-text) ""))
     (should (string-match-p "• Queued follow-up inputs" (buffer-string)))
     (should (string-match-p "  ↳ next thing" (buffer-string)))
     (codex--app-server-handle-message '((method . "turn/completed") (params)))
     (should (null codex--app-server-queued-turn-inputs))
-    (should (member "next thing" codex--app-server-queued-commands))
+    (should (member "next thing"
+                    (mapcar (lambda (submission)
+                              (plist-get submission :text))
+                            codex--app-server-queued-commands)))
     ;; the queued-inputs block is removed once the queue drains
     (should-not (string-match-p "Queued follow-up inputs" (buffer-string)))))
 
@@ -2636,7 +3405,10 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (should (string-match-p "  ↳ first" text))
       (should (string-match-p "  ↳ second" text)))
     (codex-app-server-edit-last-queued)
-    (should (equal codex--app-server-queued-turn-inputs '("first")))
+    (should (equal (mapcar (lambda (submission)
+                             (plist-get submission :text))
+                           codex--app-server-queued-turn-inputs)
+                   '("first")))
     (should (equal (codex--app-server-input-text) "second"))))
 
 (ert-deftest codex-test-app-server-renders-file-change-diff ()
@@ -2664,6 +3436,48 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (goto-char (point-min))
     (search-forward "-four")
     (should (eq (get-text-property (1- (point)) 'face) 'diff-removed))))
+
+(ert-deftest codex-test-app-server-renders-added-file-contents-as-additions ()
+  "Treat an added file's raw `diff' payload as file contents.
+Captured app-server payload for a new file containing `++edge' used
+`(kind ((type . \"add\")))' and `(diff . \"++edge\\n\")': the leading
+pluses belong to the file and are not unified-diff markers."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-add/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (codex--app-server-handle-message
+     '((method . "item/completed")
+       (params
+        (item
+         (type . "fileChange") (id . "f-add") (status . "completed")
+         (changes
+          . (((path . "edge.txt")
+              (kind . ((type . "add")))
+              (diff . "++edge\n"))))))))
+    (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+      (should (string-match-p (regexp-quote "• Added edge.txt (+1 -0)")
+                              text))
+      (should (string-match-p
+               (concat "^" (regexp-quote "    1 +++edge") "$")
+               text)))))
+
+(ert-deftest codex-test-app-server-added-file-preserves-trailing-whitespace ()
+  "Preserve trailing spaces and blank lines in an added file payload."
+  (let ((diff
+         (codex--app-server-filechange-diff
+          '((kind . ((type . "add"))) (diff . "a \n\n")))))
+    (should (equal diff "@@ -0,0 +1,2 @@\n+a \n+"))
+    (should (= (codex--app-server-count-diff-lines diff "+") 2))))
+
+(ert-deftest codex-test-app-server-added-file-preserves-one-blank-line ()
+  "Render a one-blank-line added file as one added line, not an empty file."
+  (should
+   (equal
+    (codex--app-server-filechange-diff
+     '((kind . ((type . "add"))) (diff . "\n")))
+    "@@ -0,0 +1,1 @@\n+")))
 
 (ert-deftest codex-test-app-server-renders-mcp-tool-call ()
   "An MCP tool call renders `• Called SERVER.TOOL(ARGS)' + result text, like the CLI."
@@ -3167,6 +3981,34 @@ assertion in `eat--t-cur-left' on the following cursor move."
             (should-not prompted)))
       (kill-buffer buf))))
 
+(ert-deftest codex-test-get-or-prompt-rejects-dead-current-codex-buffer ()
+  "Do not select the current Codex buffer after its process exits."
+  (let ((buf (generate-new-buffer "*codex:/tmp/dead-current/*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (cl-letf (((symbol-function 'codex--directory) (lambda () "/tmp/"))
+                    ((symbol-function 'codex--find-codex-buffers-for-directory)
+                     (lambda (_directory) nil))
+                    ((symbol-function 'codex--find-all-codex-buffers)
+                     (lambda () nil)))
+            (should-not (codex--get-or-prompt-for-buffer))))
+      (kill-buffer buf))))
+
+(ert-deftest codex-test-get-or-prompt-rejects-dead-remembered-buffer ()
+  "Do not select a remembered Codex buffer after its process exits."
+  (let ((buf (generate-new-buffer "*codex:/tmp/dead-remembered/*"))
+        (codex--directory-buffer-map (make-hash-table :test 'equal)))
+    (unwind-protect
+        (progn
+          (puthash "/tmp/" buf codex--directory-buffer-map)
+          (cl-letf (((symbol-function 'codex--directory) (lambda () "/tmp/"))
+                    ((symbol-function 'codex--find-codex-buffers-for-directory)
+                     (lambda (_directory) nil))
+                    ((symbol-function 'codex--find-all-codex-buffers)
+                     (lambda () nil)))
+            (should-not (codex--get-or-prompt-for-buffer))))
+      (kill-buffer buf))))
+
 (ert-deftest codex-test-adjust-window-size-skips-unchanged-size ()
   "Test Codex resize advice suppresses unchanged-size terminal resizes."
   (let ((buf (generate-new-buffer "*codex:/tmp/resize/*"))
@@ -3183,6 +4025,30 @@ assertion in `eat--t-cur-left' on the following cursor move."
           (should-not called))
       (kill-buffer buf))))
 
+(ert-deftest codex-test-adjust-window-size-does-not-consume-copy-mode-change ()
+  "A resize skipped in copy mode remains pending after copy mode ends."
+  (let ((buf (generate-new-buffer "*codex:/tmp/resize-copy/*"))
+        (read-only t)
+        (size-checks 0)
+        (resizes 0))
+    (unwind-protect
+        (with-current-buffer buf
+          (cl-letf (((symbol-function 'codex--term-in-read-only-p)
+                     (lambda (_backend) read-only))
+                    ((symbol-function 'codex--codex-window-size-changed-p)
+                     (lambda ()
+                       (setq size-checks (1+ size-checks))
+                       t)))
+            (let ((codex-terminal-backend 'eat))
+              (codex--adjust-window-size-advice
+               (lambda (&rest _) (setq resizes (1+ resizes))))
+              (setq read-only nil)
+              (codex--adjust-window-size-advice
+               (lambda (&rest _) (setq resizes (1+ resizes))))))
+          (should (= size-checks 1))
+          (should (= resizes 1)))
+      (kill-buffer buf))))
+
 (ert-deftest codex-test-window-size-change-includes-height ()
   "Test Codex resize tracking notices height-only window changes."
   (let ((buf (generate-new-buffer "*codex:/tmp/resize/*")))
@@ -3196,6 +4062,23 @@ assertion in `eat--t-cur-left' on the following cursor move."
           (split-window-below)
           (should (codex--codex-window-size-changed-p)))
       (kill-buffer buf))))
+
+(ert-deftest codex-test-window-resize-keeps-each-session-change ()
+  "One session's resize check must not consume another session's change."
+  (let ((first (generate-new-buffer "*codex:/tmp/resize-first/*"))
+        (second (generate-new-buffer "*codex:/tmp/resize-second/*")))
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (switch-to-buffer first)
+          (set-window-buffer (split-window-right) second)
+          (clrhash codex--window-sizes)
+          (with-current-buffer first
+            (should (codex--codex-window-size-changed-p)))
+          (with-current-buffer second
+            (should (codex--codex-window-size-changed-p))))
+      (kill-buffer first)
+      (kill-buffer second))))
 
 (ert-deftest codex-test-toggle-buries-sole-visible-codex-window ()
   "Test toggling the sole Codex window buries instead of deleting it."
@@ -3226,6 +4109,68 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (codex--clear-vterm-multiline-buffer)
       (should-not codex--vterm-multiline-buffer)
       (should-not codex--vterm-multiline-buffer-timer))))
+
+(ert-deftest codex-test-vterm-flushes-output-after-process-exit ()
+  "Flush final buffered output while the dead process still owns its buffer."
+  (let* ((buffer (generate-new-buffer " *codex-vterm-final-output*"))
+         (process
+          (make-pipe-process
+           :name "codex-vterm-final-output" :buffer buffer :noquery t))
+         called)
+    (unwind-protect
+        (progn
+          (delete-process process)
+          (with-current-buffer buffer
+            (setq-local codex--vterm-multiline-buffer "FINAL")
+            (codex--flush-vterm-multiline-buffer
+             buffer process
+             (lambda (_process data)
+               (setq called data))))
+          (should (equal called "FINAL"))
+          (should-not
+           (buffer-local-value 'codex--vterm-multiline-buffer buffer)))
+      (when (process-live-p process)
+        (delete-process process))
+      (kill-buffer buffer))))
+
+(ert-deftest codex-test-vterm-bell-detector-ignores-osc-terminators ()
+  "BEL terminators in OSC 0, 1, and 2 controls are not notifications."
+  (let ((notices 0))
+    (cl-letf (((symbol-function 'process-buffer)
+               (lambda (_process) (current-buffer)))
+              ((symbol-function 'codex--buffer-p) (lambda (_buffer) t))
+              ((symbol-function 'codex--notify)
+               (lambda (&rest _) (setq notices (1+ notices)))))
+      (dolist (osc '("\e]0;title\a" "\e]1;title\a" "\e]2;title\a"))
+        (codex--vterm-bell-detector #'ignore 'process osc)))
+    (should (= notices 0))))
+
+(ert-deftest codex-test-vterm-bell-detector-keeps-real-bell-after-osc ()
+  "A standalone BEL after an OSC control still triggers notification."
+  (let ((notices 0))
+    (cl-letf (((symbol-function 'process-buffer)
+               (lambda (_process) (current-buffer)))
+              ((symbol-function 'codex--buffer-p) (lambda (_buffer) t))
+              ((symbol-function 'codex--notify)
+               (lambda (&rest _) (setq notices (1+ notices)))))
+      (codex--vterm-bell-detector
+       #'ignore 'process (concat "\e]0;title\a" "ready\a")))
+    (should (= notices 1))))
+
+(ert-deftest codex-test-vterm-bell-detector-tracks-split-osc ()
+  "A BEL ending an OSC split across filter chunks is not audible."
+  (let ((notices 0))
+    (with-temp-buffer
+      (cl-letf (((symbol-function 'process-buffer)
+                 (lambda (_process) (current-buffer)))
+                ((symbol-function 'codex--buffer-p) (lambda (_buffer) t))
+                ((symbol-function 'codex--notify)
+                 (lambda (&rest _) (setq notices (1+ notices)))))
+        (codex--vterm-bell-detector #'ignore 'process "\e]2;title")
+        (codex--vterm-bell-detector #'ignore 'process "\a")
+        (should (= notices 0))
+        (codex--vterm-bell-detector #'ignore 'process "ready\a")
+        (should (= notices 1))))))
 
 ;;;; Background color remapping tests
 
@@ -3359,6 +4304,21 @@ assertion in `eat--t-cur-left' on the following cursor move."
               (should (equal (plist-get context :prefix) "do"))
               (should (equal (plist-get context :suffix) "ne, it worked")))))
       (delete-file history-file))))
+
+(ert-deftest codex-test-prompt-history-skips-nonstring-text ()
+  "Malformed history entries do not hide later valid suggestions."
+  (let ((file (make-temp-file "codex-history" nil ".jsonl")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "{\"text\":\"old\"}\n")
+            (insert "{\"text\":42}\n")
+            (insert "{\"text\":\"new\"}\n"))
+          (should
+           (equal
+            (codex--read-prompt-autosuggestion-history file)
+            '("new" "old"))))
+      (delete-file file))))
 
 (ert-deftest codex-test-update-prompt-autosuggestion-uses-overlay ()
   "Prompt autosuggestion styling uses a buffer-local overlay."
@@ -3571,6 +4531,96 @@ assertion in `eat--t-cur-left' on the following cursor move."
   (let ((codex-terminal-backend 'app-server))
     (should-error (codex--start-subcommand "resume" t)
                   :type 'user-error)))
+
+(ert-deftest codex-test-launch-session-cleans-new-process-after-init-error ()
+  "Initialization errors clean up a process created by this launch."
+  (let (buffer process cleaned)
+    (unwind-protect
+        (cl-letf (((symbol-function 'executable-find) (lambda (_program) t))
+                  ((symbol-function 'codex--term-make)
+                   (lambda (&rest _)
+                     (setq buffer (generate-new-buffer " *codex-init-error*"))
+                     (setq process
+                           (make-pipe-process
+                            :name "codex-init-error" :buffer buffer :noquery t))
+                     buffer))
+                  ((symbol-function 'codex--initialize-terminal-buffer)
+                   (lambda (&rest _) (error "init failed")))
+                  ((symbol-function 'codex--term-kill-process)
+                   (lambda (_backend target)
+                     (setq cleaned target)
+                     (when (process-live-p process)
+                       (delete-process process))
+                     (kill-buffer target))))
+          (should-error
+           (codex--launch-session
+            "/tmp/" 'eat "*codex:/tmp:init-error*" nil nil nil))
+          (should (eq cleaned buffer))
+          (should-not (process-live-p process))
+          (should-not (buffer-live-p buffer)))
+      (when (process-live-p process)
+        (delete-process process))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest codex-test-launch-session-releases-advice-after-partial-init ()
+  "Killing a partially initialized session releases managed global advice."
+  (let ((codex--managed-advice-refcounts (make-hash-table :test 'equal))
+        (codex-display-window-fn (lambda (_buffer) nil))
+        buffer)
+    (unwind-protect
+        (cl-letf (((symbol-function 'executable-find) (lambda (_program) t))
+                  ((symbol-function 'codex--term-make)
+                   (lambda (&rest _)
+                     (setq buffer
+                           (generate-new-buffer " *codex-partial-init*"))))
+                  ((symbol-function 'codex--term-configure)
+                   (lambda (_backend)
+                     (codex--acquire-managed-advice
+                      'codex-test--noop-target :around
+                      #'codex-test--pass-through-advice)))
+                  ((symbol-function 'codex--term-get-adjust-process-window-size-fn)
+                   (lambda (_backend) nil))
+                  ((symbol-function 'codex--term-setup-keymap)
+                   (lambda (_backend) (error "keymap failed")))
+                  ((symbol-function 'codex--term-kill-process)
+                   (lambda (_backend target) (kill-buffer target))))
+          (should-error
+           (codex--launch-session
+            "/tmp/" 'eat "*codex:/tmp:partial-init*" nil nil nil))
+          (should-not (buffer-live-p buffer))
+          (should
+           (zerop (hash-table-count codex--managed-advice-refcounts)))
+          (should-not
+           (advice-member-p #'codex-test--pass-through-advice
+                            'codex-test--noop-target)))
+      (ignore-errors
+        (advice-remove 'codex-test--noop-target
+                       #'codex-test--pass-through-advice))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest codex-test-launch-session-rejects-preexisting-process ()
+  "Do not create a second process for an already active session name."
+  (let* ((name "*codex:/tmp:preexisting*")
+         (buffer (generate-new-buffer name))
+         (process
+          (make-pipe-process :name "codex-preexisting" :buffer buffer :noquery t))
+         made)
+    (unwind-protect
+        (cl-letf (((symbol-function 'executable-find) (lambda (_program) t))
+                  ((symbol-function 'codex--term-make)
+                   (lambda (&rest _) (setq made t) buffer)))
+          (should-error
+           (codex--launch-session "/tmp/" 'eat name nil nil nil)
+           :type 'user-error)
+          (should-not made)
+          (should (process-live-p process))
+          (should (buffer-live-p buffer)))
+      (when (process-live-p process)
+        (delete-process process))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
 
 (ert-deftest codex-test-start-session-uses-explicit-parameters ()
   "Start sessions from explicit directory, instance, and backend."
@@ -4966,32 +6016,61 @@ The captured pair had a second event with stdin \"\"."
 
 
 
-(ert-deftest codex-test-app-server-account-updated-merges-plan ()
-  "Merge a plan change into the recorded account, keeping the email.
-Schema shape (NOT captured -- triggering it needs a real login or logout):
-(:authMode MODE-or-nil :planType PLAN-or-nil), both optional."
-  (with-temp-buffer
-    (setq-local codex--app-server-account
-                '((type . "chatgpt") (email . "a@b.com") (planType . "pro")))
-    (codex--app-server-account-updated '((planType . "plus")))
-    (should (equal (alist-get 'planType codex--app-server-account) "plus"))
-    (should (equal (alist-get 'email codex--app-server-account) "a@b.com"))
-    (should (string-match-p "a@b\\.com (Plus)"
-                            (codex--app-server-status-text)))))
+(ert-deftest codex-test-app-server-account-updated-refreshes-full-account ()
+  "Refresh the complete account after a partial update notification."
+  (let (sent-method)
+    (cl-letf (((symbol-function 'process-live-p) (lambda (_) t))
+              ((symbol-function 'codex--app-server-send-request)
+               (lambda (method _params callback)
+                 (setq sent-method method)
+                 (funcall callback
+                          '((account . ((type . "chatgpt")
+                                        (email . "new@b.com")
+                                        (planType . "plus"))))
+                          nil))))
+      (with-temp-buffer
+        (setq-local codex--app-server-process 'fake)
+        (setq-local codex--app-server-account
+                    '((email . "old@b.com") (planType . "pro")))
+        (codex--app-server-account-updated '((planType . "plus")))
+        (should (equal sent-method "account/read"))
+        (should (equal (alist-get 'email codex--app-server-account)
+                       "new@b.com"))
+        (should (equal (alist-get 'planType codex--app-server-account)
+                       "plus"))))))
 
-(ert-deftest codex-test-app-server-account-updated-ignores-empty ()
-  "Leave the account alone when the notification carries neither field."
-  (with-temp-buffer
-    (setq-local codex--app-server-account '((email . "a@b.com")))
-    (codex--app-server-account-updated '((planType . nil) (authMode . nil)))
-    (should (equal codex--app-server-account '((email . "a@b.com"))))))
+(ert-deftest codex-test-app-server-account-updated-clears-logged-out-account ()
+  "Clear stale account data when the authoritative read reports logout."
+  (cl-letf (((symbol-function 'process-live-p) (lambda (_) t))
+            ((symbol-function 'codex--app-server-send-request)
+             (lambda (_method _params callback)
+               (funcall callback '((account . nil)) nil))))
+    (with-temp-buffer
+      (setq-local codex--app-server-process 'fake)
+      (setq-local codex--app-server-account
+                  '((email . "old@b.com") (planType . "pro")))
+      (codex--app-server-account-updated '((authMode . nil)
+                                           (planType . nil)))
+      (should-not codex--app-server-account))))
 
-(ert-deftest codex-test-app-server-account-updated-from-empty ()
-  "Record a plan even when no account had been read yet."
-  (with-temp-buffer
-    (setq-local codex--app-server-account nil)
-    (codex--app-server-account-updated '((planType . "pro")))
-    (should (equal (alist-get 'planType codex--app-server-account) "pro"))))
+(ert-deftest codex-test-app-server-account-read-error-clears-stale-account ()
+  "A failed authoritative account refresh must not retain stale identity."
+  (let (statuses)
+    (cl-letf (((symbol-function 'process-live-p) (lambda (_) t))
+              ((symbol-function 'codex--app-server-send-request)
+               (lambda (_method _params callback)
+                 (funcall callback nil '((message . "unavailable")))))
+              ((symbol-function 'codex--app-server-insert-status)
+               (lambda (status) (push status statuses))))
+      (with-temp-buffer
+        (setq-local codex--app-server-process 'fake)
+        (setq-local codex--app-server-account
+                    '((email . "old@b.com") (planType . "pro")))
+        (codex--app-server-account-updated nil)
+        (should-not codex--app-server-account)
+        (should
+         (string-match-p "Account refresh failed"
+                         (car statuses)))))))
 
 (defconst codex-test--permission-request
   '((threadId . "t") (turnId . "u") (itemId . "call_1")

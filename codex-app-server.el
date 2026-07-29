@@ -201,6 +201,9 @@ before the server has reported.")
 (defvar-local codex--app-server-turn-active-p nil
   "Whether the current app-server thread has an active turn.")
 
+(defvar-local codex--app-server-turn-start-pending-p nil
+  "Whether a `turn/start' request is awaiting its response.")
+
 (defvar-local codex--app-server-agent-items nil
   "Hash table of rendered app-server agent message items.")
 
@@ -232,6 +235,12 @@ Used to name a background terminal when rendering stdin sent to it, since
 
 (defvar-local codex--app-server-pending-images nil
   "Image file paths to attach to the next app-server turn input.")
+
+(defvar-local codex--app-server-owned-image-files nil
+  "Clipboard image temp files owned by this app-server buffer.")
+
+(defvar-local codex--app-server-active-owned-image-files nil
+  "Owned image files accepted for the current app-server turn.")
 
 (defvar-local codex--app-server-pending-mentions nil
   "Alist of (NAME . PATH) file mentions to attach to the next turn input.")
@@ -295,6 +304,24 @@ Used to name a background terminal when rendering stdin sent to it, since
 
 (defvar-local codex--app-server-service-tier nil
   "Service tier selected for the current app-server thread.")
+
+(defvar-local codex--app-server-current-model-id nil
+  "Model id currently selected for this app-server thread.")
+
+(defvar-local codex--app-server-current-reasoning-effort nil
+  "Reasoning effort currently selected for this app-server thread.")
+
+(defvar-local codex--app-server-model-cache nil
+  "Models most recently returned by `model/list'.")
+
+(defvar-local codex--app-server-model-list-request-p nil
+  "Whether a `model/list' request is currently outstanding.")
+
+(defvar-local codex--app-server-pending-reasoning-steps nil
+  "Reasoning-step deltas waiting for current model metadata.")
+
+(defvar-local codex--app-server-reasoning-waiting-submissions nil
+  "Submissions held until pending reasoning steps have applied.")
 
 (defvar-local codex--app-server-mention-rows nil
   "Cached `$' menu rows, each pairing an identifier with its annotation.")
@@ -369,10 +396,14 @@ arguments."
                                 "--listen" codex-app-server-listen-url)
                           switches)))
     (with-current-buffer buffer
+      (when (bound-and-true-p codex--app-server-owned-image-files)
+        (codex--app-server-cleanup-owned-image-files))
+      (when (bound-and-true-p codex--app-server-stderr-buffer)
+        (codex--app-server-kill-stderr-buffer
+         codex--app-server-stderr-buffer))
       (codex-app-server-mode)
       (let ((inhibit-read-only t))
         (erase-buffer))
-      (codex--app-server-kill-stderr-buffer codex--app-server-stderr-buffer)
       (setq-local codex--app-server-pending-output "")
       (setq-local codex--app-server-stderr-buffer stderr-buffer)
       (setq-local codex--app-server-output-marker nil)
@@ -382,6 +413,7 @@ arguments."
       (setq-local codex--app-server-composer-placeholder-index 0)
       (setq-local codex--app-server-composer-placeholder-timer nil)
       (setq-local codex--app-server-queued-turn-inputs nil)
+      (setq-local codex--app-server-turn-start-pending-p nil)
       (setq-local codex--app-server-token-usage nil)
       (setq-local codex--app-server-rate-limit nil)
       (setq-local codex--app-server-weekly-rate-limit nil)
@@ -471,6 +503,8 @@ arguments."
               codex--app-server-pending-startup-session-id)
   (setq-local codex--app-server-pending-images
               (mapcar #'expand-file-name codex-default-images))
+  (setq-local codex--app-server-owned-image-files nil)
+  (setq-local codex--app-server-active-owned-image-files nil)
   (setq-local codex--app-server-pending-mentions nil)
   (codex--app-server-send-initialize))
 
@@ -491,6 +525,7 @@ arguments."
   (codex--app-server-stop-status-timer)
   (codex--app-server-stop-composer-placeholder-timer)
   (codex--app-server-remove-status-overlay)
+  (codex--app-server-cleanup-owned-image-files)
   (codex--app-server-kill-stderr-buffer codex--app-server-stderr-buffer)
   (setq-local codex--app-server-stderr-buffer nil))
 
@@ -595,6 +630,7 @@ This lets optional fields and protocol booleans flow naturally through
         ("hook/completed" (codex--app-server-render-hook-event params " Completed"))
         ("thread/closed" (codex--app-server-thread-closed params))
         ("account/updated" (codex--app-server-account-updated params))
+        ("skills/changed" (codex--app-server-refresh-mention-rows))
         ("item/started" (codex--app-server-record-terminal-name params))
         ("item/commandExecution/terminalInteraction"
          (codex--app-server-render-terminal-interaction params))
@@ -602,11 +638,12 @@ This lets optional fields and protocol booleans flow naturally through
         ("thread/compacted"
          (codex--app-server-insert-status "Conversation compacted"))
         ("thread/name/updated"
-         (when-let* ((name (alist-get 'name params)))
+         (when-let* ((name (alist-get 'threadName params)))
            (codex--app-server-insert-status (format "Thread renamed: %s" name))))
         ("thread/goal/updated"
-         (when-let* ((goal (alist-get 'goal params)))
-           (codex--app-server-insert-status (format "Goal: %s" goal))))
+         (when-let* ((goal (alist-get 'goal params))
+                     (objective (alist-get 'objective goal)))
+           (codex--app-server-insert-status (format "Goal: %s" objective))))
         ;; Deliberately silent: the server sends this during resume, where a
         ;; status line is startup noise. `/goal-clear' reports from the
         ;; response instead, so a user-initiated clear is still confirmed.
@@ -617,9 +654,12 @@ This lets optional fields and protocol booleans flow naturally through
         ("remoteControl/status/changed"
          (codex--app-server-remote-control-status-changed params))
         ("model/rerouted"
-         (codex--app-server-insert-status
-          (format "Model rerouted%s"
-                  (if-let* ((to (alist-get 'model params))) (format " to %s" to) ""))))
+         (let ((to (alist-get 'toModel params)))
+           (when to
+             (setq codex--app-server-current-model-id to))
+           (codex--app-server-insert-status
+            (format "Model rerouted%s"
+                    (if to (format " to %s" to) "")))))
         ("mcpServer/startupStatus/updated"
          (codex--app-server-render-mcp-status params))
         ("thread/realtime/started"
@@ -676,12 +716,30 @@ under `error' as `message' for turn errors, so check both."
 When DEFER-INPUT is non-nil, leave input rendering to the caller."
   (let* ((thread (alist-get 'thread params))
          (thread-id (alist-get 'id thread))
-         (thread-path (alist-get 'path thread)))
+         (thread-path (alist-get 'path thread))
+         (metadata (codex--app-server-transcript-header-metadata thread-path))
+         (model (or (alist-get 'model params)
+                    (alist-get 'model thread)
+                    (alist-get 'model metadata)
+                    codex-model))
+         (effort (or (alist-get 'reasoningEffort params)
+                     (alist-get 'reasoning_effort params)
+                     (alist-get 'reasoningEffort thread)
+                     (alist-get 'reasoning_effort thread)
+                     (alist-get 'reasoning_effort metadata)
+                     (alist-get 'effort metadata)
+                     codex-reasoning-effort)))
+    (when model
+      (setq codex--app-server-current-model-id model))
+    (when effort
+      (setq codex--app-server-current-reasoning-effort effort)
+      (setq-local codex-reasoning-effort effort))
     (unless (equal codex--app-server-thread-id thread-id)
       (setq codex--app-server-thread-id thread-id)
       (codex--record-session-metadata thread-id thread-path)
       (codex--app-server-render-header thread)
       (codex--app-server-request-account)
+      (codex--app-server-refresh-model-cache)
       (codex--app-server-send-skill-extra-roots)
       (codex--app-server-refresh-mention-rows)
       (unless defer-input
@@ -1014,6 +1072,7 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
              (codex--app-server-insert-status
               (format "Skill update failed: %S" error))
            (setq codex--app-server-skill-cache-key nil)
+           (codex--app-server-refresh-mention-rows)
            (codex--app-server-insert-status
             (format "%s %s" name (if enabled "enabled" "disabled")))))))))
 
@@ -1109,22 +1168,13 @@ way.  The wording below is therefore this client's own."
     (codex--app-server-insert-status
      "Thread closed by the server after being idle; /resume to continue")))
 
-(defun codex--app-server-account-updated (params)
-  "Merge the account change in PARAMS into the recorded account.
-The server sends this after a login or logout, carrying only the fields
-that changed, so without it `/status' keeps reporting whichever plan was
-active when the thread started.
-
-Not captured from a live server: triggering it means logging the real
-ChatGPT account in or out.  The shape comes from the app-server schema,
-which lists both fields as optional."
-  (let ((plan (alist-get 'planType params))
-        (mode (alist-get 'authMode params)))
-    (when (or plan mode)
-      (let ((account (copy-alist codex--app-server-account)))
-        (when plan (setf (alist-get 'planType account) plan))
-        (when mode (setf (alist-get 'authMode account) mode))
-        (setq codex--app-server-account account)))))
+(defun codex--app-server-account-updated (_params)
+  "Refresh the recorded account after an account update notification.
+The notification is only a change signal: its nullable fields do not
+identify the account and cannot distinguish an omitted value from logout.
+Read the authoritative account so `/status' neither keeps stale fields nor
+invents a partial account."
+  (codex--app-server-request-account))
 
 (defun codex--app-server-plugin-mention-label (plugin)
   "Return a completion label for PLUGIN, as the CLI's `$' menu labels it.
@@ -1281,6 +1331,8 @@ the same set the CLI menu shows instead of waiting on two requests."
      (value (enabled . ,(codex--app-server-json-boolean enabled)))
      (mergeStrategy . "upsert"))
    (lambda (_result error)
+     (unless error
+       (codex--app-server-refresh-mention-rows))
      (codex--app-server-insert-status
       (if error
           (format "Plugin update failed: %S" error)
@@ -1299,6 +1351,8 @@ the same set the CLI menu shows instead of waiting on two requests."
                    `((marketplacePath . ,path))
                  `((remoteMarketplaceName . ,(alist-get 'name marketplace)))))
        (lambda (_result error)
+         (unless error
+           (codex--app-server-refresh-mention-rows))
          (codex--app-server-insert-status
           (if error
               (format "Plugin installation failed: %S" error)
@@ -1309,6 +1363,8 @@ the same set the CLI menu shows instead of waiting on two requests."
   (codex--app-server-send-request
    "plugin/uninstall" `((pluginId . ,(alist-get 'id plugin)))
    (lambda (_result error)
+     (unless error
+       (codex--app-server-refresh-mention-rows))
      (codex--app-server-insert-status
       (if error
           (format "Plugin uninstall failed: %S" error)
@@ -1487,16 +1543,22 @@ the same set the CLI menu shows instead of waiting on two requests."
     (when (yes-or-no-p (format "Stop %d background terminal%s? "
                                (length terminals)
                                (if (= (length terminals) 1) "" "s")))
-      (dolist (terminal terminals)
-        (codex--app-server-send-request
-         "thread/backgroundTerminals/terminate"
-         `((threadId . ,codex--app-server-thread-id)
-           (processId . ,(alist-get 'processId terminal)))
-         (lambda (_result error)
-           (when error
-             (codex--app-server-insert-status
-              (format "Background terminal stop failed: %S" error))))))
-      (codex--app-server-insert-status "Background terminals stopped"))))
+      (let ((remaining (length terminals))
+            (failures 0))
+        (dolist (terminal terminals)
+          (codex--app-server-send-request
+           "thread/backgroundTerminals/terminate"
+           `((threadId . ,codex--app-server-thread-id)
+             (processId . ,(alist-get 'processId terminal)))
+           (lambda (_result error)
+             (when error
+               (cl-incf failures)
+               (codex--app-server-insert-status
+                (format "Background terminal stop failed: %S" error)))
+             (cl-decf remaining)
+             (when (and (zerop remaining) (zerop failures))
+               (codex--app-server-insert-status
+                "Background terminals stopped")))))))))
 
 (defun codex--app-server-list-experimental-features ()
   "List and toggle features through the experimental-feature protocol."
@@ -1765,8 +1827,9 @@ reported as cleared when none was set."
   "Attach a file mention to the next app-server turn input."
   (interactive)
   (let ((path (expand-file-name (read-file-name "Mention file: "))))
-    (push (cons (file-name-nondirectory path) path)
-          codex--app-server-pending-mentions)
+    (setq codex--app-server-pending-mentions
+          (append codex--app-server-pending-mentions
+                  (list (cons (file-name-nondirectory path) path))))
     (message "File mentioned for next Codex turn: %s" path)))
 
 (defun codex--app-server-toggle-raw ()
@@ -1831,16 +1894,21 @@ nothing to print until the reply landed."
     (let ((buffer (current-buffer)))
       (codex--app-server-send-request
        "account/read" nil
-       (lambda (result _error)
-         (when (and result (buffer-live-p buffer))
+       (lambda (result error)
+         (when (buffer-live-p buffer)
            (with-current-buffer buffer
-             (setq codex--app-server-account
-                   (alist-get 'account result)))))))))
+             (if error
+                 (progn
+                   (setq codex--app-server-account nil)
+                   (codex--app-server-insert-status
+                    (format "Account refresh failed: %S" error)))
+               (setq codex--app-server-account
+                     (alist-get 'account result))))))))))
 
 (defun codex--app-server-status-text ()
   "Return the session status line."
   (format "model %s · %s tokens%s%s · %s"
-          (or codex-model "default")
+          (or codex--app-server-current-model-id codex-model "default")
           (or codex--app-server-token-usage 0)
           (if codex--app-server-rate-limit
               (format " · %s%% rate limit" codex--app-server-rate-limit)
@@ -1875,6 +1943,12 @@ The server resends the whole diff as it grows, so this replaces rather
 than appends."
   (setq codex--app-server-turn-diff (alist-get 'diff params)))
 
+(defun codex--app-server-refresh-model-cache ()
+  "Prefetch model metadata used by reasoning up/down."
+  (when (and (process-live-p codex--app-server-process)
+             (not codex--app-server-model-list-request-p))
+    (codex--app-server-request-models-for-reasoning)))
+
 (defun codex--app-server-change-model ()
   "Pick a model with `model/list' and apply it via `thread/settings/update'."
   (codex--app-server-send-request
@@ -1883,7 +1957,9 @@ than appends."
      (if error
          (codex--app-server-insert-status
           (format "Model list failed: %S" error))
-       (codex--app-server-prompt-model (alist-get 'data result))))))
+       (setq codex--app-server-model-cache
+             (append (alist-get 'data result) nil))
+       (codex--app-server-prompt-model codex--app-server-model-cache)))))
 
 (defun codex--app-server-prompt-model (models)
   "Prompt to pick one of MODELS and apply it to the current thread."
@@ -1930,8 +2006,10 @@ than appends."
            (codex--app-server-insert-status
             (format "Model change failed: %S" error))
          (setq-local codex-model id)
+         (setq-local codex--app-server-current-model-id id)
          (when effort
-           (setq-local codex-reasoning-effort effort))
+           (setq-local codex-reasoning-effort effort)
+           (setq codex--app-server-current-reasoning-effort effort))
          (codex--app-server-insert-status
           (if effort
               (format "Model set to %s (%s reasoning)" id effort)
@@ -2085,16 +2163,18 @@ than appends."
 
 (defun codex--app-server-header-model-label (_thread metadata)
   "Return the model label for the app-server header from METADATA."
-  (or codex-model
+  (or codex--app-server-current-model-id
       (alist-get 'model metadata)
+      codex-model
       (codex--app-server-config-string "model")
       "default"))
 
 (defun codex--app-server-header-effort (metadata)
   "Return the reasoning effort label for the app-server header."
-  (or codex-reasoning-effort
+  (or codex--app-server-current-reasoning-effort
       (alist-get 'reasoning_effort metadata)
       (alist-get 'effort metadata)
+      codex-reasoning-effort
       (codex--app-server-config-string "model_reasoning_effort")))
 
 (defun codex--app-server-header-directory-label (metadata)
@@ -2131,8 +2211,7 @@ than appends."
                                      (alist-get 'collaboration_mode
                                                 payload))))))
                  (when-let* ((value (cdr pair)))
-                   (unless (alist-get (car pair) metadata)
-                     (push (cons (car pair) value) metadata))))))))))
+                   (setf (alist-get (car pair) metadata) value)))))))))
     metadata))
 
 (defun codex--app-server-config-string (key)
@@ -2149,15 +2228,20 @@ than appends."
                                     "^[[:space:]]*\\[" nil t)
                                (match-beginning 0)))
                            (point-max))))
-            (when (re-search-forward
-                   (format "^[[:space:]]*%s[[:space:]]*=[[:space:]]*\"\\([^\"]+\\)\""
-                           (regexp-quote key))
-                   limit t)
-              (match-string 1))))))))
+            (let ((quoted-key (regexp-quote key)))
+              (when (re-search-forward
+                     (format
+                      (concat "^[[:space:]]*\\(?:%s\\|\"%s\"\\|'%s'\\)"
+                              "[[:space:]]*=[[:space:]]*"
+                              "\\(?:\"\\([^\"]*\\)\"\\|'\\([^']*\\)'\\)")
+                     quoted-key quoted-key quoted-key)
+                     limit t)
+                (or (match-string 1) (match-string 2))))))))))
 
 (defun codex--app-server-turn-started (params)
   "Record app-server turn startup PARAMS and begin the status indicator."
   (let ((turn (alist-get 'turn params)))
+    (setq codex--app-server-turn-start-pending-p nil)
     (setq codex--app-server-current-turn-id (alist-get 'id turn))
     (setq codex--app-server-turn-active-p t)
     (setq codex--app-server-turn-diff nil)
@@ -2168,6 +2252,8 @@ than appends."
 
 (defun codex--app-server-turn-completed (_params)
   "Record that the active app-server turn completed and flush queued input."
+  (codex--app-server-cleanup-active-image-files)
+  (setq codex--app-server-turn-start-pending-p nil)
   (setq codex--app-server-turn-active-p nil)
   (setq codex--app-server-current-turn-id nil)
   (codex--app-server-update-status-overlay)
@@ -2195,6 +2281,8 @@ showing it as working indefinitely."
 Unlike `codex--app-server-turn-completed' this does not flush the queued
 input, because no turn finished normally and the queue belongs to the
 turn the user expects to run next."
+  (codex--app-server-cleanup-active-image-files)
+  (setq codex--app-server-turn-start-pending-p nil)
   (setq codex--app-server-turn-active-p nil)
   (setq codex--app-server-current-turn-id nil)
   (codex--app-server-update-status-overlay)
@@ -2331,9 +2419,10 @@ in the transcript.  The server sends one of `disabled', `connecting',
 (defun codex--app-server-flush-turn-queue ()
   "Submit the next Tab-queued input, if any, as a new turn."
   (when codex--app-server-queued-turn-inputs
-    (let ((input (pop codex--app-server-queued-turn-inputs)))
+    (let ((submission (pop codex--app-server-queued-turn-inputs)))
       (codex--app-server-render-queue)
-      (codex--app-server-submit-command input))))
+      (apply 'codex--app-server-submit-command
+             (list (plist-get submission :text) submission)))))
 
 (defun codex--app-server-render-queue ()
   "Render or update the queued-inputs block in place, like the Codex CLI.
@@ -2358,7 +2447,8 @@ Removes the block when the queue is empty."
 (defun codex--app-server-queue-block-text ()
   "Return the full queued-inputs block: header, items, and edit hint."
   (concat codex--app-server-bullet "Queued follow-up inputs\n"
-          (mapconcat (lambda (input) (concat "  ↳ " input))
+          (mapconcat (lambda (submission)
+                       (concat "  ↳ " (plist-get submission :text)))
                      codex--app-server-queued-turn-inputs "\n")
           "\n    M-↑ edit last queued message"))
 
@@ -2596,13 +2686,20 @@ With no active turn, send the input immediately like Return."
           ((not codex--app-server-turn-active-p) (codex--app-server-send-input))
           (t (codex--app-server-clear-input)
              (setq codex--app-server-queued-turn-inputs
-                   (append codex--app-server-queued-turn-inputs (list text)))
+                   (append codex--app-server-queued-turn-inputs
+                           (list
+                            (if (codex--app-server-local-command-p text)
+                                (list :text text :images nil :mentions nil
+                                      :owned-images nil)
+                              (codex--app-server-take-submission text)))))
              (codex--app-server-render-queue)
              (goto-char (point-max))))))
 
-(defconst codex--app-server-reasoning-levels
-  '("minimal" "low" "medium" "high" "xhigh")
-  "Reasoning-effort levels, lowest to highest, as the Codex models accept.")
+(defun codex--app-server-local-command-p (text)
+  "Return non-nil when TEXT is a frontend slash or shell command."
+  (let ((trimmed (string-trim-left text)))
+    (or (string-prefix-p "/" trimmed)
+        (string-prefix-p "!" trimmed))))
 
 (defun codex-app-server-reasoning-up ()
   "Raise the reasoning effort for upcoming turns, like the Codex CLI."
@@ -2615,15 +2712,75 @@ With no active turn, send the input immediately like Return."
   (codex--app-server-step-reasoning -1))
 
 (defun codex--app-server-step-reasoning (delta)
-  "Move the reasoning effort by DELTA steps and report the new level.
-The change applies to subsequent turns through `codex-reasoning-effort'."
-  (let* ((levels codex--app-server-reasoning-levels)
-         (index (or (cl-position (or codex-reasoning-effort "medium")
-                                 levels :test #'equal)
-                    2))
-         (new (nth (max 0 (min (1- (length levels)) (+ index delta))) levels)))
-    (setq codex-reasoning-effort new)
-    (message "Reasoning effort: %s" new)))
+  "Move the reasoning effort by DELTA within the current model's levels."
+  (if (codex--app-server-current-model-record)
+      (codex--app-server-apply-reasoning-step delta)
+    (setq codex--app-server-pending-reasoning-steps
+          (append codex--app-server-pending-reasoning-steps (list delta)))
+    (unless codex--app-server-model-list-request-p
+      (codex--app-server-request-models-for-reasoning))))
+
+(defun codex--app-server-current-model-record ()
+  "Return cached metadata for the current model, or nil."
+  (let ((model-id (or codex--app-server-current-model-id codex-model)))
+    (cl-find-if
+     (lambda (candidate)
+       (member model-id
+               (list (alist-get 'id candidate)
+                     (alist-get 'model candidate))))
+     codex--app-server-model-cache)))
+
+(defun codex--app-server-apply-reasoning-step (delta)
+  "Apply reasoning-step DELTA from cached current-model metadata."
+  (let* ((model (codex--app-server-current-model-record))
+         (levels (and model (codex--app-server-model-efforts model))))
+    (if (null levels)
+        (message "No reasoning levels advertised for model %s"
+                 (or codex--app-server-current-model-id codex-model "default"))
+      (let* ((current
+              (or (and (member codex-reasoning-effort levels)
+                       codex-reasoning-effort)
+                  (alist-get 'defaultReasoningEffort model)
+                  (car levels)))
+             (index (or (cl-position current levels :test #'equal) 0))
+             (new-index
+              (max 0 (min (1- (length levels)) (+ index delta))))
+             (new (nth new-index levels)))
+        (setq-local codex-reasoning-effort new)
+        (setq codex--app-server-current-reasoning-effort new)
+        (message "Reasoning effort: %s" new)))))
+
+(defun codex--app-server-request-models-for-reasoning ()
+  "Fetch model metadata, then apply queued reasoning steps in order."
+  (let ((buffer (current-buffer)))
+    (setq codex--app-server-model-list-request-p t)
+    (condition-case err
+        (codex--app-server-send-request
+         "model/list" '((limit . 50))
+         (lambda (result error)
+           (when (buffer-live-p buffer)
+             (with-current-buffer buffer
+               (setq codex--app-server-model-list-request-p nil)
+               (if error
+                   (message "Could not read Codex reasoning levels: %S" error)
+                 (setq codex--app-server-model-cache
+                       (append (alist-get 'data result) nil))
+                 (dolist (delta codex--app-server-pending-reasoning-steps)
+                   (codex--app-server-apply-reasoning-step delta)))
+               (setq codex--app-server-pending-reasoning-steps nil)
+               (codex--app-server-flush-reasoning-waiting-submissions)))))
+      (error
+       (setq codex--app-server-model-list-request-p nil
+             codex--app-server-pending-reasoning-steps nil)
+       (codex--app-server-flush-reasoning-waiting-submissions)
+       (signal (car err) (cdr err))))))
+
+(defun codex--app-server-flush-reasoning-waiting-submissions ()
+  "Send submissions held for reasoning metadata in their original order."
+  (let ((submissions codex--app-server-reasoning-waiting-submissions))
+    (setq codex--app-server-reasoning-waiting-submissions nil)
+    (dolist (submission submissions)
+      (codex--app-server-send-turn-input submission))))
 
 (defun codex-app-server-edit-last-queued ()
   "Pull the last queued follow-up input back into the composer to edit it.
@@ -2635,7 +2792,7 @@ Mirrors the Codex CLI's \\=`edit last queued message\\=' affordance."
       (setq codex--app-server-queued-turn-inputs
             (butlast codex--app-server-queued-turn-inputs))
       (codex--app-server-render-queue)
-      (codex--app-server-replace-input last)
+      (codex--app-server-restore-submission last)
       (goto-char (point-max)))))
 
 (defun codex--app-server-render-agent-delta (params)
@@ -2990,9 +3147,33 @@ Shows the first `codex-app-server-max-command-output-lines' lines, a
 Each change shows a `• Added FILE (+N -M)' header followed by the diff
 body numbered and marked exactly like the Codex CLI."
   (dolist (change (append (alist-get 'changes item) nil))
-    (let ((diff (string-trim-right (or (alist-get 'diff change) ""))))
+    (let ((diff (codex--app-server-filechange-diff change)))
       (codex--app-server-render-change-header change diff)
       (codex--app-server-render-numbered-diff diff))))
+
+(defun codex--app-server-filechange-diff (change)
+  "Return a unified diff body suitable for rendering CHANGE.
+The app-server sends an added file's `diff' field as its raw contents,
+not as a unified diff.  Prefix each content line and synthesize a hunk
+header so leading plus characters remain content and numbering starts at
+one.  Remove only the payload's final line delimiter; other trailing
+whitespace is file content."
+  (let* ((raw (or (alist-get 'diff change) ""))
+         (diff (codex--app-server-strip-final-newline raw))
+         (type (alist-get 'type (alist-get 'kind change))))
+    (if (and (equal type "add") (not (string-empty-p raw)))
+        (let ((lines (split-string diff "\n")))
+          (concat (format "@@ -0,0 +1,%d @@\n" (length lines))
+                  (mapconcat (lambda (line) (concat "+" line))
+                             lines "\n")))
+      diff)))
+
+(defun codex--app-server-strip-final-newline (text)
+  "Return TEXT without one final LF or CRLF line delimiter."
+  (cond
+   ((string-suffix-p "\r\n" text) (substring text 0 -2))
+   ((string-suffix-p "\n" text) (substring text 0 -1))
+   (t text)))
 
 (defun codex--app-server-render-change-header (change diff)
   "Insert the `• Added FILE (+N -M)' header for CHANGE with DIFF."
@@ -3016,11 +3197,12 @@ body numbered and marked exactly like the Codex CLI."
 (defun codex--app-server-count-diff-lines (diff prefix)
   "Return the number of DIFF body lines beginning with PREFIX.
 File headers (`+++' and `---') are not counted."
-  (let ((count 0))
+  (let ((count 0)
+        (in-hunk nil))
     (dolist (line (split-string diff "\n") count)
-      (when (and (string-prefix-p prefix line)
-                 (not (string-prefix-p "+++" line))
-                 (not (string-prefix-p "---" line)))
+      (when (string-prefix-p "@@ " line)
+        (setq in-hunk t))
+      (when (and in-hunk (string-prefix-p prefix line))
         (setq count (1+ count))))))
 
 (defun codex--app-server-render-numbered-diff (diff)
@@ -3828,8 +4010,7 @@ shape, such as an elicitation's `action'."
      (if error
          (codex--app-server-insert-status
           (format "Codex resume failed: %S" error))
-       (codex--app-server-thread-started
-        `((thread . ,(alist-get 'thread result))) t)
+       (codex--app-server-thread-started result t)
        (codex--app-server-render-resumed-history
         (alist-get 'data (alist-get 'initialTurnsPage result)))
        (codex--app-server-setup-input-region)
@@ -3884,25 +4065,33 @@ shape, such as an elicitation's `action'."
   (when codex-reasoning-effort
     `((model_reasoning_effort . ,codex-reasoning-effort))))
 
-(defun codex--app-server-submit-command (command)
+(defun codex--app-server-submit-command (command &optional submission)
   "Submit COMMAND to the current app-server thread.
 Slash commands are dispatched locally, a leading \"!\" runs a shell
-command, and everything else is sent to the model as a turn."
+command, and everything else is sent to the model as a turn.
+When SUBMISSION is non-nil, it owns COMMAND's already-captured
+attachments."
   (codex--run-command-submitted-hook)
   (let ((trimmed (string-trim-left command)))
     (cond
      ((string-prefix-p "/" trimmed)
+      (when submission
+        (codex--app-server-restore-submission-attachments submission))
       (codex--app-server-dispatch-slash (string-trim command)))
      ((string-prefix-p "!" trimmed)
+      (when submission
+        (codex--app-server-restore-submission-attachments submission))
       (codex--app-server-run-shell-command
        (string-trim (substring trimmed 1))))
      (t
-      (codex--app-server-record-input command)
-      (codex--app-server-insert-message codex--app-server-user-prefix command)
-      (codex--app-server-ensure-trailing-newline)
-      (if codex--app-server-thread-id
-          (codex--app-server-send-turn-input command)
-        (push command codex--app-server-queued-commands))))))
+      (let ((submission (or submission
+                            (codex--app-server-take-submission command))))
+        (codex--app-server-record-input command)
+        (codex--app-server-insert-message codex--app-server-user-prefix command)
+        (codex--app-server-ensure-trailing-newline)
+        (if codex--app-server-thread-id
+            (codex--app-server-send-turn-input submission)
+          (push submission codex--app-server-queued-commands)))))))
 
 (defun codex--app-server-record-input (command)
   "Record COMMAND in this buffer's input history."
@@ -3926,63 +4115,148 @@ Its output arrives as a command-execution item like the CLI's \"!\"."
           (format "Shell command failed: %S" error))))))
    (t (message "No active Codex thread"))))
 
-(defun codex--app-server-send-turn-input (command)
-  "Send COMMAND to the app-server as a turn input."
-  (if codex--app-server-turn-active-p
-      (codex--app-server-send-turn-steer command)
-    (codex--app-server-send-turn-start command)))
+(defun codex--app-server-send-turn-input (submission)
+  "Send captured SUBMISSION to the app-server as a turn input."
+  (cond
+   (codex--app-server-pending-reasoning-steps
+      (setq codex--app-server-reasoning-waiting-submissions
+            (append codex--app-server-reasoning-waiting-submissions
+                    (list submission))))
+   (codex--app-server-turn-start-pending-p
+    (codex--app-server-enqueue-submission submission))
+   (codex--app-server-turn-active-p
+    (codex--app-server-send-turn-steer submission))
+   (t
+    (codex--app-server-send-turn-start submission))))
 
-(defun codex--app-server-send-turn-start (command)
-  "Send COMMAND as a new app-server turn."
-  (codex--app-server-send-request
-   "turn/start"
-   `((threadId . ,codex--app-server-thread-id)
-     (input . ,(codex--app-server-user-input-vector command))
-     (cwd . ,codex--buffer-directory)
-     (approvalPolicy . ,(codex--app-server-approval-policy))
-     (effort . ,codex-reasoning-effort))
-   (lambda (result error)
-     (if error
-         (codex--app-server-insert-status
-          (format "Codex turn failed to start: %S" error))
-       (codex--app-server-turn-started
-        `((threadId . ,codex--app-server-thread-id)
-          (turn . ,(alist-get 'turn result))))))))
+(defun codex--app-server-enqueue-submission (submission &optional front)
+  "Queue SUBMISSION for a later turn.
+When FRONT is non-nil, preserve it ahead of already queued submissions."
+  (setq codex--app-server-queued-turn-inputs
+        (if front
+            (cons submission codex--app-server-queued-turn-inputs)
+          (append codex--app-server-queued-turn-inputs (list submission))))
+  (codex--app-server-render-queue))
 
-(defun codex--app-server-send-turn-steer (command)
-  "Send COMMAND as app-server same-turn steering."
-  (codex--app-server-send-request
-   "turn/steer"
-   `((threadId . ,codex--app-server-thread-id)
-     (input . ,(codex--app-server-user-input-vector command))
-     (expectedTurnId . ,codex--app-server-current-turn-id))
-   (lambda (_result error)
-     (when error
-       (codex--app-server-insert-status
-        (format "Codex turn steering failed: %S" error))))))
+(defun codex--app-server-send-turn-start (submission)
+  "Send captured SUBMISSION as a new app-server turn."
+  (setq codex--app-server-turn-start-pending-p t)
+  (condition-case err
+      (codex--app-server-send-request
+       "turn/start"
+       `((threadId . ,codex--app-server-thread-id)
+         (input . ,(codex--app-server-user-input-vector submission))
+         (cwd . ,codex--buffer-directory)
+         (approvalPolicy . ,(codex--app-server-approval-policy))
+         (effort . ,codex-reasoning-effort))
+       (lambda (result error)
+         (setq codex--app-server-turn-start-pending-p nil)
+         (if error
+             (progn
+               (codex--app-server-restore-submission submission)
+               (codex--app-server-insert-status
+                (format "Codex turn failed to start: %S" error)))
+           (codex--app-server-accept-submission submission)
+           (codex--app-server-turn-started
+            `((threadId . ,codex--app-server-thread-id)
+              (turn . ,(alist-get 'turn result)))))))
+    (error
+     (setq codex--app-server-turn-start-pending-p nil)
+     (codex--app-server-restore-submission submission)
+     (signal (car err) (cdr err)))))
 
-(defun codex--app-server-user-input-vector (text)
-  "Return app-server user input vector for TEXT and pending images/mentions."
-  (let ((images (mapcar (lambda (path)
+(defun codex--app-server-send-turn-steer (submission)
+  "Send captured SUBMISSION as app-server same-turn steering."
+  (condition-case err
+      (codex--app-server-send-request
+       "turn/steer"
+       `((threadId . ,codex--app-server-thread-id)
+         (input . ,(codex--app-server-user-input-vector submission))
+         (expectedTurnId . ,codex--app-server-current-turn-id))
+       (lambda (_result error)
+         (if error
+             (progn
+               (codex--app-server-enqueue-submission submission t)
+               (codex--app-server-insert-status
+                (format "Codex turn steering failed: %S" error)))
+           (codex--app-server-accept-submission submission))))
+    (error
+     (codex--app-server-enqueue-submission submission t)
+     (signal (car err) (cdr err)))))
+
+(defun codex--app-server-user-input-vector (submission-or-text)
+  "Return the app-server input vector for SUBMISSION-OR-TEXT.
+A string captures the current pending attachments for compatibility with
+callers that only need to build one input vector."
+  (let* ((submission
+          (if (stringp submission-or-text)
+              (codex--app-server-take-submission submission-or-text)
+            submission-or-text))
+         (text (plist-get submission :text))
+         (images (mapcar (lambda (path)
                           `((type . "localImage") (path . ,path)))
-                        codex--app-server-pending-images))
+                        (plist-get submission :images)))
         (mentions (mapcar (lambda (mention)
                             `((type . "mention")
                               (name . ,(car mention))
                               (path . ,(cdr mention))))
-                          codex--app-server-pending-mentions)))
-    (setq codex--app-server-pending-images nil
-          codex--app-server-pending-mentions nil)
+                          (plist-get submission :mentions))))
     (apply #'vector
            (append images mentions
                    (list `((type . "text")
                            (text . ,text)
                            (text_elements . [])))))))
 
+(defun codex--app-server-take-submission (text)
+  "Capture TEXT and the pending attachments as one submission."
+  (let ((submission
+         (list :text text
+               :images codex--app-server-pending-images
+               :mentions codex--app-server-pending-mentions
+               :owned-images
+               (seq-filter
+                (lambda (path)
+                  (member path codex--app-server-owned-image-files))
+                codex--app-server-pending-images))))
+    (setq codex--app-server-pending-images nil
+          codex--app-server-pending-mentions nil)
+    submission))
+
+(defun codex--app-server-restore-submission (submission)
+  "Restore failed or edited SUBMISSION to the composer."
+  (let ((newer-text (codex--app-server-input-text)))
+    (when (or (not (string-empty-p (string-trim newer-text)))
+              codex--app-server-pending-images
+              codex--app-server-pending-mentions)
+      (codex--app-server-enqueue-submission
+       (codex--app-server-take-submission newer-text))))
+  (codex--app-server-restore-submission-attachments submission)
+  (codex--app-server-replace-input (plist-get submission :text)))
+
+(defun codex--app-server-restore-submission-attachments (submission)
+  "Restore only the attachments captured in SUBMISSION."
+  (setq codex--app-server-pending-images
+        (append (plist-get submission :images)
+                codex--app-server-pending-images)
+        codex--app-server-pending-mentions
+        (append (plist-get submission :mentions)
+                codex--app-server-pending-mentions)))
+
+(defun codex--app-server-accept-submission (submission)
+  "Keep SUBMISSION's owned images alive until its turn has finished.
+A successful `turn/start' or `turn/steer' response only means that the
+server queued the input.  The worker reads local-image paths later."
+  (setq codex--app-server-active-owned-image-files
+        (delete-dups
+         (append codex--app-server-active-owned-image-files
+                 (plist-get submission :owned-images)))))
+
 (defun codex-app-server-attach-image (path)
   "Attach image at PATH to the next app-server turn input."
   (interactive "fAttach image: ")
-  (push (expand-file-name path) codex--app-server-pending-images)
+  (setq codex--app-server-pending-images
+        (append codex--app-server-pending-images
+                (list (expand-file-name path))))
   (message "Image attached for next Codex turn: %s" path))
 
 (defun codex-app-server-paste-image ()
@@ -3992,7 +4266,10 @@ at point and attaches the image to the next turn's input."
   (interactive)
   (let ((file (codex--app-server-clipboard-image-file)))
     (if file
-        (progn (push file codex--app-server-pending-images)
+        (progn (setq codex--app-server-pending-images
+                     (append codex--app-server-pending-images (list file))
+                     codex--app-server-owned-image-files
+                     (append codex--app-server-owned-image-files (list file)))
                (insert (format "[Image #%d]"
                                (codex--app-server-next-image-number))))
       (user-error "No image found on the clipboard"))))
@@ -4016,6 +4293,29 @@ counting the placeholders already present in the input region."
         (set-buffer-multibyte nil)
         (insert data))
       file)))
+
+(defun codex--app-server-cleanup-owned-image-files ()
+  "Delete every clipboard image temp file owned by this buffer."
+  (codex--app-server-delete-owned-image-files
+   codex--app-server-owned-image-files))
+
+(defun codex--app-server-cleanup-active-image-files ()
+  "Delete owned image files whose accepted turn has ended."
+  (codex--app-server-delete-owned-image-files
+   codex--app-server-active-owned-image-files))
+
+(defun codex--app-server-delete-owned-image-files (files)
+  "Delete owned image FILES, retaining failed deletions for a later retry."
+  (dolist (file (copy-sequence files))
+    (when (member file codex--app-server-owned-image-files)
+      (when (or (not (file-exists-p file))
+                (condition-case nil
+                    (progn (delete-file file) t)
+                  (error nil)))
+        (setq codex--app-server-owned-image-files
+              (delete file codex--app-server-owned-image-files)
+              codex--app-server-active-owned-image-files
+              (delete file codex--app-server-active-owned-image-files))))))
 
 (defun codex--app-server-clipboard-image-data ()
   "Return raw PNG bytes from the clipboard, or nil."
@@ -4170,8 +4470,12 @@ returns untracked files, verified against a freshly created one."
   "Send app-server METHOD with PARAMS and CALLBACK."
   (let ((id (cl-incf codex--app-server-next-request-id)))
     (puthash id callback codex--app-server-pending-requests)
-    (codex--app-server-send-json
-     `((id . ,id) (method . ,method) (params . ,params)))
+    (condition-case err
+        (codex--app-server-send-json
+         `((id . ,id) (method . ,method) (params . ,params)))
+      (error
+       (remhash id codex--app-server-pending-requests)
+       (signal (car err) (cdr err))))
     id))
 
 (defun codex--app-server-send-response (id result)
@@ -4273,11 +4577,38 @@ The Codex CLI shows one blank line between successive output items."
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
         (unless (process-live-p process)
-          (codex--app-server-insert-status
-           (format "Codex app-server %s" (string-trim event)))
+          (let ((message (format "Codex app-server %s"
+                                 (string-trim event))))
+            (setq codex--app-server-turn-active-p nil
+                  codex--app-server-turn-start-pending-p nil
+                  codex--app-server-current-turn-id nil
+                  codex--app-server-turn-start-time nil
+                  codex--app-server-mcp-statuses nil
+                  codex--app-server-mcp-start-time nil)
+            (codex--app-server-cancel-markdown-render)
+            (codex--app-server-stop-status-timer)
+            (codex--app-server-remove-status-overlay)
+            (codex--app-server-fail-pending-requests message)
+            (codex--app-server-cleanup-active-image-files)
+            (force-mode-line-update)
+            (codex--app-server-insert-status message))
           (codex--app-server-kill-stderr-buffer
            codex--app-server-stderr-buffer)
           (setq-local codex--app-server-stderr-buffer nil))))))
+
+(defun codex--app-server-fail-pending-requests (message)
+  "Fail and clear every pending request with error MESSAGE."
+  (when (hash-table-p codex--app-server-pending-requests)
+    (let (callbacks)
+      (maphash (lambda (_id callback) (push callback callbacks))
+               codex--app-server-pending-requests)
+      (clrhash codex--app-server-pending-requests)
+      (dolist (callback callbacks)
+        (condition-case err
+            (funcall callback nil `((code . -32000) (message . ,message)))
+          (error
+           (message "Codex app-server exit callback failed: %s"
+                    (error-message-string err))))))))
 
 
 (defun codex--app-server-launch-startup (action &optional instance-name)

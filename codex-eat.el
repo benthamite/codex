@@ -923,8 +923,10 @@ eat uses to pad prompt columns."
 (defun codex--history-line-text (line)
   "Return prompt text from one JSONL history LINE."
   (condition-case nil
-      (let ((entry (json-parse-string line :object-type 'alist)))
-        (alist-get 'text entry))
+      (let* ((entry (json-parse-string line :object-type 'alist))
+             (text (alist-get 'text entry)))
+        (when (stringp text)
+          text))
     (error nil)))
 
 ;;;; Background color remapping

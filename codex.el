@@ -854,7 +854,7 @@ If SIMPLE-FORMAT is non-nil, use simplified display names."
 
 (defun codex--get-or-prompt-for-buffer ()
   "Get Codex buffer for current directory or prompt for selection."
-  (or (when (codex--buffer-p (current-buffer))
+  (or (when (codex--active-buffer-p (current-buffer))
         (current-buffer))
       (let* ((current-dir (codex--directory))
              (dir-buffers (codex--find-codex-buffers-for-directory current-dir)))
@@ -869,8 +869,9 @@ If SIMPLE-FORMAT is non-nil, use simplified display names."
           (car dir-buffers))
          (t
           (let ((remembered-buffer (gethash current-dir codex--directory-buffer-map)))
-            (if (and remembered-buffer (buffer-live-p remembered-buffer))
+            (if (codex--active-buffer-p remembered-buffer)
                 remembered-buffer
+              (remhash current-dir codex--directory-buffer-map)
               (let ((other-buffers (codex--find-all-codex-buffers)))
                 (when other-buffers
                   (codex--prompt-for-codex-buffer))))))))))
@@ -1222,6 +1223,9 @@ to the new buffer."
 (defun codex--launch-session (dir backend buffer-name instance-name switches
                                   switch-after)
   "Launch a Codex session in DIR using BACKEND and SWITCHES."
+  (when-let* ((buffer (get-buffer buffer-name))
+              ((codex--buffer-process-live-p buffer)))
+    (user-error "Codex session %s is already running" buffer-name))
   (let ((default-directory dir)
         (process-adaptive-read-buffering nil)
         (process-environment
@@ -1231,10 +1235,19 @@ to the new buffer."
     (let ((buffer (codex--term-make backend buffer-name codex-program switches)))
       (unless (buffer-live-p buffer)
         (error "Failed to create Codex buffer"))
-      (codex--initialize-terminal-buffer buffer backend dir instance-name)
-      (when switch-after
-        (pop-to-buffer buffer))
-      buffer)))
+      (condition-case err
+          (progn
+            (codex--initialize-terminal-buffer buffer backend dir instance-name)
+            (when switch-after
+              (pop-to-buffer buffer))
+            buffer)
+        (error
+         (condition-case cleanup-error
+             (codex--term-kill-process backend buffer)
+           (error
+            (message "Codex startup cleanup failed: %s"
+                     (error-message-string cleanup-error))))
+         (signal (car err) (cdr err)))))))
 
 (defun codex--session-process-environment (buffer-name dir)
   "Return the process environment for BUFFER-NAME in DIR."
@@ -1255,12 +1268,15 @@ to the new buffer."
     (setq-local codex-terminal-backend backend)
     (setq-local codex--buffer-directory (file-truename dir))
     (setq-local codex--buffer-instance-name instance-name)
+    ;; Backend configuration can acquire process-wide advice.  Install cleanup
+    ;; before that first acquisition so a later initialization error cannot
+    ;; strand global state when the partially initialized buffer is killed.
+    (add-hook 'kill-buffer-hook #'codex--cleanup-buffer-state nil t)
     (codex--term-configure backend)
     (codex--maybe-install-window-resize-advice backend)
     (codex--term-setup-keymap backend)
     (codex--term-customize-faces backend)
     (codex--apply-terminal-buffer-ui)
-    (add-hook 'kill-buffer-hook #'codex--cleanup-buffer-state nil t)
     (run-hooks 'codex-start-hook)
     (codex--term-post-start backend)
     (codex--configure-codex-window (funcall codex-display-window-fn buffer))))
@@ -1353,22 +1369,20 @@ ORIG-FUN is the original window size adjustment function.
 ARGS are passed to ORIG-FUN unchanged."
   (if (not (codex--buffer-p (current-buffer)))
       (apply orig-fun args)
-    (when (and (codex--codex-window-size-changed-p)
-               (not (codex--term-in-read-only-p codex-terminal-backend)))
+    (when (and (not (codex--term-in-read-only-p codex-terminal-backend))
+               (codex--codex-window-size-changed-p))
       (apply orig-fun args))))
 
 (defun codex--codex-window-size-changed-p ()
-  "Return non-nil if any visible Codex window changed size."
+  "Return non-nil if a window showing the current buffer changed size."
   (let ((size-changed nil))
-    (dolist (window (window-list))
-      (let ((buffer (window-buffer window)))
-        (when (codex--buffer-p buffer)
-          (let ((current-size (cons (window-width window)
-                                    (window-height window)))
-                (stored-size (gethash window codex--window-sizes)))
-            (when (not (equal current-size stored-size))
-              (setq size-changed t)
-              (puthash window current-size codex--window-sizes))))))
+    (dolist (window (get-buffer-window-list (current-buffer) nil t))
+      (let ((current-size (cons (window-width window)
+                                (window-height window)))
+            (stored-size (gethash window codex--window-sizes)))
+        (when (not (equal current-size stored-size))
+          (setq size-changed t)
+          (puthash window current-size codex--window-sizes))))
     size-changed))
 
 ;;;; Error formatting
@@ -2307,48 +2321,489 @@ Only runs when `codex-enable-hooks' is non-nil."
         (buffer-string))
     ""))
 
+(defun codex--toml-skip-horizontal-space (text position)
+  "Return the first non-space position in TEXT at or after POSITION."
+  (let ((length (length text)))
+    (while (and (< position length)
+                (memq (aref text position) '(?\s ?\t)))
+      (setq position (1+ position)))
+    position))
+
+(defun codex--toml-basic-key-escape (text position)
+  "Decode the TOML basic-key escape in TEXT at POSITION.
+Return a cons of the decoded string and the position after the escape."
+  (let ((length (length text)))
+    (when (< position length)
+      (let ((character (aref text position)))
+        (cond
+         ((assq character
+                '((?b . "\b") (?t . "\t") (?n . "\n") (?f . "\f")
+                  (?r . "\r") (?\" . "\"") (?\\ . "\\")))
+          (cons (cdr (assq character
+                           '((?b . "\b") (?t . "\t") (?n . "\n") (?f . "\f")
+                             (?r . "\r") (?\" . "\"") (?\\ . "\\"))))
+                (1+ position)))
+         ((memq character '(?u ?U))
+          (let* ((digits (if (eq character ?u) 4 8))
+                 (end (+ position 1 digits)))
+            (when (and (<= end length)
+                       (string-match-p
+                        "\\`[[:xdigit:]]+\\'"
+                        (substring text (1+ position) end)))
+              (cons (char-to-string
+                     (string-to-number
+                      (substring text (1+ position) end) 16))
+                    end)))))))))
+
+(defun codex--toml-key-token (text position)
+  "Parse one TOML key token in TEXT at POSITION.
+Return a cons of its semantic string value and ending position."
+  (let ((length (length text)))
+    (when (< position length)
+      (pcase (aref text position)
+        (?\"
+         (let ((cursor (1+ position))
+               pieces
+               done
+               invalid)
+           (while (and (< cursor length) (not done) (not invalid))
+             (pcase (aref text cursor)
+               (?\"
+                (setq done t
+                      cursor (1+ cursor)))
+               (?\\
+                (if-let* ((decoded
+                           (codex--toml-basic-key-escape
+                            text (1+ cursor))))
+                    (progn
+                      (push (car decoded) pieces)
+                      (setq cursor (cdr decoded)))
+                  (setq invalid t)))
+               (character
+                (push (char-to-string character) pieces)
+                (setq cursor (1+ cursor)))))
+           (when (and done (not invalid))
+             (cons (apply #'concat (nreverse pieces)) cursor))))
+        (?'
+         (when-let* ((end (string-match "'" text (1+ position))))
+           (cons (substring text (1+ position) end) (1+ end))))
+        (_
+         (let ((end position))
+           (while (and (< end length)
+                       (let ((character (aref text end)))
+                         (or (and (>= character ?a) (<= character ?z))
+                             (and (>= character ?A) (<= character ?Z))
+                             (and (>= character ?0) (<= character ?9))
+                             (memq character '(?_ ?-)))))
+             (setq end (1+ end)))
+           (when (> end position)
+             (cons (substring text position end) end))))))))
+
+(defun codex--toml-key-path (text &optional position)
+  "Parse a TOML dotted key path in TEXT starting at POSITION.
+Return a plist containing semantic `:keys' and the `:end' position."
+  (let ((cursor (codex--toml-skip-horizontal-space text (or position 0)))
+        keys
+        token
+        done)
+    (while (not done)
+      (setq token (codex--toml-key-token text cursor))
+      (if (null token)
+          (setq keys nil
+                done t)
+        (push (car token) keys)
+        (setq cursor
+              (codex--toml-skip-horizontal-space text (cdr token)))
+        (if (and (< cursor (length text))
+                 (eq (aref text cursor) ?.))
+            (setq cursor
+                  (codex--toml-skip-horizontal-space text (1+ cursor)))
+          (setq done t))))
+    (when keys
+      (list :keys (nreverse keys) :end cursor))))
+
+(defun codex--toml-assignment-line-info (line)
+  "Return semantic key and value positions for TOML assignment LINE."
+  (when-let* ((path (codex--toml-key-path line))
+              (position (plist-get path :end))
+              ((< position (length line)))
+              ((eq (aref line position) ?=)))
+    (list :keys (plist-get path :keys)
+          :value-start
+          (codex--toml-skip-horizontal-space line (1+ position)))))
+
+(defun codex--toml-assignment-line-positions (predicate start end)
+  "Return top-level assignment line positions satisfying PREDICATE.
+Only inspect lines at or after START and before END.  PREDICATE receives
+the assignment's semantic key path."
+  (let (positions)
+    (dolist (position (codex--toml-outside-line-positions))
+      (when (and (>= position start) (< position end))
+        (goto-char position)
+        (when-let* ((info
+                     (codex--toml-assignment-line-info
+                      (buffer-substring-no-properties
+                       (line-beginning-position) (line-end-position))))
+                    ((funcall predicate (plist-get info :keys))))
+          (push position positions))))
+    (nreverse positions)))
+
 (defun codex--config-toml-with-hooks-enabled (content)
   "Return CONTENT with `[features].hooks' set to true."
   (with-temp-buffer
     (insert content)
-    (if (codex--goto-features-table)
-        (codex--ensure-hooks-in-features-table)
-      (codex--append-features-table))
+    (cond
+     ((codex--goto-features-table)
+      (codex--ensure-hooks-in-features-table))
+     ((codex--inline-features-table-p)
+      (user-error
+       "Cannot enable hooks in an inline `features' table; use dotted keys or [features]"))
+     ((codex--dotted-features-p)
+      (codex--ensure-hooks-in-dotted-features))
+     (t
+      (codex--append-features-table)))
     (buffer-string)))
+
+(defun codex--inline-features-table-p ()
+  "Return non-nil when the root defines `features' as an inline table."
+  (let ((root-end (codex--toml-root-end))
+        found)
+    (catch 'done
+      (dolist (position (codex--toml-outside-line-positions))
+        (when (< position root-end)
+          (goto-char position)
+          (let* ((line (buffer-substring-no-properties
+                        (line-beginning-position) (line-end-position)))
+                 (info (codex--toml-assignment-line-info line))
+                 (value-start (and info (plist-get info :value-start))))
+            (when (and (equal (plist-get info :keys) '("features"))
+                       (< value-start (length line))
+                       (eq (aref line value-start) ?{))
+              (setq found t)
+              (throw 'done t))))))
+    found))
+
+(defun codex--dotted-features-p ()
+  "Return non-nil when the TOML root contains a dotted `features' key."
+  (not
+   (null
+    (codex--toml-assignment-line-positions
+     (lambda (keys)
+       (and (> (length keys) 1)
+            (equal (car keys) "features")))
+     (point-min) (codex--toml-root-end)))))
+
+(defun codex--toml-table-header-line-p (line)
+  "Return non-nil when LINE is a TOML table header.
+Quoted keys may contain closing brackets, hashes, and escaped quotes."
+  (and (codex--toml-table-header-info line) t))
+
+(defun codex--toml-table-header-info (line)
+  "Return semantic table-header information for TOML LINE.
+The result contains `:keys' and a boolean `:array' value."
+  (let ((position 0)
+        (length (length line))
+        array
+        mode
+        closed
+        content-start
+        content-end)
+    (while (and (< position length)
+                (memq (aref line position) '(?\s ?\t)))
+      (setq position (1+ position)))
+    (when (and (< position length) (eq (aref line position) ?\[))
+      (setq position (1+ position))
+      (when (and (< position length) (eq (aref line position) ?\[))
+        (setq array t
+              position (1+ position)))
+      (setq content-start position)
+      (while (and (< position length) (not closed))
+        (let ((character (aref line position)))
+          (pcase mode
+            ('basic
+             (cond
+              ((eq character ?\\)
+               (setq position (min length (+ position 2))))
+              ((eq character ?\")
+               (setq mode nil
+                     position (1+ position)))
+              (t
+               (setq position (1+ position)))))
+            ('literal
+             (if (eq character ?')
+                 (setq mode nil
+                       position (1+ position))
+               (setq position (1+ position))))
+            (_
+             (cond
+              ((eq character ?\")
+               (setq mode 'basic
+                     position (1+ position)))
+              ((eq character ?')
+               (setq mode 'literal
+                     position (1+ position)))
+              ((and (eq character ?\])
+                    (or (not array)
+                        (and (< (1+ position) length)
+                             (eq (aref line (1+ position)) ?\]))))
+               (setq content-end position
+                     closed t
+                     position (+ position (if array 2 1))))
+              (t
+               (setq position (1+ position))))))))
+      (when (and closed content-end)
+        (while (and (< position length)
+                    (memq (aref line position) '(?\s ?\t)))
+          (setq position (1+ position)))
+        (when (or (= position length)
+                  (eq (aref line position) ?#))
+          (let* ((content (substring line content-start content-end))
+                 (path (codex--toml-key-path content))
+                 (end (and path
+                           (codex--toml-skip-horizontal-space
+                            content (plist-get path :end)))))
+            (when (and path (= end (length content)))
+              (list :keys (plist-get path :keys)
+                    :array array))))))))
+
+(defun codex--toml-escaped-p (line position)
+  "Return non-nil when the character at POSITION in LINE is escaped."
+  (let ((slashes 0)
+        (before (1- position)))
+    (while (and (>= before 0) (eq (aref line before) ?\\))
+      (setq slashes (1+ slashes)
+            before (1- before)))
+    (= 1 (% slashes 2))))
+
+(defun codex--toml-quote-run-length (line position quote)
+  "Return the length of the QUOTE run in LINE at POSITION."
+  (let ((end position)
+        (length (length line)))
+    (while (and (< end length) (eq (aref line end) quote))
+      (setq end (1+ end)))
+    (- end position)))
+
+(defun codex--toml-scan-line (line state square-depth curly-depth)
+  "Scan TOML LINE from STATE and return lexical state and container depths.
+STATE is nil, `basic', or `literal'.  SQUARE-DEPTH and CURLY-DEPTH
+track multiline arrays and inline tables so their contents cannot be
+mistaken for root assignments or table headers."
+  (let ((position 0)
+        (length (length line))
+        (mode state)
+        (square square-depth)
+        (curly curly-depth))
+    (while (< position length)
+      (let ((character (aref line position)))
+        (pcase mode
+          ('basic
+           (if (and (eq character ?\")
+                    (not (codex--toml-escaped-p line position))
+                    (>= (codex--toml-quote-run-length
+                         line position ?\")
+                        3))
+               (let ((run (codex--toml-quote-run-length
+                           line position ?\")))
+                 (setq mode nil
+                       position (+ position run)))
+             (setq position (1+ position))))
+          ('literal
+           (if (and (eq character ?')
+                    (>= (codex--toml-quote-run-length
+                         line position ?')
+                        3))
+               (let ((run (codex--toml-quote-run-length
+                           line position ?')))
+                 (setq mode nil
+                       position (+ position run)))
+             (setq position (1+ position))))
+          ('quoted-basic
+           (cond
+            ((eq character ?\\)
+             (setq position (min length (+ position 2))))
+            ((eq character ?\")
+             (setq mode nil
+                   position (1+ position)))
+            (t
+             (setq position (1+ position)))))
+          ('quoted-literal
+           (if (eq character ?')
+               (setq mode nil
+                     position (1+ position))
+             (setq position (1+ position))))
+          (_
+           (cond
+            ((eq character ?#)
+             (setq position length))
+            ((and (eq character ?\")
+                  (>= (codex--toml-quote-run-length
+                       line position ?\")
+                      3))
+             (setq mode 'basic
+                   position (+ position 3)))
+            ((and (eq character ?')
+                  (>= (codex--toml-quote-run-length
+                       line position ?')
+                      3))
+             (setq mode 'literal
+                   position (+ position 3)))
+            ((eq character ?\")
+             (setq mode 'quoted-basic
+                   position (1+ position)))
+            ((eq character ?')
+             (setq mode 'quoted-literal
+                   position (1+ position)))
+            ((eq character ?\[)
+             (setq square (1+ square)
+                   position (1+ position)))
+            ((eq character ?\])
+             (setq square (max 0 (1- square))
+                   position (1+ position)))
+            ((eq character ?{)
+             (setq curly (1+ curly)
+                   position (1+ position)))
+            ((eq character ?})
+             (setq curly (max 0 (1- curly))
+                   position (1+ position)))
+            (t
+             (setq position (1+ position))))))))
+    (list (and (memq mode '(basic literal)) mode) square curly)))
+
+(defun codex--toml-outside-line-positions ()
+  "Return TOML line starts outside multiline strings and container values."
+  (save-excursion
+    (goto-char (point-min))
+    (let (positions state (square 0) (curly 0))
+      (while (not (eobp))
+        (let ((line (buffer-substring-no-properties
+                     (line-beginning-position) (line-end-position))))
+          (when (and (null state) (zerop square) (zerop curly))
+            (push (line-beginning-position) positions))
+          (pcase-let ((`(,next-state ,next-square ,next-curly)
+                       (codex--toml-scan-line
+                        line state square curly)))
+            (setq state next-state
+                  square next-square
+                  curly next-curly)))
+        (forward-line 1))
+      (nreverse positions))))
+
+(defun codex--toml-table-header-positions ()
+  "Return positions of TOML table headers outside multiline strings."
+  (save-excursion
+    (let (positions)
+      (dolist (position (codex--toml-outside-line-positions))
+        (goto-char position)
+        (when (codex--toml-table-header-line-p
+               (buffer-substring-no-properties
+                (line-beginning-position) (line-end-position)))
+          (push position positions)))
+      (nreverse positions))))
+
+(defun codex--toml-root-end ()
+  "Return the start of the first TOML table, or `point-max'."
+  (or (car (codex--toml-table-header-positions)) (point-max)))
+
+(defun codex--toml-next-table-position (after)
+  "Return the first TOML table header position after AFTER."
+  (cl-find-if (lambda (position) (> position after))
+              (codex--toml-table-header-positions)))
+
+(defun codex--ensure-hooks-in-dotted-features ()
+  "Ensure dotted `features.hooks' is true in the current buffer."
+  (codex--remove-legacy-dotted-hooks-key)
+  (if-let* ((position
+             (car
+              (codex--toml-assignment-line-positions
+               (lambda (keys) (equal keys '("features" "hooks")))
+               (point-min) (codex--toml-root-end)))))
+      (progn
+        (goto-char position)
+        (delete-region (line-beginning-position) (line-end-position))
+        (insert "features.hooks = true"))
+    (goto-char (codex--toml-root-end))
+    (unless (bolp)
+      (insert "\n"))
+    (insert "features.hooks = true\n")))
+
+(defun codex--remove-legacy-dotted-hooks-key ()
+  "Remove root dotted legacy `features.codex_hooks' assignments."
+  (dolist
+      (position
+       (reverse
+        (codex--toml-assignment-line-positions
+         (lambda (keys) (equal keys '("features" "codex_hooks")))
+         (point-min) (codex--toml-root-end))))
+    (goto-char position)
+    (delete-region (line-beginning-position)
+                   (min (point-max) (1+ (line-end-position))))))
 
 (defun codex--goto-features-table ()
   "Move point to the `[features]' table header when present."
-  (goto-char (point-min))
-  (re-search-forward "^[ \t]*\\[features\\][ \t]*\\(?:#.*\\)?$" nil t))
+  (let (found)
+    (catch 'done
+      (dolist (position (codex--toml-table-header-positions))
+        (goto-char position)
+        (let ((info
+               (codex--toml-table-header-info
+                (buffer-substring-no-properties
+                 (line-beginning-position) (line-end-position)))))
+          (when (and (not (plist-get info :array))
+                     (equal (plist-get info :keys) '("features")))
+            (goto-char (line-end-position))
+            (setq found t)
+            (throw 'done t)))))
+    found))
 
 (defun codex--ensure-hooks-in-features-table ()
   "Ensure the current `[features]' table enables Codex hooks."
-  (let ((table-end (save-excursion
-                     (forward-line 1)
-                     (if (re-search-forward "^[ \t]*\\[[^]\n]+\\][ \t]*\\(?:#.*\\)?$" nil t)
-                         (line-beginning-position)
-                       (point-max)))))
-    (forward-line 1)
-    (unless (bolp)
-      (insert "\n")
-      (setq table-end (1+ table-end)))
-    (if (re-search-forward "^[ \t]*\\(?:codex_\\)?hooks[ \t]*=[^\n]*" table-end t)
-        (replace-match "hooks = true" t t)
-      (insert "hooks = true\n"))
-    (codex--remove-legacy-hooks-key)))
+  (codex--remove-legacy-hooks-key)
+  (when (codex--goto-features-table)
+    (let* ((header-start (line-beginning-position))
+           (table-end
+            (copy-marker
+             (or (codex--toml-next-table-position header-start)
+                 (point-max)))))
+      (unwind-protect
+          (progn
+            (forward-line 1)
+            (unless (bolp)
+              (insert "\n"))
+            (if-let* ((position
+                       (car
+                        (codex--toml-assignment-line-positions
+                         (lambda (keys) (equal keys '("hooks")))
+                         (point) table-end))))
+                (progn
+                  (goto-char position)
+                  (delete-region (line-beginning-position)
+                                 (line-end-position))
+                  (insert "hooks = true"))
+              (insert "hooks = true\n")))
+        (set-marker table-end nil)))))
 
 (defun codex--remove-legacy-hooks-key ()
   "Remove legacy codex_hooks lines from the current features table."
   (save-excursion
     (when (codex--goto-features-table)
-      (let ((table-end (save-excursion
-                         (forward-line 1)
-                         (if (re-search-forward "^[ \t]*\\[[^]\n]+\\][ \t]*\\(?:#.*\\)?$" nil t)
-                             (line-beginning-position)
-                           (point-max)))))
-        (forward-line 1)
-        (while (re-search-forward "^[ \t]*codex_hooks[ \t]*=[^\n]*\n?" table-end t)
-          (replace-match "" t t))))))
+      (let* ((header-start (line-beginning-position))
+             (table-end
+              (copy-marker
+               (or (codex--toml-next-table-position header-start)
+                   (point-max)))))
+        (unwind-protect
+            (let ((start (progn (forward-line 1) (point))))
+              (dolist
+                  (position
+                   (reverse
+                    (codex--toml-assignment-line-positions
+                     (lambda (keys) (equal keys '("codex_hooks")))
+                     start table-end)))
+                (goto-char position)
+                (delete-region (line-beginning-position)
+                               (min (point-max)
+                                    (1+ (line-end-position))))))
+          (set-marker table-end nil))))))
 
 (defun codex--append-features-table ()
   "Append a `[features]' table with Codex hooks enabled."

@@ -66,6 +66,10 @@ params of server→client requests. The `item/completed` dump only shows finishe
 items, so tracing is the only way to capture a *request* shape — which is what
 you need for any method the client does not handle yet.
 
+`CGT_TURN_TIMEOUT` sets how many seconds to wait for `turn/completed` (default
+90). A timeout exits unsuccessfully instead of printing a partial capture as
+though the turn had completed.
+
 `CGT_APPROVAL` sets the approval policy (default `never`). The server only sends
 approval requests when it has to ask, so pair `CGT_APPROVAL=untrusted` with
 `CGT_SANDBOX=read-only` and a prompt that needs a write:

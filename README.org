@@ -74,7 +74,7 @@ New sessions started with ~codex~ or ~codex-new-instance~ use the global default
 
 When an =app-server= session connects, codex.el renders the same startup banner shape as the terminal TUI: Codex version, model, reasoning effort, service tier, working directory, and the standard keymap tip.  App-server notifications are rendered only when they belong to the buffer's current thread, so sub-agent or side-thread events do not leak command output into the parent thread's buffer.
 
-The =app-server= buffer presents an editable input region after a prompt at the end of the buffer.  Type a message there and press the send key to submit it; conversation output renders above the prompt while the rendered history stays read-only and fully scrollable.  The send and newline keys follow ~codex-newline-keybinding-style~, so a multi-line prompt is composed with the newline key and submitted with the send key.  As in the Codex CLI, sending while a turn is active steers the current turn.  Typing =/= as the first composer character immediately opens slash-command completion, and the candidates narrow as more characters are typed.  Pressing =TAB= accepts the visible idle suggestion, completes a slash command or =$= skill reference when idle, and queues the input to run as the next turn while a turn is in progress.  Queued inputs render in a live ~• Queued follow-up inputs~ block (one ~↳~ line each), exactly as the CLI shows them; =M-<up>= pulls the last queued input back into the composer to edit it.  While a turn is active, a ~• Working (Ns • esc to interrupt)~ line shows above the prompt, and =ESC= (or =C-g=) interrupts the turn like the CLI's Esc.  Several composer affordances match the CLI: a leading =!= runs the rest of the line as a shell command in the thread, the idle suggestion appears after the cursor through Emacs completion preview with Codex's autosuggestion styling when that native preview facility is available and the composer is empty, typing =@= completes a project file path into the message, =M-p= and =M-n= cycle through previously sent prompts (with =C-c C-r= searching them by completion), =C-c C-e= opens a separate buffer to compose a long prompt that is sent back with =C-c C-c=, and =C-c C-<up>= / =C-c C-<down>= raise and lower the reasoning effort for upcoming turns (matching the CLI's reasoning up/down).  The composer remains the last buffer text so moving to the end of the buffer lands in editable input.  The user option ~codex-app-server-prompt-string~ sets the prompt shown before the input region; the default is ~"\n› "~.
+The =app-server= buffer presents an editable input region after a prompt at the end of the buffer.  Type a message there and press the send key to submit it; conversation output renders above the prompt while the rendered history stays read-only and fully scrollable.  The send and newline keys follow ~codex-newline-keybinding-style~, so a multi-line prompt is composed with the newline key and submitted with the send key.  As in the Codex CLI, sending while a turn is active steers the current turn.  Typing =/= as the first composer character immediately opens slash-command completion, and the candidates narrow as more characters are typed.  Pressing =TAB= accepts the visible idle suggestion, completes a slash command or =$= skill reference when idle, and queues the input to run as the next turn while a turn is in progress.  Queued inputs render in a live ~• Queued follow-up inputs~ block (one ~↳~ line each), exactly as the CLI shows them; =M-<up>= pulls the last queued input back into the composer to edit it.  While a turn is active, a ~• Working (Ns • esc to interrupt)~ line shows above the prompt, and =ESC= (or =C-g=) interrupts the turn like the CLI's Esc.  Several composer affordances match the CLI: a leading =!= runs the rest of the line as a shell command in the thread, the idle suggestion appears after the cursor through Emacs completion preview with Codex's autosuggestion styling when that native preview facility is available and the composer is empty, typing =@= completes a project file path into the message, =M-p= and =M-n= cycle through previously sent prompts (with =C-c C-r= searching them by completion), =C-c C-e= opens a separate buffer to compose a long prompt that is sent back with =C-c C-c=, and =C-c C-<up>= / =C-c C-<down>= raise and lower the reasoning effort for upcoming turns using the levels advertised by the selected model.  The composer remains the last buffer text so moving to the end of the buffer lands in editable input.  The user option ~codex-app-server-prompt-string~ sets the prompt shown before the input region; the default is ~"\n› "~.
 
 Skill completion searches the configured ~codex-app-server-skill-directories~ and project-local =.claude/skills=, =.claude/programmatic-skills=, =.codex/skills=, and =.codex/programmatic-skills= directories in the Codex session directory and its ancestors.
 
@@ -90,7 +90,7 @@ The experimental realtime channel is handled too: ~codex-app-server-realtime-sta
 
 Because command output is folded, ~codex-app-server-expand-output~ (bound to ~C-c C-o~) shows the full, unfolded output of the command block at point in a dedicated buffer, mirroring the CLI transcript view.
 
-Images can be attached to a turn on the =app-server= backend: ~codex-default-images~ are attached to the first prompt, ~codex-app-server-attach-image~ attaches an image file to the next turn, and ~codex-app-server-paste-image~ (bound to ~C-v~, matching the Codex CLI's Ctrl+V) attaches an image directly from the system clipboard and inserts an ~[Image #N]~ placeholder into the composer at point, exactly as the CLI does.  Attached images are sent as =localImage= input items.
+Images can be attached to a turn on the =app-server= backend: ~codex-default-images~ are attached to the first prompt, ~codex-app-server-attach-image~ attaches an image file to the next turn, and ~codex-app-server-paste-image~ (bound to ~C-v~, matching the Codex CLI's Ctrl+V) attaches an image directly from the system clipboard and inserts an ~[Image #N]~ placeholder into the composer at point, exactly as the CLI does.  Attached images are sent as =localImage= input items in attachment order.  Text, images, and file mentions remain one submission while queued or awaiting server acceptance; a rejected send restores them to the composer.  Clipboard image temporary files stay available until the accepted turn finishes, because the app-server worker reads them after acknowledging the request, and are also removed when the buffer is cleaned up.  User-selected image files are never removed.
 
 Completed assistant messages in =app-server= buffers are rendered as Markdown the way the Codex CLI renders them.  When =markdown-mode= is available, codex.el fontifies each message through =gfm-mode= and, like the CLI, hides only the inline emphasis markers (so =**bold**= and =`code`= show as styled text without the delimiters) while keeping block markers such as heading =#= and list =-= visible and syntax-coloured.  The user option ~codex-app-server-render-markdown~ enables this rendering; the default is ~t~.  When it is nil, or when =markdown-mode= is not installed, a lightweight built-in highlighter is used instead.
 
@@ -289,7 +289,7 @@ The package also defines faces for the eat terminal that inherit from the corres
 #+vindex: codex-vterm-multiline-delay
 #+vindex: codex-vterm-max-scrollback
 
-The user option ~codex-vterm-buffer-multiline-output~ controls whether multi-line terminal output is buffered to prevent flickering.  The default is ~t~.  When enabled, rapid successive output chunks containing cursor movement sequences are accumulated and flushed as a single update.
+The user option ~codex-vterm-buffer-multiline-output~ controls whether multi-line terminal output is buffered to prevent flickering.  The default is ~t~.  When enabled, rapid successive output chunks containing cursor movement sequences are accumulated and flushed as a single update, including the final buffered chunk when the process exits.
 
 The user option ~codex-vterm-multiline-delay~ sets the delay (in seconds) before processing buffered vterm output.  The default is ~0.01~.  Increase this if you still see flickering with the buffering enabled.
 
@@ -595,11 +595,15 @@ You can respond to these events by adding functions to ~codex-event-hook~ ([[#h:
 :CUSTOM_ID: h:release-0-3-0
 :END:
 
-This release improves Codex terminal robustness in Emacs.  Programmatic =eat=
-submissions now send prompt text literally, live-instance selection ignores
-stale Codex-named buffers whose terminal process has exited, transcript lookup
-results are cached by session id, and retained terminal output is protected
-across redraw and escape-sequence edge cases.
+This release improves Codex terminal and app-server robustness in Emacs.
+Programmatic =eat= submissions now send prompt text literally, live-instance
+selection ignores stale Codex-named buffers whose terminal process has exited,
+transcript lookup results are cached by session id, and retained terminal
+output is protected across redraw and escape-sequence edge cases.  App-server
+submissions keep their attachments through queues and failed requests, process
+exit clears transient working state, reasoning controls follow each model's
+advertised levels, protocol notification fields and added-file diffs follow the
+current schema, and skill/plugin changes refresh mention completion.
 
 * Indices
 :PROPERTIES:

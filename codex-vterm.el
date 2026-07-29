@@ -166,9 +166,13 @@ _BACKEND is the terminal backend type (should be \\='vterm)."
 _BACKEND is the terminal backend type (should be \\='vterm)."
   nil)
 
+(defvar-local codex--vterm-control-state nil
+  "Parser state carried across vterm output chunks for OSC detection.")
+
 (cl-defmethod codex--term-cleanup ((_backend (eql vterm)))
   "Clean up vterm buffer-local state."
-  (codex--clear-vterm-multiline-buffer))
+  (codex--clear-vterm-multiline-buffer)
+  (setq codex--vterm-control-state nil))
 
 (defun codex--vterm-redraw ()
   "Redraw the vterm terminal in the current Codex buffer."
@@ -188,11 +192,42 @@ _BACKEND is the terminal backend type (should be \\='vterm)."
   "Detect bell characters in vterm output and trigger notifications.
 ORIG-FUN is the original vterm--filter function.
 PROCESS is the vterm process.  INPUT is the terminal output string."
-  (when (and (string-match-p "\007" input)
-             (codex--buffer-p (process-buffer process))
-             (not (string-match-p "]0;.*\007" input)))
-    (codex--notify nil))
+  (when-let* ((buffer (process-buffer process)))
+    (when (and (codex--buffer-p buffer)
+               (with-current-buffer buffer
+                 (codex--vterm-audible-bell-p input)))
+      (codex--notify nil)))
   (funcall orig-fun process input))
+
+(defun codex--vterm-audible-bell-p (input)
+  "Return non-nil when INPUT contains a BEL outside an OSC control.
+Carry incomplete escape and OSC state across filter chunks in the
+current buffer."
+  (let ((audible nil))
+    (dolist (char (string-to-list input))
+      (pcase codex--vterm-control-state
+        ('osc
+         (cond
+          ((eq char ?\a) (setq codex--vterm-control-state nil))
+          ((eq char ?\e) (setq codex--vterm-control-state 'osc-escape))))
+        ('osc-escape
+         (cond
+          ((eq char ?\\) (setq codex--vterm-control-state nil))
+          ((eq char ?\a) (setq codex--vterm-control-state nil))
+          ((not (eq char ?\e)) (setq codex--vterm-control-state 'osc))))
+        ('escape
+         (cond
+          ((eq char ?\]) (setq codex--vterm-control-state 'osc))
+          ((eq char ?\e) nil)
+          (t
+           (setq codex--vterm-control-state nil)
+           (when (eq char ?\a)
+             (setq audible t)))))
+        (_
+         (cond
+          ((eq char ?\e) (setq codex--vterm-control-state 'escape))
+          ((eq char ?\a) (setq audible t))))))
+    audible))
 
 (defvar-local codex--vterm-multiline-buffer nil
   "Buffer for accumulating multi-line vterm output.")
@@ -243,7 +278,6 @@ control sequence."
     (with-current-buffer buffer
       (setq codex--vterm-multiline-buffer-timer nil)
       (if (and codex--vterm-multiline-buffer
-               (process-live-p process)
                (eq (process-buffer process) buffer))
           (let ((inhibit-redisplay t)
                 (data codex--vterm-multiline-buffer))
