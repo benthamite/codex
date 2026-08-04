@@ -4488,11 +4488,20 @@ returns untracked files, verified against a freshly created one."
     (puthash id callback codex--app-server-pending-requests)
     (condition-case err
         (codex--app-server-send-json
-         `((id . ,id) (method . ,method) (params . ,params)))
+         `((id . ,id) (method . ,method)
+           (params . ,(codex--app-server-request-params params))))
       (error
        (remhash id codex--app-server-pending-requests)
        (signal (car err) (cdr err))))
     id))
+
+(defun codex--app-server-request-params (params)
+  "Return PARAMS in the shape the server accepts on the wire.
+Argument-free methods pass nil, which `json-encode' renders as `null'.
+The server deserializes `params' into a required field and rejects null
+with -32600 \"Invalid request: missing field `params'\", so send the
+empty hash table that renders as the `{}' it expects."
+  (or params (make-hash-table :test 'equal)))
 
 (defun codex--app-server-send-response (id result)
   "Send an app-server response for ID with RESULT."

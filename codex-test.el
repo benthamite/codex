@@ -2093,6 +2093,24 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (should (equal codex--app-server-pending-images
                    '("/tmp/retry.png")))))
 
+(ert-deftest codex-test-app-server-argument-free-request-sends-empty-params ()
+  "Encode an argument-free request's `params' as `{}', never as `null'.
+The server deserializes `params' into a required struct field, so JSON
+`null' draws -32600 \"Invalid request: missing field `params'\".  Captured
+from `codex app-server' 0.146.0, which answers that to
+{\"method\":\"account/read\",\"params\":null} and answers the account to
+the same request with {}."
+  (let (sent)
+    (with-temp-buffer
+      (setq-local codex--app-server-next-request-id 0)
+      (setq-local codex--app-server-pending-requests
+                  (make-hash-table :test 'equal))
+      (cl-letf (((symbol-function 'codex--app-server-send-json)
+                 (lambda (message) (push message sent))))
+        (codex--app-server-send-request "account/read" nil #'ignore)))
+    (let ((json-encoding-pretty-print nil))
+      (should (string-match-p "\"params\":{}" (json-encode (car sent)))))))
+
 (ert-deftest codex-test-app-server-cleanup-deletes-only-owned-images ()
   "Cleanup removes clipboard temps but leaves user-selected images alone."
   (let ((owned (make-temp-file "codex-owned-" nil ".png"))
