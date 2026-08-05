@@ -339,13 +339,15 @@ keys; see `codex--app-server-take-submission'.")
 
 (defvar codex--app-server-pending-startup-action 'start
   "Startup action for the next app-server session.
-One of `start', `resume', `resume-session', or `fork'.  `resume'
-prompts for a thread; `resume-session' resumes a known session id.")
+One of `start', `resume', `resume-session', `fork', or `fork-session'.
+`resume' and `fork' prompt for a thread; `resume-session' and
+`fork-session' act on a known session id.")
 
 (defvar-local codex--app-server-startup-action 'start
   "Startup action for this app-server buffer.
-One of `start', `resume', `resume-session', or `fork'.  `resume'
-prompts for a thread; `resume-session' resumes a known session id.")
+One of `start', `resume', `resume-session', `fork', or `fork-session'.
+`resume' and `fork' prompt for a thread; `resume-session' and
+`fork-session' act on a known session id.")
 
 (defvar codex--app-server-pending-startup-session-id nil
   "Session id for the next app-server resume-by-id startup.")
@@ -3970,6 +3972,9 @@ shape, such as an elicitation's `action'."
     ('resume-session
      (codex--app-server-begin-resume-session-id
       codex--app-server-startup-session-id))
+    ('fork-session
+     (codex--app-server-begin-resume-session-id
+      codex--app-server-startup-session-id "thread/fork"))
     ('fork (codex--app-server-begin-resume "thread/fork"))
     (_ (codex--app-server-send-thread-start))))
 
@@ -4027,14 +4032,16 @@ shape, such as an elicitation's `action'."
        (codex--app-server-setup-input-region)
        (codex--app-server-flush-startup-submissions)))))
 
-(defun codex--app-server-begin-resume-session-id (session-id)
-  "Resume SESSION-ID in the current app-server buffer."
+(defun codex--app-server-begin-resume-session-id (session-id &optional method)
+  "Resume SESSION-ID in the current app-server buffer.
+METHOD defaults to `thread/resume'; pass `thread/fork' to fork
+SESSION-ID into a new thread instead of continuing it."
   (let ((file (codex--find-session-transcript session-id)))
     (if (not file)
         (codex--app-server-insert-status
          (format "No Codex transcript found for session %s" session-id))
       (codex--app-server-send-resume
-       "thread/resume"
+       (or method "thread/resume")
        `((id . ,session-id)
          (path . ,file))))))
 
@@ -4659,6 +4666,18 @@ prompting."
     (codex--launch-session dir 'app-server buffer-name instance-name
                            (codex--build-backend-switches 'app-server nil) t)))
 
+(defun codex--app-server-launch-fork-session (session-id &optional instance-name)
+  "Launch an app-server Codex session forking SESSION-ID.
+The forked thread starts as a copy of SESSION-ID and diverges from it;
+SESSION-ID itself is left untouched.  When INSTANCE-NAME is non-nil, use
+it for the new buffer instead of prompting."
+  (let* ((dir (codex--directory))
+         (instance-name (or instance-name (codex--session-instance-name dir)))
+         (buffer-name (codex--buffer-name-for-directory dir instance-name))
+         (codex--app-server-pending-startup-action 'fork-session)
+         (codex--app-server-pending-startup-session-id session-id))
+    (codex--launch-session dir 'app-server buffer-name instance-name
+                           (codex--build-backend-switches 'app-server nil) t)))
 
 (provide 'codex-app-server)
 
