@@ -1130,40 +1130,44 @@ Codex subcommands run as separate processes."
 
 ;;;###autoload
 (cl-defun codex-start-session (&key directory instance-name initial-prompt
-                                    resume-id terminal-backend)
+                                    resume-id fork terminal-backend)
   "Start a Codex session from explicit parameters and return its buffer.
 DIRECTORY is the project directory, defaulting to `codex--directory'.
 INSTANCE-NAME names the session instance; when nil, derive one the way
 `codex' does, prompting only when instances already exist in DIRECTORY.
 INITIAL-PROMPT is submitted as the first user message.  RESUME-ID
-resumes the session with that id instead of starting fresh.
-TERMINAL-BACKEND overrides `codex-terminal-backend' for this session;
-because that variable is buffer-local in session buffers, calling this
-function from inside a session buffer reuses that session's backend."
+resumes the session with that id instead of starting fresh; with FORK
+non-nil it forks that session into a new one instead, leaving the
+original untouched.  TERMINAL-BACKEND overrides `codex-terminal-backend'
+for this session; because that variable is buffer-local in session
+buffers, calling this function from inside a session buffer reuses that
+session's backend."
   (let* ((dir (file-name-as-directory
                (expand-file-name (or directory (codex--directory)))))
          (backend (or terminal-backend codex-terminal-backend))
          (instance (or instance-name (codex--session-instance-name dir))))
     (codex--start-session-buffer dir backend instance nil resume-id
-                                 initial-prompt t)))
+                                 initial-prompt t fork)))
 
 (defun codex--start-session-buffer (dir backend instance extra-switches
-                                        resume-id initial-prompt switch-after)
+                                        resume-id initial-prompt switch-after
+                                        &optional fork)
   "Launch a Codex session and return its buffer.
 DIR, BACKEND, and INSTANCE identify the session.  EXTRA-SWITCHES are
-appended CLI switches.  RESUME-ID resumes that session id.
-INITIAL-PROMPT is the opening user message.  SWITCH-AFTER non-nil pops
-to the new buffer."
+appended CLI switches.  RESUME-ID resumes that session id, or forks it
+when FORK is non-nil.  INITIAL-PROMPT is the opening user message.
+SWITCH-AFTER non-nil pops to the new buffer."
   (let* ((buffer-name (codex--buffer-name-for-directory dir instance))
          (prompt-via-cli-p (and initial-prompt
                                 (not resume-id)
                                 (not (eq backend 'app-server))))
          (switches (codex--start-session-switches
                     backend extra-switches resume-id
-                    (and prompt-via-cli-p initial-prompt)))
+                    (and prompt-via-cli-p initial-prompt)
+                    fork))
          (codex--app-server-pending-startup-action
           (if (and resume-id (eq backend 'app-server))
-              'resume-session
+              (if fork 'fork-session 'resume-session)
             codex--app-server-pending-startup-action))
          (codex--app-server-pending-startup-session-id
           (if (and resume-id (eq backend 'app-server))
@@ -1176,15 +1180,16 @@ to the new buffer."
     buffer))
 
 (defun codex--start-session-switches (backend extra-switches resume-id
-                                              initial-prompt)
-  "Return CLI switches for BACKEND, EXTRA-SWITCHES, RESUME-ID, INITIAL-PROMPT."
+                                              initial-prompt &optional fork)
+  "Return CLI switches for BACKEND, EXTRA-SWITCHES, RESUME-ID, INITIAL-PROMPT.
+FORK non-nil turns a RESUME-ID into a `codex fork' of that session."
   (cond
    ((eq backend 'app-server)
     (codex--build-backend-switches 'app-server extra-switches))
    (resume-id
     (append codex-program-switches
             (codex--build-cli-args)
-            (list "resume" resume-id)
+            (list (if fork "fork" "resume") resume-id)
             extra-switches))
    (t
     (codex--build-backend-switches

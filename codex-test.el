@@ -6404,3 +6404,32 @@ the menu, exactly as `@' opens the file equivalent."
       (should (equal (mapcar #'car codex--app-server-mention-rows)
                      '("browser" "visualize" "superpowers:brainstorming"
                        "browser:control-in-app-browser" "add-bib-entry"))))))
+
+(ert-deftest codex-test-start-session-switches-fork-uses-fork-subcommand ()
+  "A forked terminal-backend session runs `codex fork SESSION-ID'."
+  (let ((codex-program-switches nil))
+    (should (equal (last (codex--start-session-switches 'eat nil "abc-123" nil t) 2)
+                   '("fork" "abc-123")))))
+
+(ert-deftest codex-test-start-session-switches-resume-is-unchanged ()
+  "A resumed terminal-backend session still runs `codex resume SESSION-ID'."
+  (let ((codex-program-switches nil))
+    (should (equal (last (codex--start-session-switches 'eat nil "abc-123" nil nil) 2)
+                   '("resume" "abc-123")))))
+
+(ert-deftest codex-test-app-server-fork-sets-pending-startup-action ()
+  "Forking an app-server session pends the `fork-session' startup action."
+  (let ((codex--app-server-pending-startup-action 'start)
+        (codex--app-server-pending-startup-session-id nil)
+        (recorded nil))
+    (cl-letf (((symbol-function 'codex--launch-session)
+               (lambda (&rest _)
+                 (setq recorded
+                       (list codex--app-server-pending-startup-action
+                             codex--app-server-pending-startup-session-id))
+                 (current-buffer)))
+              ((symbol-function 'codex--directory) (lambda () "/tmp/p/"))
+              ((symbol-function 'codex--session-instance-name)
+               (lambda (&rest _) "one")))
+      (codex--app-server-launch-fork-session "abc-123")
+      (should (equal recorded '(fork-session "abc-123"))))))

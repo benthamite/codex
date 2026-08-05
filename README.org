@@ -456,7 +456,7 @@ The command ~codex-redraw~ asks the Codex TUI to repaint and then forces the Ema
 #+findex: codex-prompt-input
 #+findex: codex-session-identity
 
-The function ~codex-start-session~ starts a Codex session from explicit keyword parameters (~:directory~, ~:instance-name~, ~:initial-prompt~, ~:resume-id~, ~:terminal-backend~) and returns its buffer.
+The function ~codex-start-session~ starts a Codex session from explicit keyword parameters (~:directory~, ~:instance-name~, ~:initial-prompt~, ~:resume-id~, ~:fork~, ~:terminal-backend~) and returns its buffer. Passing ~:fork~ alongside ~:resume-id~ forks that session into a new one rather than continuing it, leaving the original untouched: the terminal backends run =codex fork= with the session id, while the app-server backend forks natively through ~thread/fork~. This is what lets a caller branch a session whose id it already knows, without the interactive thread picker that ~codex-fork~ opens.
 
 The function ~codex-prompt-input~ returns the pending prompt input text in a Codex session buffer, or nil when the prompt is empty.
 

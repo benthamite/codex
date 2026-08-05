@@ -530,7 +530,7 @@ The command @code{codex-redraw} asks the Codex TUI to repaint and then forces th
 @findex codex-prompt-input
 @findex codex-session-identity
 
-The function @code{codex-start-session} starts a Codex session from explicit keyword parameters (@code{:directory}, @code{:instance-name}, @code{:initial-prompt}, @code{:resume-id}, @code{:terminal-backend}) and returns its buffer.
+The function @code{codex-start-session} starts a Codex session from explicit keyword parameters (@code{:directory}, @code{:instance-name}, @code{:initial-prompt}, @code{:resume-id}, @code{:fork}, @code{:terminal-backend}) and returns its buffer. Passing @code{:fork} alongside @code{:resume-id} forks that session into a new one rather than continuing it, leaving the original untouched: the terminal backends run @samp{codex fork} with the session id, while the app-server backend forks natively through @code{thread/fork}. This is what lets a caller branch a session whose id it already knows, without the interactive thread picker that @code{codex-fork} opens.
 
 The function @code{codex-prompt-input} returns the pending prompt input text in a Codex session buffer, or nil when the prompt is empty.
 
