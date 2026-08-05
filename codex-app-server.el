@@ -4654,30 +4654,34 @@ prompting."
     (codex--launch-session dir 'app-server buffer-name instance-name
                            (codex--build-backend-switches 'app-server nil) t)))
 
+(defun codex--app-server-launch-startup-with-session-id (action session-id &optional instance-name)
+  "Launch an app-server Codex session performing ACTION on SESSION-ID.
+ACTION is the pending startup action symbol (`resume-session' or
+`fork-session') to run once the app-server initializes.  SESSION-ID is
+the session id carried alongside ACTION.  When INSTANCE-NAME is
+non-nil, use it for the new buffer instead of prompting."
+  (let* ((dir (codex--directory))
+         (instance-name (or instance-name (codex--session-instance-name dir)))
+         (buffer-name (codex--buffer-name-for-directory dir instance-name))
+         (codex--app-server-pending-startup-action action)
+         (codex--app-server-pending-startup-session-id session-id))
+    (codex--launch-session dir 'app-server buffer-name instance-name
+                           (codex--build-backend-switches 'app-server nil) t)))
+
 (defun codex--app-server-launch-resume-session (session-id &optional instance-name)
   "Launch an app-server Codex session resuming SESSION-ID.
 When INSTANCE-NAME is non-nil, use it for the new buffer instead of
 prompting."
-  (let* ((dir (codex--directory))
-         (instance-name (or instance-name (codex--session-instance-name dir)))
-         (buffer-name (codex--buffer-name-for-directory dir instance-name))
-         (codex--app-server-pending-startup-action 'resume-session)
-         (codex--app-server-pending-startup-session-id session-id))
-    (codex--launch-session dir 'app-server buffer-name instance-name
-                           (codex--build-backend-switches 'app-server nil) t)))
+  (codex--app-server-launch-startup-with-session-id
+   'resume-session session-id instance-name))
 
 (defun codex--app-server-launch-fork-session (session-id &optional instance-name)
   "Launch an app-server Codex session forking SESSION-ID.
 The forked thread starts as a copy of SESSION-ID and diverges from it;
 SESSION-ID itself is left untouched.  When INSTANCE-NAME is non-nil, use
 it for the new buffer instead of prompting."
-  (let* ((dir (codex--directory))
-         (instance-name (or instance-name (codex--session-instance-name dir)))
-         (buffer-name (codex--buffer-name-for-directory dir instance-name))
-         (codex--app-server-pending-startup-action 'fork-session)
-         (codex--app-server-pending-startup-session-id session-id))
-    (codex--launch-session dir 'app-server buffer-name instance-name
-                           (codex--build-backend-switches 'app-server nil) t)))
+  (codex--app-server-launch-startup-with-session-id
+   'fork-session session-id instance-name))
 
 (provide 'codex-app-server)
 
