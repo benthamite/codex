@@ -3603,6 +3603,25 @@ pluses belong to the file and are not unified-diff markers."
     (should (eq (get-text-property (1- (point)) 'face)
                 'codex-app-server-heading-face))))
 
+(ert-deftest codex-test-app-server-streams-opening-code-fence ()
+  "An opening code fence at the end of a stream renders without error."
+  (skip-unless (require 'markdown-mode nil t))
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-stream-fence/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
+    (setq-local codex-app-server-render-markdown t)
+    (codex--app-server-setup-input-region)
+    (codex--app-server-handle-message
+     '((method . "item/agentMessage/delta")
+       (params (itemId . "m1")
+               (delta . "You would invoke something like:\n\n```"))))
+    (codex--app-server-render-streaming-markdown "m1")
+    (should (equal
+             (buffer-substring-no-properties
+              (point-min) (codex--app-server-output-point))
+             "• You would invoke something like:\n\n```"))))
+
 (ert-deftest codex-test-app-server-renders-markdown-hides-markup ()
   "Markdown rendering matches the CLI: inline markup hidden, block visible."
   (skip-unless (require 'markdown-mode nil t))

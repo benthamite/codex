@@ -3662,13 +3662,18 @@ Uses `gfm-mode' when available, falling back to a built-in highlighter."
     (codex--app-server-transplant-markdown rendered start)))
 
 (defun codex--app-server-markdown-rendered-string (text)
-  "Return TEXT fontified through `gfm-mode' with markup hidden."
+  "Return TEXT fontified through `gfm-mode' with markup hidden.
+TEXT may be a partial stream, so a temporary final newline satisfies
+`markdown-mode' buffer-boundary assumptions without changing the result."
   (with-temp-buffer
     (insert text)
-    (delay-mode-hooks (gfm-mode))
-    (setq-local markdown-hide-markup t)
-    (font-lock-ensure)
-    (buffer-string)))
+    (let ((text-end (point)))
+      (unless (bolp)
+        (insert "\n"))
+      (delay-mode-hooks (gfm-mode))
+      (setq-local markdown-hide-markup t)
+      (font-lock-ensure)
+      (buffer-substring (point-min) text-end))))
 
 (defun codex--app-server-transplant-markdown (rendered start)
   "Copy display properties from RENDERED onto the buffer from START.
