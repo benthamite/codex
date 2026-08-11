@@ -156,6 +156,9 @@ because per-tool hooks can be frequent."
 (defvar-local codex--app-server-thread-id nil
   "Current app-server thread id.")
 
+(defvar-local codex--app-server-direct-input-p t
+  "Non-nil when the current app-server thread accepts direct input.")
+
 (defvar-local codex--app-server-user-agent nil
   "User agent string reported by the app-server initialize response.")
 
@@ -262,6 +265,9 @@ Used to name a background terminal when rendering stdin sent to it, since
   "Submission plists waiting for app-server thread startup.
 Each plist has `:text', `:images', `:mentions', and `:owned-images'
 keys; see `codex--app-server-take-submission'.")
+
+(defvar-local codex--app-server-deferred-resume-prompt nil
+  "Initial prompt held until a resumed thread reports input capability.")
 
 (defvar-local codex--app-server-queued-turn-inputs nil
   "Submission plists queued with Tab until the active turn completes.
@@ -512,6 +518,11 @@ arguments."
               codex--app-server-pending-startup-action)
   (setq-local codex--app-server-startup-session-id
               codex--app-server-pending-startup-session-id)
+  (setq-local codex--app-server-direct-input-p
+              (if (memq codex--app-server-startup-action
+                        '(resume resume-session fork fork-session))
+                  'unknown
+                t))
   (setq-local codex--app-server-pending-images
               (mapcar #'expand-file-name codex-default-images))
   (setq-local codex--app-server-owned-image-files nil)
@@ -742,6 +753,10 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
                      (alist-get 'reasoning_effort metadata)
                      (alist-get 'effort metadata)
                      codex-reasoning-effort)))
+    (setq codex--app-server-direct-input-p
+          (if (assq 'canAcceptDirectInput thread)
+              (and (alist-get 'canAcceptDirectInput thread) t)
+            t))
     (when model
       (setq codex--app-server-current-model-id model))
     (when effort
@@ -756,8 +771,27 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
       (codex--app-server-send-skill-extra-roots)
       (codex--app-server-refresh-mention-rows)
       (unless defer-input
+        (codex--app-server-setup-thread-input)))))
+
+(defun codex--app-server-setup-thread-input ()
+  "Render input controls permitted for the current app-server thread."
+  (if codex--app-server-direct-input-p
+      (progn
+        (setq buffer-read-only nil)
         (codex--app-server-setup-input-region)
-        (codex--app-server-flush-startup-submissions)))))
+        (when codex--app-server-deferred-resume-prompt
+          (let ((prompt codex--app-server-deferred-resume-prompt))
+            (setq codex--app-server-deferred-resume-prompt nil)
+            (codex--app-server-submit-command prompt)))
+        (codex--app-server-flush-startup-submissions))
+    (codex--app-server-insert-status
+     (concat codex--app-server-user-prefix
+             "Viewing sub-agent — direct input is disabled"))
+    (when codex--app-server-deferred-resume-prompt
+      (setq codex--app-server-deferred-resume-prompt nil)
+      (codex--app-server-insert-status
+       "Initial prompt was not sent because direct input is disabled"))
+    (setq buffer-read-only t)))
 
 (defun codex--app-server-setup-input-region ()
   "Render the app-server input prompt and initialize input markers."
@@ -4034,8 +4068,7 @@ shape, such as an elicitation's `action'."
        (codex--app-server-thread-started result t)
        (codex--app-server-render-resumed-history
         (alist-get 'data (alist-get 'initialTurnsPage result)))
-       (codex--app-server-setup-input-region)
-       (codex--app-server-flush-startup-submissions)))))
+       (codex--app-server-setup-thread-input)))))
 
 (defun codex--app-server-begin-resume-session-id (session-id &optional method)
   "Resume SESSION-ID in the current app-server buffer.
@@ -4094,6 +4127,7 @@ Slash commands are dispatched locally, a leading \"!\" runs a shell
 command, and everything else is sent to the model as a turn.
 When SUBMISSION is non-nil, it owns COMMAND's already-captured
 attachments."
+  (codex--app-server-ensure-direct-input)
   (codex--run-command-submitted-hook)
   (let ((trimmed (string-trim-left command)))
     (cond
@@ -4141,6 +4175,8 @@ Its output arrives as a command-execution item like the CLI's \"!\"."
 (defun codex--app-server-send-turn-input (submission)
   "Send captured SUBMISSION to the app-server as a turn input."
   (cond
+   ((not (eq codex--app-server-direct-input-p t))
+    (codex--app-server-ensure-direct-input))
    (codex--app-server-pending-reasoning-steps
       (setq codex--app-server-reasoning-waiting-submissions
             (append codex--app-server-reasoning-waiting-submissions
@@ -4151,6 +4187,16 @@ Its output arrives as a command-execution item like the CLI's \"!\"."
     (codex--app-server-send-turn-steer submission))
    (t
     (codex--app-server-send-turn-start submission))))
+
+(defun codex--app-server-ensure-direct-input ()
+  "Signal a user error unless the current thread accepts direct input."
+  (pcase codex--app-server-direct-input-p
+    ('t t)
+    ('unknown
+     (user-error "Waiting for the resumed thread input capability"))
+    (_
+     (user-error
+      "This sub-agent is controlled by its parent. Direct input is disabled"))))
 
 (defun codex--app-server-enqueue-submission (submission &optional front)
   "Queue SUBMISSION for a later turn.

@@ -62,6 +62,8 @@ Emacs."
 (defvar codex-app-server-program-switches)
 (defvar codex--app-server-pending-startup-action)
 (defvar codex--app-server-pending-startup-session-id)
+(defvar codex--app-server-deferred-resume-prompt)
+(declare-function codex--app-server-ensure-direct-input "codex-app-server" ())
 (declare-function codex--app-server-input-active-p "codex-app-server" ())
 (declare-function codex--app-server-prompt-input "codex-app-server" ())
 (declare-function codex--terminal-prompt-input "codex-eat" ())
@@ -969,6 +971,9 @@ After sending the command, move point to the end of the buffer."
 (defun codex--send-command-to-buffer (cmd buffer)
   "Send command CMD to Codex BUFFER and submit it."
   (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when (eq codex-terminal-backend 'app-server)
+        (codex--app-server-ensure-direct-input)))
     (codex--run-command-submitted-hook buffer)
     (let ((window (or (get-buffer-window buffer)
                       (display-buffer buffer))))
@@ -1176,7 +1181,11 @@ SWITCH-AFTER non-nil pops to the new buffer."
          (buffer (codex--launch-session dir backend buffer-name instance
                                         switches switch-after)))
     (when (and initial-prompt (not prompt-via-cli-p))
-      (codex--send-command-to-buffer initial-prompt buffer))
+      (if (and resume-id (eq backend 'app-server))
+          (with-current-buffer buffer
+            (setq-local codex--app-server-deferred-resume-prompt
+                        initial-prompt))
+        (codex--send-command-to-buffer initial-prompt buffer)))
     buffer))
 
 (defun codex--start-session-switches (backend extra-switches resume-id

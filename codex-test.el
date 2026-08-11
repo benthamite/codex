@@ -2604,6 +2604,79 @@ the same request with {}."
                       (point-min) (point-max))))))
       (delete-file file))))
 
+(ert-deftest codex-test-app-server-resume-v2-subagent-is-read-only ()
+  "Resume renders a parent-owned v2 sub-agent without a composer."
+  (let ((file (make-temp-file "codex-app-server-subagent" nil ".jsonl")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert (json-encode
+                     '((type . "event_msg")
+                       (payload
+                        (type . "agent_message")
+                        (message . "Worker history.")
+                        (phase . "final_answer"))))
+                    "\n"))
+          (with-temp-buffer
+            (rename-buffer "*codex:/tmp/app-server-subagent/*" t)
+            (setq-local codex--app-server-agent-items
+                        (make-hash-table :test 'equal))
+            (let ((response `((thread
+                               (id . "child-123")
+                               (path . ,file)
+                               (canAcceptDirectInput . nil))
+                              (initialTurnsPage (data . nil)))))
+              (cl-letf (((symbol-function 'codex--app-server-send-request)
+                         (lambda (_method _params callback)
+                           (funcall callback response nil))))
+                (codex--app-server-send-resume
+                 "thread/resume" `((id . "child-123") (path . ,file)))))
+            (let ((text (buffer-substring-no-properties
+                         (point-min) (point-max))))
+              (should (string-match-p "Worker history\\." text))
+              (should (string-match-p
+                       "› Viewing sub-agent — direct input is disabled"
+                       text))
+              (should-not codex--app-server-input-marker)
+              (should buffer-read-only))))
+      (delete-file file))))
+
+(ert-deftest codex-test-app-server-v2-subagent-rejects-submit-locally ()
+  "Reject all submits to a parent-owned v2 sub-agent before side effects."
+  (with-temp-buffer
+    (setq-local codex--app-server-direct-input-p nil)
+    (let ((side-effect nil))
+      (cl-letf (((symbol-function 'codex--run-command-submitted-hook)
+                 (lambda () (setq side-effect t)))
+                ((symbol-function 'codex--app-server-insert-message)
+                 (lambda (&rest _) (setq side-effect t)))
+                ((symbol-function 'codex--app-server-send-turn-input)
+                 (lambda (_submission) (setq side-effect t))))
+        (should-error (codex--app-server-submit-command "hello")
+                      :type 'user-error)
+        (should-not side-effect)))))
+
+(ert-deftest codex-test-app-server-resume-pending-rejects-submit ()
+  "Do not queue input before a resumed thread reports its capability."
+  (with-temp-buffer
+    (setq-local codex--app-server-direct-input-p 'unknown)
+    (should-error (codex--app-server-submit-command "too early")
+                  :type 'user-error)
+    (should-not codex--app-server-startup-submissions)
+    (should-not (string-match-p "too early" (buffer-string)))))
+
+(ert-deftest codex-test-app-server-v2-subagent-drops-deferred-resume-prompt ()
+  "Report without rendering a prompt that a resumed child cannot accept."
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-subagent-prompt/*" t)
+    (setq-local codex--app-server-direct-input-p nil)
+    (setq-local codex--app-server-deferred-resume-prompt "do more work")
+    (codex--app-server-setup-thread-input)
+    (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+      (should (string-match-p "Initial prompt was not sent" text))
+      (should-not (string-match-p "› do more work" text))
+      (should-not codex--app-server-deferred-resume-prompt))))
+
 (ert-deftest codex-test-app-server-transcript-history-separates-after-tools ()
   "Transcript replay inserts the CLI separator before messages after tool work."
   (let ((file (make-temp-file "codex-app-server-transcript-tools" nil ".jsonl")))
@@ -4810,6 +4883,28 @@ pluses belong to the file and are not unified-diff markers."
     (should (eq captured-action 'resume-session))
     (should (equal captured-id "abc123"))))
 
+(ert-deftest codex-test-start-session-app-server-defers-resume-prompt ()
+  "Wait for resume capability before submitting an initial prompt."
+  (let (sent buffer)
+    (unwind-protect
+        (cl-letf (((symbol-function 'codex--launch-session)
+                   (lambda (&rest _)
+                     (setq buffer (generate-new-buffer
+                                   " *codex-test-resume-prompt*"))))
+                  ((symbol-function 'codex--send-command-to-buffer)
+                   (lambda (&rest _) (setq sent t))))
+          (codex-start-session :directory "/tmp/project"
+                               :instance-name "default"
+                               :terminal-backend 'app-server
+                               :resume-id "abc123"
+                               :initial-prompt "continue")
+          (should-not sent)
+          (with-current-buffer buffer
+            (should (equal codex--app-server-deferred-resume-prompt
+                           "continue"))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
 (ert-deftest codex-test-edit-previous-message-sends-double-escape ()
   "Editing the previous message sends two escape key presses."
   (let ((buf (generate-new-buffer "*codex:/tmp/project/*"))
@@ -5425,6 +5520,22 @@ When only :inherit remains, the face is removed entirely."
                          (push buffer observed)))))
             (codex--send-command-to-buffer "hello" buf))
           (should (equal observed (list buf))))
+      (kill-buffer buf))))
+
+(ert-deftest codex-test-send-command-v2-subagent-rejects-before-hook ()
+  "Reject a public send to a parent-owned child before its submit hook."
+  (let ((buf (generate-new-buffer "*codex:/tmp/read-only-child/*"))
+        observed)
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (setq-local codex-terminal-backend 'app-server)
+            (setq-local codex--app-server-direct-input-p nil))
+          (let ((codex-command-submitted-hook
+                 (list (lambda (_buffer) (setq observed t)))))
+            (should-error (codex--send-command-to-buffer "hello" buf)
+                          :type 'user-error))
+          (should-not observed))
       (kill-buffer buf))))
 
 (ert-deftest codex-test-command-submitted-hook-runs-on-return-actions ()
