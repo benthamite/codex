@@ -3944,6 +3944,53 @@ pluses belong to the file and are not unified-diff markers."
             (should (equal codex--session-transcript-file file))))
       (delete-directory root t))))
 
+(ert-deftest codex-test-transcript-metadata-prefers-rollout-filename-id ()
+  "Use the rollout filename ID when hook metadata reports its parent."
+  (let* ((root (make-temp-file "codex-sessions" t))
+         (parent-id "019ff19e-20f7-7ff2-a6e7-c1c6e35b293a")
+         (child-id "019ff286-246b-7781-a60e-177cebc605ce")
+         (file (expand-file-name
+                (format "rollout-2026-08-11T17-31-45-%s.jsonl" child-id)
+                root))
+         (codex-transcript-sessions-directory root)
+         (codex--transcript-file-cache (make-hash-table :test 'equal)))
+    (unwind-protect
+        (progn
+          (with-temp-file file)
+          (with-temp-buffer
+            (codex--record-session-metadata parent-id file)
+            (should (equal codex--session-id child-id))
+            (should (equal
+                     (codex--find-session-transcript child-id) file))
+            (should-not (codex--cached-session-transcript
+                         (list root parent-id)))))
+      (delete-directory root t))))
+
+(ert-deftest codex-test-find-session-transcript-rejects-mismatched-cache ()
+  "Discard a cached rollout whose filename encodes another thread ID."
+  (let* ((root (make-temp-file "codex-sessions" t))
+         (parent-id "019ff19e-20f7-7ff2-a6e7-c1c6e35b293a")
+         (child-id "019ff286-246b-7781-a60e-177cebc605ce")
+         (parent-file
+          (expand-file-name
+           (format "rollout-2026-08-11T13-18-20-%s.jsonl" parent-id)
+           root))
+         (child-file
+          (expand-file-name
+           (format "rollout-2026-08-11T17-31-45-%s.jsonl" child-id)
+           root))
+         (codex-transcript-sessions-directory root)
+         (codex--transcript-file-cache (make-hash-table :test 'equal))
+         (key (list root parent-id)))
+    (unwind-protect
+        (progn
+          (with-temp-file parent-file)
+          (with-temp-file child-file)
+          (puthash key child-file codex--transcript-file-cache)
+          (should (equal (codex--find-session-transcript parent-id)
+                         parent-file)))
+      (delete-directory root t))))
+
 (ert-deftest codex-test-find-session-transcript-caches-results ()
   "Transcript lookup does not rescan sessions for repeated session ids."
   (let ((codex--transcript-file-cache (make-hash-table :test 'equal))

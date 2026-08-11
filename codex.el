@@ -1951,8 +1951,8 @@ transcript file.  Interactively, prompt only when neither is known."
 (defun codex--record-session-metadata (&optional session-id transcript-file)
   "Record SESSION-ID and TRANSCRIPT-FILE for the current Codex buffer."
   (let* ((file (codex--usable-transcript-file transcript-file))
-         (id (or (codex--nonempty-session-id session-id)
-                 (codex--session-id-from-transcript-file file))))
+         (id (or (codex--session-id-from-transcript-file file)
+                 (codex--nonempty-session-id session-id))))
     (when id
       (setq-local codex--session-id id))
     (when (and id (not file))
@@ -2068,17 +2068,26 @@ avoids treating later transcript text as authoritative session metadata.")
   "Return cached transcript file for KEY when it still exists."
   (let ((file (gethash key codex--transcript-file-cache)))
     (cond
-     ((and file (file-exists-p file)) file)
+     ((and file
+           (file-exists-p file)
+           (codex--transcript-file-matches-session-p file (cadr key)))
+      file)
      (file
       (remhash key codex--transcript-file-cache)
       nil))))
 
 (defun codex--cache-session-transcript (session-id file)
   "Cache FILE as the transcript for SESSION-ID."
-  (puthash (list (expand-file-name codex-transcript-sessions-directory)
-                 session-id)
-           file
-           codex--transcript-file-cache))
+  (when (codex--transcript-file-matches-session-p file session-id)
+    (puthash (list (expand-file-name codex-transcript-sessions-directory)
+                   session-id)
+             file
+             codex--transcript-file-cache)))
+
+(defun codex--transcript-file-matches-session-p (file session-id)
+  "Return non-nil when FILE belongs to SESSION-ID."
+  (let ((file-id (codex--session-id-from-transcript-file file)))
+    (or (null file-id) (equal file-id session-id))))
 
 (defun codex--append-transcript-catch-up (file)
   "Append missing final transcript output from FILE to current buffer.
