@@ -52,6 +52,9 @@
   "Codex app-server backend specific settings."
   :group 'codex)
 
+(defvar codex-app-server-turn-completed-hook nil
+  "Hook run after an app-server turn becomes idle and before queued input.")
+
 
 (defface codex-app-server-role-face
   '((t :inherit font-lock-keyword-face :weight bold))
@@ -2307,6 +2310,7 @@ than appends."
   (codex--app-server-refresh-status-timer)
   (force-mode-line-update)
   (codex--app-server-ensure-trailing-newline)
+  (run-hooks 'codex-app-server-turn-completed-hook)
   (codex--app-server-flush-turn-queue))
 
 (defun codex--app-server-thread-status-changed (params)
