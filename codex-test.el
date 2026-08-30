@@ -3725,6 +3725,66 @@ pluses belong to the file and are not unified-diff markers."
       (should-not (get-text-property hash-pos 'invisible))
       (should (get-text-property hash-pos 'face)))))
 
+(ert-deftest codex-test-app-server-markdown-escapes-only-punctuation ()
+  "Backslash escapes follow CommonMark, as in the CLI: a backslash before
+a bracket is hidden, but `\\Delta' keeps its backslash."
+  (skip-unless (require 'markdown-mode nil t))
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-md-escape/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (let ((codex-app-server-render-markdown t))
+      (codex--app-server-handle-message
+       '((method . "item/agentMessage/delta")
+         (params (itemId . "m1")
+                 (delta . "\\[\n\\Delta Q_e(t)=Q_a(t\\mid\\text{edit})\n\\]\nInline $x^2$ and \\(y_i\\).\n"))))
+      (codex--app-server-handle-message
+       '((method . "item/completed")
+         (params (item (type . "agentMessage") (id . "m1"))))))
+    ;; Ground truth: codex 0.151.0 TUI screen for the same reply (see
+    ;; ground-truth/codex_gt.py) shows `[', the LaTeX line intact, `]',
+    ;; and `Inline $x^2$ and (y_i).'
+    (let ((visible
+           (let (out (pos (point-min)))
+             (while (< pos (point-max))
+               (let ((next (or (next-single-property-change pos 'invisible)
+                               (point-max))))
+                 (unless (get-text-property pos 'invisible)
+                   (push (buffer-substring-no-properties pos next) out))
+                 (setq pos next)))
+             (apply #'concat (nreverse out)))))
+      (should (string-match-p
+               (regexp-quote
+                "[\n\\Delta Q_e(t)=Q_a(t\\mid\\text{edit})\n]\nInline $x^2$ and (y_i).")
+               visible)))))
+
+(ert-deftest codex-test-app-server-markdown-first-line-key-value-is-plain ()
+  "A message opening with `Summary: ...' is plain text, as in the CLI,
+not a `markdown-mode' metadata key/value block."
+  (skip-unless (require 'markdown-mode nil t))
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-md-meta/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (let ((codex-app-server-render-markdown t))
+      (codex--app-server-handle-message
+       '((method . "item/agentMessage/delta")
+         (params (itemId . "m1")
+                 (delta . "Summary: the file is empty.\nBackslashes stay: a\\b\n"))))
+      (codex--app-server-handle-message
+       '((method . "item/completed")
+         (params (item (type . "agentMessage") (id . "m1"))))))
+    (goto-char (point-min))
+    (search-forward "Summary")
+    (let ((face (get-text-property (match-beginning 0) 'face)))
+      (should-not (memq 'markdown-metadata-key-face (ensure-list face))))
+    (goto-char (point-min))
+    (search-forward "a\\b")
+    (should-not (get-text-property (1- (match-end 0)) 'invisible))
+    (should-not (get-text-property (- (match-end 0) 2) 'invisible))))
+
 (ert-deftest codex-test-app-server-process-filter-handles-json-lines ()
   "App-server filter parses newline-delimited JSON messages."
   (let ((buffer (generate-new-buffer "*codex:/tmp/app-server-filter/*")))

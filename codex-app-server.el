@@ -370,6 +370,18 @@ One of `start', `resume', `resume-session', `fork', or `fork-session'.
 (declare-function evil-local-mode "evil-core")
 (declare-function viper-mode "viper")
 (defvar markdown-hide-markup)
+(defvar markdown-regex-escape)
+(defvar markdown-regex-declarative-metadata)
+(defvar markdown-regex-pandoc-metadata)
+
+(defconst codex--app-server-markdown-escape-regexp
+  "\\(\\\\\\)[]!\"#$%&'()*+,./:;<=>?@[\\^_`{|}~-]"
+  "Regexp matching a CommonMark backslash escape, group 1 being the backslash.
+The Codex CLI renders Markdown with pulldown-cmark, where a backslash only
+escapes ASCII punctuation: the one before a bracket is dropped, while
+`\\Delta' keeps its backslash.  `markdown-mode' hides the backslash before
+any character, which would strip LaTeX commands such as `\\Delta' down to
+`Delta'.")
 
 (defvar codex-app-server-mode-map (make-sparse-keymap)
   "Keymap for `codex-app-server-mode'.
@@ -3710,6 +3722,12 @@ TEXT may be a partial stream, so a temporary final newline satisfies
         (insert "\n"))
       (delay-mode-hooks (gfm-mode))
       (setq-local markdown-hide-markup t)
+      (setq-local markdown-regex-escape
+                  codex--app-server-markdown-escape-regexp)
+      ;; The CLI has no metadata extension, so a message that opens with
+      ;; `Summary: ...' is plain text, not a MultiMarkdown key/value block.
+      (setq-local markdown-regex-declarative-metadata regexp-unmatchable)
+      (setq-local markdown-regex-pandoc-metadata regexp-unmatchable)
       (font-lock-ensure)
       (buffer-substring (point-min) text-end))))
 
