@@ -2573,6 +2573,37 @@ the same request with {}."
               (should-not (string-match-p "lossy final only" text)))))
       (delete-file file))))
 
+(ert-deftest codex-test-app-server-resume-renders-response-item-assistant-message ()
+  "Resume replays assistant text stored as a response item message."
+  (let ((file (make-temp-file "codex-app-server-response-item" nil ".jsonl")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert (json-encode
+                     '((type . "event_msg")
+                       (payload
+                        (type . "user_message")
+                        (message . "Audit the automations."))))
+                    "\n")
+            (insert (json-encode
+                     '((type . "response_item")
+                       (payload
+                        (type . "message")
+                        (role . "assistant")
+                        (content . [((type . "output_text")
+                                     (text . "Two critical issues found."))]))))
+                    "\n"))
+          (with-temp-buffer
+            (rename-buffer "*codex:/tmp/app-server-response-item/*" t)
+            (setq-local codex--app-server-agent-items
+                        (make-hash-table :test 'equal))
+            (should (codex--app-server-render-transcript-history file))
+            (let ((text (buffer-substring-no-properties
+                         (point-min) (point-max))))
+              (should (string-match-p "› Audit the automations\\." text))
+              (should (string-match-p "• Two critical issues found\\." text)))))
+      (delete-file file))))
+
 (ert-deftest codex-test-app-server-resume-renders-composer-after-transcript ()
   "Resume renders transcript history before the warning/composer block."
   (let ((file (make-temp-file "codex-app-server-transcript-composer" nil ".jsonl")))

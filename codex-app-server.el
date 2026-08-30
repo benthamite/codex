@@ -3447,12 +3447,27 @@ event."
          ("patch_apply_end" '(tool . enable-separators))))
       ("response_item"
        (pcase (alist-get 'type payload)
+         ("message"
+          (codex--app-server-response-message-event payload))
          ((or "custom_tool_call" "custom_tool_call_output")
           '(tool . enable-separators))
          ((or "function_call" "function_call_output"
               "local_shell_call" "mcp_tool_call"
               "mcp_tool_call_output" "web_search_call")
           '(tool . nil)))))))
+
+(defun codex--app-server-response-message-event (payload)
+  "Return a transcript event for assistant message PAYLOAD, or nil."
+  (when (equal (alist-get 'role payload) "assistant")
+    (let ((text
+           (string-join
+            (delq nil
+                  (mapcar (lambda (part)
+                            (when (equal (alist-get 'type part) "output_text")
+                              (alist-get 'text part)))
+                          (append (alist-get 'content payload) nil)))
+            "\n")))
+      (codex--app-server-transcript-event-with-text 'agent text))))
 
 (defun codex--app-server-transcript-event-with-text (role text)
   "Return a transcript event with ROLE and TEXT when TEXT is meaningful."
