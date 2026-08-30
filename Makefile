@@ -7,6 +7,7 @@ LOAD_PATH := -L "$(CURDIR)" \
              -L "$(DEPS_DIR)inheritenv" \
              -L "$(DEPS_DIR)transient/lisp" \
              -L "$(DEPS_DIR)cond-let" \
+             -L "$(DEPS_DIR)markdown-mode" \
              $(LOAD_PATH_EXTRA)
 
 .PHONY: test compile clean protocol-coverage
