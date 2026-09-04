@@ -3521,14 +3521,15 @@ event."
   (replace-regexp-in-string ":\\(\n\\)- " ":\n\n- " text t))
 
 (defun codex--app-server-transcript-link-display (label target)
-  "Return the CLI transcript display for Markdown link LABEL and TARGET."
+  "Return a Markdown link with the CLI display for LABEL and TARGET."
   (let* ((decoded (url-unhex-string target))
          (path (if (string-prefix-p "file://" decoded)
                    (substring decoded 7)
-                 decoded)))
-    (if (file-name-absolute-p path)
-        (file-relative-name path default-directory)
-      label)))
+                 decoded))
+         (display (if (file-name-absolute-p path)
+                      (file-relative-name path default-directory)
+                    label)))
+    (format "[%s](%s)" display target)))
 
 (defun codex--app-server-wrap-transcript-message (text prefix)
   "Return transcript TEXT hard-wrapped for a message with PREFIX."
@@ -3756,7 +3757,7 @@ deliberately not copied."
         (len (length rendered)))
     (while (< pos len)
       (let ((next (or (next-property-change pos rendered) len)))
-        (dolist (prop '(face invisible composition))
+        (dolist (prop '(face invisible composition keymap mouse-face help-echo))
           (when-let* ((value (get-text-property pos prop rendered)))
             (put-text-property (+ start pos) (+ start next) prop value)))
         (setq pos next)))))

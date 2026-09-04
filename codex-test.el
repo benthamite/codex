@@ -2795,7 +2795,8 @@ the same request with {}."
                    "• alpha beta `gamma`"))))
 
 (ert-deftest codex-test-app-server-transcript-history-renders-file-link-targets ()
-  "Transcript replay renders file links like the CLI transcript view."
+  "Transcript replay renders CLI-style file links that remain clickable."
+  (skip-unless (require 'markdown-mode nil t))
   (with-temp-buffer
     (rename-buffer "*codex:/tmp/app-server-transcript-file-link/*" t)
     (let ((default-directory "/Users/pablostafforini/My Drive/Epoch/"))
@@ -2803,8 +2804,19 @@ the same request with {}."
       (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
       (codex--app-server-render-transcript-agent
        "Updated [2026-06-11.gdoc](/Users/pablostafforini/My%20Drive/Epoch/meetings/maria/2026-06-11.gdoc)."))
-    (should (equal (buffer-substring-no-properties (point-min) (point-max))
-                   "• Updated meetings/maria/2026-06-11.gdoc."))))
+    (goto-char (point-min))
+    (search-forward "meetings/maria/2026-06-11.gdoc")
+    (let* ((position (1- (point)))
+           (map (get-text-property position 'keymap))
+           (command (and map (lookup-key map [mouse-2])))
+           opened-file)
+      (should (eq command #'markdown-follow-thing-at-point))
+      (goto-char position)
+      (cl-letf (((symbol-function 'find-file)
+                 (lambda (file &rest _args) (setq opened-file file))))
+        (call-interactively command))
+      (should (equal opened-file
+                     "/Users/pablostafforini/My Drive/Epoch/meetings/maria/2026-06-11.gdoc")))))
 
 (ert-deftest codex-test-app-server-transcript-history-indents-agent-paragraphs ()
   "Transcript replay stores continuation paragraphs with CLI indentation."
@@ -3755,6 +3767,35 @@ pluses belong to the file and are not unified-diff markers."
       (should-not (equal (get-text-property hash-pos 'display) ""))
       (should-not (get-text-property hash-pos 'invisible))
       (should (get-text-property hash-pos 'face)))))
+
+(ert-deftest codex-test-app-server-rendered-markdown-links-are-clickable ()
+  "Rendered Markdown links retain their mouse action and destination."
+  (skip-unless (require 'markdown-mode nil t))
+  (with-temp-buffer
+    (rename-buffer "*codex:/tmp/app-server-md-link/*" t)
+    (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+    (setq-local codex--app-server-command-items (make-hash-table :test 'equal))
+    (codex--app-server-setup-input-region)
+    (let ((codex-app-server-render-markdown t))
+      (codex--app-server-handle-message
+       '((method . "item/agentMessage/delta")
+         (params (itemId . "m1")
+                 (delta . "Visit [Example](https://example.com/).\n"))))
+      (codex--app-server-handle-message
+       '((method . "item/completed")
+         (params (item (type . "agentMessage") (id . "m1"))))))
+    (goto-char (point-min))
+    (search-forward "Example")
+    (let* ((position (1- (point)))
+           (map (get-text-property position 'keymap))
+           (command (and map (lookup-key map [mouse-2])))
+           opened-url)
+      (should (eq command #'markdown-follow-thing-at-point))
+      (goto-char position)
+      (cl-letf (((symbol-function 'browse-url)
+                 (lambda (url &rest _args) (setq opened-url url))))
+        (call-interactively command))
+      (should (equal opened-url "https://example.com/")))))
 
 (ert-deftest codex-test-app-server-markdown-escapes-only-punctuation ()
   "Backslash escapes follow CommonMark, as in the CLI: a backslash before
