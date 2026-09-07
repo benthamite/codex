@@ -1832,16 +1832,37 @@ name to match.")
                        :buffer-name buffer-name
                        :json-data json-data
                        :args args)))
-    (condition-case err
-        (codex--handle-internal-hook message)
-      (error
-       (message "Codex internal hook handling failed: %s"
-                (error-message-string err))))
-    (let ((hook-response
-           (run-hook-with-args-until-success 'codex-event-hook message)))
-      (when (plist-get (codex--hook-spec hook-type) :notify)
-        (codex--notify nil))
-      hook-response)))
+    (when (codex--current-session-hook-p message)
+      (condition-case err
+          (codex--handle-internal-hook message)
+        (error
+         (message "Codex internal hook handling failed: %s"
+                  (error-message-string err))))
+      (let ((hook-response
+             (run-hook-with-args-until-success 'codex-event-hook message)))
+        (when (plist-get (codex--hook-spec hook-type) :notify)
+          (codex--notify nil))
+        hook-response))))
+
+(defun codex--current-session-hook-p (message)
+  "Return non-nil when hook MESSAGE belongs to its target session.
+Sub-agents inherit the parent's buffer name.  App-server buffers accept
+identified hooks only after the protocol establishes the matching thread."
+  (let ((buffer (get-buffer (plist-get message :buffer-name))))
+    (or (not (buffer-live-p buffer))
+        (with-current-buffer buffer
+          (or (not (derived-mode-p 'codex-app-server-mode))
+              (let* ((data (codex--hook-json-object
+                            (plist-get message :json-data)))
+                     (file (codex--json-deep-find
+                            data '(transcript_path transcriptPath
+                                   transcript_file transcriptFile)))
+                     (id (or (codex--session-id-from-transcript-file file)
+                             (codex--json-deep-find
+                              data '(session_id sessionId session-id
+                                     conversation_id)))))
+                (or (null id)
+                    (equal id codex--app-server-thread-id))))))))
 
 (defun codex-handle-hook-from-emacsclient ()
   "Handle a Codex hook using `server-eval-args-left'."
@@ -1977,13 +1998,19 @@ The discovery checks recorded state, the app-server thread id, and the
 visible or recorded transcript path.  It canonicalizes any discovered
 id and path in buffer-local state and the transcript cache.  Return nil
 when no session id is available."
-  (let* ((file (codex--current-session-transcript-file))
-         (session-id (or (codex--nonempty-session-id codex--session-id)
-                         (and (boundp 'codex--app-server-thread-id)
-                              (codex--nonempty-session-id
-                               codex--app-server-thread-id))
+  (let* ((thread-id (and (boundp 'codex--app-server-thread-id)
+                         (codex--nonempty-session-id
+                          codex--app-server-thread-id)))
+         (file (codex--current-session-transcript-file))
+         (session-id (or thread-id
+                         (codex--nonempty-session-id codex--session-id)
                          (codex--session-id-from-transcript-file file))))
     (when session-id
+      (when (and thread-id
+                 (not (equal thread-id
+                             (codex--session-id-from-transcript-file file))))
+        (setq file nil)
+        (setq-local codex--session-transcript-file nil))
       (codex--record-session-metadata session-id file)
       (list :id session-id :transcript-file codex--session-transcript-file))))
 

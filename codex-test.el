@@ -4149,6 +4149,62 @@ not a `markdown-mode' metadata key/value block."
             (should (equal codex--session-transcript-file file))))
       (delete-directory root t))))
 
+(ert-deftest codex-test-app-server-hooks-preserve-parent-session ()
+  "Inherited child hooks cannot change identity or dispatch parent events."
+  (let* ((root (make-temp-file "codex-hook-identity" t))
+         (parent "019ff19e-20f7-7ff2-a6e7-c1c6e35b293a")
+         (child "019ff286-246b-7781-a60e-177cebc605ce")
+         (parent-file (expand-file-name (concat "rollout-" parent ".jsonl") root))
+         (child-file (expand-file-name (concat "rollout-" child ".jsonl") root))
+         (codex-transcript-sessions-directory root)
+         (codex--transcript-file-cache (make-hash-table :test 'equal))
+         (codex-transcript-catch-up-on-stop t)
+         (events 0)
+         (notifications 0)
+         (codex-event-hook (list (lambda (_) (cl-incf events) nil))))
+    (unwind-protect
+        (progn
+          (with-temp-file parent-file)
+          (with-temp-file child-file)
+          (with-temp-buffer
+            (setq major-mode 'codex-app-server-mode)
+            (setq-local codex--app-server-thread-id parent)
+            (codex--record-session-metadata parent parent-file)
+            (cl-letf (((symbol-function 'codex--notify)
+                       (lambda (&rest _) (cl-incf notifications))))
+              (dolist (thread (list parent nil))
+                (setq-local codex--app-server-thread-id thread)
+                (dolist (type '("SessionStart" "Stop" "PermissionRequest"))
+                  (dolist (raw-id (list parent child))
+                    (codex-handle-hook
+                     type (buffer-name)
+                     (json-encode `((session_id . ,raw-id)
+                                    (transcript_path . ,child-file)))))
+                  (codex-handle-hook
+                   type (buffer-name)
+                   (json-encode `((session_id . ,child)))))
+                (should (equal codex--session-id parent))
+                (should (equal codex--session-transcript-file parent-file)))
+              (should (= events 0))
+              (should (= notifications 0))
+              (setq-local codex--app-server-thread-id parent)
+              (codex-handle-hook
+               "SessionStart" (buffer-name)
+               (json-encode `((session_id . ,parent)
+                              (transcript_path . ,parent-file))))
+              (should (= events 1)))
+            (setq-local codex--session-id child)
+            (setq-local codex--session-transcript-file child-file)
+            (should (equal (codex--current-session-identity)
+                           (list :id parent :transcript-file parent-file)))
+            (should (equal codex--session-id parent))
+            (codex--app-server-handle-message
+             `((method . "thread/started")
+               (params (thread (id . ,child) (path . ,child-file)))))
+            (should (equal codex--app-server-thread-id parent))
+            (should (equal codex--session-id parent))))
+      (delete-directory root t))))
+
 (ert-deftest codex-test-transcript-metadata-prefers-rollout-filename-id ()
   "Use the rollout filename ID when hook metadata reports its parent."
   (let* ((root (make-temp-file "codex-sessions" t))
