@@ -1726,6 +1726,45 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (should (= 1 (how-many "• Explored" (point-min) (point-max))))
       (should (string-match-p "  └ Read alpha.txt, beta.txt" text)))))
 
+(ert-deftest codex-test-app-server-explore-growth-does-not-retain-old-text ()
+  "Extending a read block preserves input without saving replaced prefixes."
+  (with-temp-buffer
+    (codex-app-server-mode)
+    (buffer-enable-undo)
+    (codex--app-server-setup-input-region)
+    (goto-char (point-max))
+    (insert "draft input")
+    (codex--app-server-begin-explore '("alpha.txt"))
+    (setq buffer-undo-list nil)
+    (let ((names (cl-loop for i below 100 collect (format "file-%03d.txt" i))))
+      (dolist (name names) (codex--app-server-extend-explore (list name)))
+      (should (equal (buffer-substring-no-properties
+                      codex--app-server-explore-start codex--app-server-explore-end)
+                     (codex--app-server-explore-body (cons "alpha.txt" names))))
+      (should (equal (codex--app-server-input-text) "draft input"))
+      (should (codex--app-server-explore-active-p))
+      (should-not (cl-some (lambda (entry) (stringp (car-safe entry)))
+                          buffer-undo-list)))))
+
+(ert-deftest codex-test-app-server-explore-extension-preserves-input-undo ()
+  "Undoing an extension and draft edit preserves the earlier read block."
+  (with-temp-buffer
+    (codex-app-server-mode)
+    (buffer-enable-undo)
+    (codex--app-server-setup-input-region)
+    (codex--app-server-begin-explore '("alpha.txt"))
+    (setq buffer-undo-list nil)
+    (goto-char (point-max))
+    (insert "draft input")
+    (undo-boundary)
+    (codex--app-server-extend-explore '("beta.txt" "gamma.txt"))
+    (setq buffer-undo-list (primitive-undo 1 buffer-undo-list))
+    (should (equal (codex--app-server-input-text) "draft input"))
+    (setq buffer-undo-list (primitive-undo 1 buffer-undo-list))
+    (should (equal (codex--app-server-input-text) ""))
+    (should (string-match-p "Read alpha.txt" (buffer-string)))
+    (should-not (string-match-p "beta.txt" (buffer-string)))))
+
 (ert-deftest codex-test-app-server-renders-null-command-output ()
   "A command with JSON null output renders its header without an error."
   (with-temp-buffer

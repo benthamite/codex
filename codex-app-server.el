@@ -3119,20 +3119,20 @@ the way the Codex CLI groups them onto one `└ Read FILE, FILE' line."
         (copy-marker (codex--app-server-output-point) nil)))
 
 (defun codex--app-server-extend-explore (names)
-  "Add read file NAMES to the open Explored block, rewriting its line."
-  (setq codex--app-server-explore-files
-        (append codex--app-server-explore-files names))
-  (let ((inhibit-read-only t))
-    (delete-region codex--app-server-explore-start
-                   codex--app-server-explore-end)
-    (save-excursion
-      (goto-char codex--app-server-explore-start)
-      (let ((start (point)))
-        (insert (codex--app-server-explore-body
-                 codex--app-server-explore-files))
-        (put-text-property start (point) 'face 'codex-app-server-command-face)
-        (add-text-properties start (point) '(read-only t front-sticky t))
-        (set-marker codex--app-server-explore-end (point))))))
+  "Append read file NAMES to the open Explored block."
+  (when names
+    (let ((inhibit-read-only t)
+          (text (concat (when codex--app-server-explore-files ", ")
+                        (string-join names ", "))))
+      (setq codex--app-server-explore-files
+            (append codex--app-server-explore-files names))
+      (save-excursion
+        (goto-char codex--app-server-explore-end)
+        (let ((start (point)))
+          (insert text)
+          (put-text-property start (point) 'face 'codex-app-server-command-face)
+          (add-text-properties start (point) '(read-only t front-sticky t))
+          (set-marker codex--app-server-explore-end (point)))))))
 
 (defun codex--app-server-explore-body (names)
   "Return the `  └ Read NAME, NAME' tree line for explored NAMES."
