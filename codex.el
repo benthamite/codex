@@ -63,6 +63,7 @@ Emacs."
 (defvar codex--app-server-pending-startup-action)
 (defvar codex--app-server-pending-startup-session-id)
 (defvar codex--app-server-deferred-resume-prompt)
+(defvar codex--app-server-thread-id)
 (declare-function codex--app-server-ensure-direct-input "codex-app-server" ())
 (declare-function codex--app-server-input-active-p "codex-app-server" ())
 (declare-function codex--app-server-prompt-input "codex-app-server" ())
