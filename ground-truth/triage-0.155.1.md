@@ -1,5 +1,18 @@
 # Protocol triage: Codex 0.155.1
 
+## Current inventory
+
+The complete experimental inventory is now reviewed: **258 methods, 90 named
+in the client, 159 deliberately excluded, 9 todo, zero unreviewed**. The
+additional 63 methods comprised 7 already handled, 50 scope exclusions and
+6 follow-ups. These counts are method coverage, not feature parity.
+
+[The remaining feature work](parity-worklist.md) includes gaps a method-name
+check cannot detect. The sections below preserve the evidence and corrections
+that led to this inventory.
+
+## Initial non-experimental triage
+
 Reviewed on 2026-09-19 against the previous 0.145.0 baseline. All 25 new
 methods have decisions: 13 `todo`, 12 `wont-implement`. No methods disappeared.
 The baseline also now recognizes the existing `skills/changed` handler, bringing
@@ -89,3 +102,31 @@ All 418 ERT tests, shell/Python checks, strict byte compilation, and manual
 Texinfo export/validation passed. The Makefile needed the installed `llama`
 dependency supplied through `LOAD_PATH_EXTRA`; the Python TUI harness lacked
 `pyte`, so the reference capture used the existing Eat terminal backend.
+
+## Completed experimental triage
+
+The follow-up inspected the installed experimental schema and official tagged
+`rust-v0.155.1` source. Every new method now has a reason in the baseline.
+Important scope corrections:
+
+- Keep the local Tab queue. The TUI owns `queued_user_messages` locally and
+  ignores `ThreadQueueChanged`. The durable queue API serves separate
+  `codex session queue` commands; adopting it is not necessary for this UI.
+- Preserve source history when editing an earlier prompt. The official TUI
+  sends `ForkSessionForPromptEdit`; it does not use in-place `thread/revert`,
+  and ignores `ThreadReverted`. Track prompt-edit branching separately.
+- Ignore canonical realtime item notifications just as the TUI does. They
+  duplicate legacy transcript events. Final legacy transcript reconciliation
+  and persisted realtime history remain separate correctness questions.
+- Keep existing plugin listing: it already triggers background reconciliation
+  through the same upstream implementation as explicit `plugin/reconcile`.
+- Exclude hosted-app MCP event subscriptions from this terminal interface;
+  the TUI ignores their notifications.
+- Correct the old process-family note: these methods expose standalone
+  unsandboxed process control, not a proven deprecated predecessor.
+
+Primary source anchors are the tagged TUI `chatwidget/protocol.rs`,
+`chatwidget/input_queue.rs`, `app_backtrack.rs`,
+`app/background_requests.rs`, app-server `request_processors/plugins.rs`,
+and core-plugins `manager.rs`. Decisions are source/schema conclusions, not
+new live parity claims.

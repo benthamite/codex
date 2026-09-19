@@ -1,6 +1,14 @@
 {
   "codex_version": "codex-cli 0.155.1",
   "methods": {
+    "account/bedrock/discover": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. AWS provider onboarding and configuration remain outside editor account-management scope; exclusion is not a claim of CLI absence. Evidence: schema/v2/BedrockDiscoverResponse.json; schema/v2/BedrockSetupParams.json; rust-v0.155.1 codex-rs/app-server-protocol/src/protocol/v2/bedrock.rs",
+      "status": "wont-implement"
+    },
+    "account/bedrock/setup": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. AWS provider onboarding and configuration remain outside editor account-management scope; exclusion is not a claim of CLI absence. Evidence: schema/v2/BedrockDiscoverResponse.json; schema/v2/BedrockSetupParams.json; rust-v0.155.1 codex-rs/app-server-protocol/src/protocol/v2/bedrock.rs",
+      "status": "wont-implement"
+    },
     "account/chatgptAuthTokens/refresh": {
       "note": "the CLI manages its own tokens",
       "status": "wont-implement"
@@ -76,6 +84,10 @@
       "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Carries threadId, turnId and startedAtMs. Capture the trigger and CLI presentation before adding a review indicator; existing exclusions for item-level auto-review events do not establish equivalence with guardianWarning.",
       "status": "todo"
     },
+    "collaborationMode/list": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Official TUI discovers presets and cycles plan/default. Emacs currently has no collaborationMode request or submission; add discovery and mode selection. Evidence: Generated experimental schema and read-only rust-v0.155.1 source; not live captured",
+      "status": "todo"
+    },
     "command/exec": {
       "note": "client->server, not server->client: codex.el would be the caller, never a terminal host. Verified live ({command:[...]} -> {exitCode,stdout,stderr}). Thread-less, for GUI clients running commands in the server sandbox outside a turn; codex.el already covers the user-visible feature via thread/shellCommand (the CLI's ! prefix) and thread/backgroundTerminals/*.",
       "status": "wont-implement"
@@ -116,8 +128,24 @@
     "configWarning": {
       "status": "handled"
     },
+    "currentTime/read": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Server-to-client external-clock callback is unsupported. Needed when current_time_reminder.clock_source is external; response contains whole Unix seconds currentTimeAt. Evidence: rust-v0.155.1 codex-rs/app-server/tests/suite/v2/current_time.rs:45; schema/CurrentTimeReadResponse.json; codex-app-server.el:3795",
+      "status": "todo"
+    },
     "deprecationNotice": {
       "status": "handled"
+    },
+    "environment/add": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Exec-server environment registry and WebSocket connection management are outside the current local stdio session interface. Evidence: schema/v2/EnvironmentAddParams.json; schema/v2/EnvironmentInfoResponse.json; schema/v2/EnvironmentStatusResponse.json",
+      "status": "wont-implement"
+    },
+    "environment/info": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Exec-server environment registry and WebSocket connection management are outside the current local stdio session interface. Evidence: schema/v2/EnvironmentAddParams.json; schema/v2/EnvironmentInfoResponse.json; schema/v2/EnvironmentStatusResponse.json",
+      "status": "wont-implement"
+    },
+    "environment/status": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Exec-server environment registry and WebSocket connection management are outside the current local stdio session interface. Evidence: schema/v2/EnvironmentAddParams.json; schema/v2/EnvironmentInfoResponse.json; schema/v2/EnvironmentStatusResponse.json",
+      "status": "wont-implement"
     },
     "error": {
       "status": "handled"
@@ -204,6 +232,18 @@
     },
     "fuzzyFileSearch/sessionCompleted": {
       "note": "captured response is {files:[{root,path,match_type,file_name,score,indices}]} and it does return untracked files. That set is now matched locally with 'git ls-files --cached --others --exclude-standard', which keeps @-completion synchronous; a protocol round-trip would make completing-read asynchronous for no user-visible gain.",
+      "status": "wont-implement"
+    },
+    "fuzzyFileSearch/sessionStart": {
+      "note": "Triaged 2026-09-19 against installed experimental schema and official rust-v0.155.1 source; no live capture. Stateful asynchronous file-search transport. Existing synchronous @-completion enumerates tracked and untracked nonignored files locally; adopting a protocol session adds no required Emacs surface. TUI chatwidget/protocol.rs also ignores the session result notifications. Retain existing local completion choice.",
+      "status": "wont-implement"
+    },
+    "fuzzyFileSearch/sessionStop": {
+      "note": "Triaged 2026-09-19 against installed experimental schema and official rust-v0.155.1 source; no live capture. Stateful asynchronous file-search transport. Existing synchronous @-completion enumerates tracked and untracked nonignored files locally; adopting a protocol session adds no required Emacs surface. TUI chatwidget/protocol.rs also ignores the session result notifications. Retain existing local completion choice.",
+      "status": "wont-implement"
+    },
+    "fuzzyFileSearch/sessionUpdate": {
+      "note": "Triaged 2026-09-19 against installed experimental schema and official rust-v0.155.1 source; no live capture. Stateful asynchronous file-search transport. Existing synchronous @-completion enumerates tracked and untracked nonignored files locally; adopting a protocol session adds no required Emacs surface. TUI chatwidget/protocol.rs also ignores the session result notifications. Retain existing local completion choice.",
       "status": "wont-implement"
     },
     "fuzzyFileSearch/sessionUpdated": {
@@ -316,8 +356,16 @@
       "status": "handled"
     },
     "mcpServer/event/stream/notification": {
-      "note": "Corrected 2026-09-19: the experimental schema includes mcpServer/event/stream/start and stop, omitted by the earlier stable-only inventory. Capture subscription/event behavior and choose a client surface; the notification carries subscriptionId and arbitrary method/params.",
-      "status": "todo"
+      "note": "Triaged 2026-09-19 against installed experimental schema and official rust-v0.155.1 source; no live capture. Hosted-app event subscriptions, not general MCP tool progress. Server request_processors/mcp_event_stream.rs rejects all servers except codex_apps; subscriptions require a loaded/subscribed thread and app-specific event name/arguments. Official TUI chatwidget/protocol.rs explicitly ignores McpServerEventStream. No corresponding terminal UI or generic Emacs surface to implement.",
+      "status": "wont-implement"
+    },
+    "mcpServer/event/stream/start": {
+      "note": "Triaged 2026-09-19 against installed experimental schema and official rust-v0.155.1 source; no live capture. Hosted-app event subscriptions, not general MCP tool progress. Server request_processors/mcp_event_stream.rs rejects all servers except codex_apps; subscriptions require a loaded/subscribed thread and app-specific event name/arguments. Official TUI chatwidget/protocol.rs explicitly ignores McpServerEventStream. No corresponding terminal UI or generic Emacs surface to implement.",
+      "status": "wont-implement"
+    },
+    "mcpServer/event/stream/stop": {
+      "note": "Triaged 2026-09-19 against installed experimental schema and official rust-v0.155.1 source; no live capture. Hosted-app event subscriptions, not general MCP tool progress. Server request_processors/mcp_event_stream.rs rejects all servers except codex_apps; subscriptions require a loaded/subscribed thread and app-specific event name/arguments. Official TUI chatwidget/protocol.rs explicitly ignores McpServerEventStream. No corresponding terminal UI or generic Emacs surface to implement.",
+      "status": "wont-implement"
     },
     "mcpServer/oauth/login": {
       "note": "reachable but not completable here: an unconfigured name returns -32600, and all three configured MCP servers are local stdio with no OAuth. Completing it needs a remote OAuth provider and interactive browser consent, so the {authorizationUrl} response was never observed.",
@@ -340,6 +388,18 @@
     },
     "mcpServerStatus/list": {
       "status": "handled"
+    },
+    "memory/reset": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. CLI /memories exposes confirmed Reset all memories; editor lacks the reset interface. Evidence: rust-v0.155.1 codex-rs/tui/src/bottom_pane/memories_settings_view.rs:93; codex-rs/tui/src/app/config_persistence.rs:945",
+      "status": "todo"
+    },
+    "memory/status": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Reports v2 consolidation rollout readiness/count, not memory settings or memory contents; no editor rollout dashboard. Evidence: schema/v2/MemoryStatusParams.json; schema/v2/MemoryStatusResponse.json",
+      "status": "wont-implement"
+    },
+    "mock/experimentalMethod": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Explicitly test-only echo RPC, not a user feature. Evidence: schema/v2/MockExperimentalMethodParams.json; schema/v2/MockExperimentalMethodResponse.json",
+      "status": "wont-implement"
     },
     "model/list": {
       "status": "handled"
@@ -385,8 +445,12 @@
       "status": "wont-implement"
     },
     "plugin/reconcile": {
-      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Response describes changed bundles, enablement/removals and failed remote updates/materializations. Existing plugin list/install/uninstall operations do not perform this request. Investigate refresh integration and CLI behavior; reconciliation is explicitly not a runtime-readiness acknowledgement.",
-      "status": "todo"
+      "note": "Triaged 2026-09-19 against installed experimental schema and official rust-v0.155.1 source; no live capture. Existing plugin/list already triggers server-managed bundle reconciliation: request_processors/plugins.rs:779 calls maybe_start_plugin_list_background_tasks; core-plugins/manager.rs:1755 calls maybe_start_remote_installed_plugin_bundle_sync; that calls the same reconcile_remote_installed_plugins_after_acquiring_gate as explicit reconciliation (:1553,1616). Official TUI uses plugin/list. No separate refresh request needed for parity; explicit response is not runtime-readiness acknowledgement.",
+      "status": "wont-implement"
+    },
+    "plugin/search": {
+      "note": "Triaged 2026-09-19 against installed experimental schema and official rust-v0.155.1 source; no live capture. Paged server-side remote/local catalog search; current Emacs plugin/list surface and completion handle catalog selection. Official TUI plugin browser likewise obtains plugin/list via app/background_requests.rs request_plugin_list_with_marketplace_kinds. Remote scope/pagination search is a separate catalog extension, not a missing request required by current terminal parity.",
+      "status": "wont-implement"
     },
     "plugin/share/checkout": {
       "note": "plugin sharing has no Emacs surface",
@@ -416,24 +480,100 @@
       "status": "handled"
     },
     "process/exited": {
-      "note": "legacy predecessor of the command/exec family. Only arrives after a client process/spawn, a method absent from the exported schema though still dispatched. Unreachable unless codex.el adopts the deprecated family.",
+      "note": "Triaged 2026-09-19 against installed experimental schema and official rust-v0.155.1 source; no live capture. Standalone unsandboxed process lifecycle, distinct from sandboxed command/exec. Official protocol/common.rs documents process/spawn as without a Codex sandbox; not marked deprecated. Emacs already owns local process/terminal facilities and sends no process/spawn requests. TUI explicitly ignores ProcessOutputDelta and ProcessExited. Corrects earlier unsupported claims that this family is deprecated or absent from schema.",
+      "status": "wont-implement"
+    },
+    "process/kill": {
+      "note": "Triaged 2026-09-19 against installed experimental schema and official rust-v0.155.1 source; no live capture. Standalone unsandboxed process lifecycle, distinct from sandboxed command/exec. Official protocol/common.rs documents process/spawn as without a Codex sandbox; not marked deprecated. Emacs already owns local process/terminal facilities and sends no process/spawn requests. TUI explicitly ignores ProcessOutputDelta and ProcessExited. Corrects earlier unsupported claims that this family is deprecated or absent from schema.",
       "status": "wont-implement"
     },
     "process/outputDelta": {
-      "note": "same legacy process/* family as process/exited; not observed even when spawning (buffered mode). Unreachable without adopting the deprecated family.",
+      "note": "Triaged 2026-09-19 against installed experimental schema and official rust-v0.155.1 source; no live capture. Standalone unsandboxed process lifecycle, distinct from sandboxed command/exec. Official protocol/common.rs documents process/spawn as without a Codex sandbox; not marked deprecated. Emacs already owns local process/terminal facilities and sends no process/spawn requests. TUI explicitly ignores ProcessOutputDelta and ProcessExited. Corrects earlier unsupported claims that this family is deprecated or absent from schema.",
+      "status": "wont-implement"
+    },
+    "process/resizePty": {
+      "note": "Triaged 2026-09-19 against installed experimental schema and official rust-v0.155.1 source; no live capture. Standalone unsandboxed process lifecycle, distinct from sandboxed command/exec. Official protocol/common.rs documents process/spawn as without a Codex sandbox; not marked deprecated. Emacs already owns local process/terminal facilities and sends no process/spawn requests. TUI explicitly ignores ProcessOutputDelta and ProcessExited. Corrects earlier unsupported claims that this family is deprecated or absent from schema.",
+      "status": "wont-implement"
+    },
+    "process/spawn": {
+      "note": "Triaged 2026-09-19 against installed experimental schema and official rust-v0.155.1 source; no live capture. Standalone unsandboxed process lifecycle, distinct from sandboxed command/exec. Official protocol/common.rs documents process/spawn as without a Codex sandbox; not marked deprecated. Emacs already owns local process/terminal facilities and sends no process/spawn requests. TUI explicitly ignores ProcessOutputDelta and ProcessExited. Corrects earlier unsupported claims that this family is deprecated or absent from schema.",
+      "status": "wont-implement"
+    },
+    "process/writeStdin": {
+      "note": "Triaged 2026-09-19 against installed experimental schema and official rust-v0.155.1 source; no live capture. Standalone unsandboxed process lifecycle, distinct from sandboxed command/exec. Official protocol/common.rs documents process/spawn as without a Codex sandbox; not marked deprecated. Emacs already owns local process/terminal facilities and sends no process/spawn requests. TUI explicitly ignores ProcessOutputDelta and ProcessExited. Corrects earlier unsupported claims that this family is deprecated or absent from schema.",
       "status": "wont-implement"
     },
     "project/changed": {
       "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Carries projectId and a created/updated/deleted changeType. The client uses local working directories and has no server-project metadata display or cache to invalidate. Revisit if a server-project interface is introduced; this is a scope decision, not evidence that the CLI ignores it.",
       "status": "wont-implement"
     },
+    "project/create": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Persisted server project grouping is outside the cwd-based session interface; consistent with existing project notification exclusions. Evidence: schema/v2/ProjectCreateParams.json; schema/v2/ProjectListParams.json; ground-truth/protocol-baseline.json project/changed and thread/project/updated",
+      "status": "wont-implement"
+    },
+    "project/delete": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Persisted server project grouping is outside the cwd-based session interface; consistent with existing project notification exclusions. Evidence: schema/v2/ProjectCreateParams.json; schema/v2/ProjectListParams.json; ground-truth/protocol-baseline.json project/changed and thread/project/updated",
+      "status": "wont-implement"
+    },
+    "project/import": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Persisted server project grouping is outside the cwd-based session interface; consistent with existing project notification exclusions. Evidence: schema/v2/ProjectCreateParams.json; schema/v2/ProjectListParams.json; ground-truth/protocol-baseline.json project/changed and thread/project/updated",
+      "status": "wont-implement"
+    },
+    "project/list": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Persisted server project grouping is outside the cwd-based session interface; consistent with existing project notification exclusions. Evidence: schema/v2/ProjectCreateParams.json; schema/v2/ProjectListParams.json; ground-truth/protocol-baseline.json project/changed and thread/project/updated",
+      "status": "wont-implement"
+    },
+    "project/move": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Persisted server project grouping is outside the cwd-based session interface; consistent with existing project notification exclusions. Evidence: schema/v2/ProjectCreateParams.json; schema/v2/ProjectListParams.json; ground-truth/protocol-baseline.json project/changed and thread/project/updated",
+      "status": "wont-implement"
+    },
+    "project/read": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Persisted server project grouping is outside the cwd-based session interface; consistent with existing project notification exclusions. Evidence: schema/v2/ProjectCreateParams.json; schema/v2/ProjectListParams.json; ground-truth/protocol-baseline.json project/changed and thread/project/updated",
+      "status": "wont-implement"
+    },
+    "project/update": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Persisted server project grouping is outside the cwd-based session interface; consistent with existing project notification exclusions. Evidence: schema/v2/ProjectCreateParams.json; schema/v2/ProjectListParams.json; ground-truth/protocol-baseline.json project/changed and thread/project/updated",
+      "status": "wont-implement"
+    },
+    "remoteControl/client/list": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Daemon and paired-device administration remain outside editor scope. Official CLI offers separate remote-control start/stop/pair commands; this is a deliberate scope exclusion, not absence of CLI functionality. Evidence: rust-v0.155.1 codex-rs/cli/src/remote_control_cmd.rs:43; schema/v2/RemoteControlClientsListParams.json; schema/v2/RemoteControlPairingStartResponse.json",
+      "status": "wont-implement"
+    },
+    "remoteControl/client/revoke": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Daemon and paired-device administration remain outside editor scope. Official CLI offers separate remote-control start/stop/pair commands; this is a deliberate scope exclusion, not absence of CLI functionality. Evidence: rust-v0.155.1 codex-rs/cli/src/remote_control_cmd.rs:43; schema/v2/RemoteControlClientsListParams.json; schema/v2/RemoteControlPairingStartResponse.json",
+      "status": "wont-implement"
+    },
+    "remoteControl/disable": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Daemon and paired-device administration remain outside editor scope. Official CLI offers separate remote-control start/stop/pair commands; this is a deliberate scope exclusion, not absence of CLI functionality. Evidence: rust-v0.155.1 codex-rs/cli/src/remote_control_cmd.rs:43; schema/v2/RemoteControlClientsListParams.json; schema/v2/RemoteControlPairingStartResponse.json",
+      "status": "wont-implement"
+    },
+    "remoteControl/enable": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Daemon and paired-device administration remain outside editor scope. Official CLI offers separate remote-control start/stop/pair commands; this is a deliberate scope exclusion, not absence of CLI functionality. Evidence: rust-v0.155.1 codex-rs/cli/src/remote_control_cmd.rs:43; schema/v2/RemoteControlClientsListParams.json; schema/v2/RemoteControlPairingStartResponse.json",
+      "status": "wont-implement"
+    },
+    "remoteControl/pairing/start": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Daemon and paired-device administration remain outside editor scope. Official CLI offers separate remote-control start/stop/pair commands; this is a deliberate scope exclusion, not absence of CLI functionality. Evidence: rust-v0.155.1 codex-rs/cli/src/remote_control_cmd.rs:43; schema/v2/RemoteControlClientsListParams.json; schema/v2/RemoteControlPairingStartResponse.json",
+      "status": "wont-implement"
+    },
+    "remoteControl/pairing/status": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Daemon and paired-device administration remain outside editor scope. Official CLI offers separate remote-control start/stop/pair commands; this is a deliberate scope exclusion, not absence of CLI functionality. Evidence: rust-v0.155.1 codex-rs/cli/src/remote_control_cmd.rs:43; schema/v2/RemoteControlClientsListParams.json; schema/v2/RemoteControlPairingStartResponse.json",
+      "status": "wont-implement"
+    },
     "remoteControl/status/changed": {
       "note": "remote control state; agent.el reads this from the footer today",
       "status": "handled"
     },
+    "remoteControl/status/read": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Daemon and paired-device administration remain outside editor scope. Official CLI offers separate remote-control start/stop/pair commands; this is a deliberate scope exclusion, not absence of CLI functionality. Evidence: rust-v0.155.1 codex-rs/cli/src/remote_control_cmd.rs:43; schema/v2/RemoteControlClientsListParams.json; schema/v2/RemoteControlPairingStartResponse.json",
+      "status": "wont-implement"
+    },
     "review/start": {
       "note": "the CLI's /review feature has no Emacs entry point",
       "status": "handled"
+    },
+    "server/diagnostics": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Server process/gauge telemetry is outside the conversation-status interface. Evidence: schema/v2/ServerDiagnosticsResponse.json",
+      "status": "wont-implement"
     },
     "serverRequest/resolved": {
       "note": "protocol bookkeeping",
@@ -480,6 +620,18 @@
       "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Reports durable resource association creation/removal. The client neither displays nor caches these associations. Confirmed by the upstream app-server README at rust-v0.155.1.",
       "status": "wont-implement"
     },
+    "thread/backgroundTerminals/clean": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Official /stop calls bulk CleanBackgroundTerminals. Emacs implements stop via list plus per-process terminate with confirmation; no separate clean action is needed for that UI scope. Concurrency equivalence has not been live established. Evidence: Generated experimental schema and read-only rust-v0.155.1 source; not live captured",
+      "status": "wont-implement"
+    },
+    "thread/backgroundTerminals/list": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Existing process listing and stop workflow call this method. Server default pagination limit is all terminals (thread_processor.rs paginate_background_terminals), so omission of cursor does not truncate current default response. Evidence: Generated experimental schema and read-only rust-v0.155.1 source; not live captured",
+      "status": "handled"
+    },
+    "thread/backgroundTerminals/terminate": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Existing stop workflow calls this method for every listed terminal. Response terminated boolean is currently ignored; false can mean process already exited, so any success wording should remain limited. Evidence: Generated experimental schema and read-only rust-v0.155.1 source; not live captured",
+      "status": "handled"
+    },
     "thread/closed": {
       "note": "captured by starting a thread, unsubscribing, and waiting: the notification arrived exactly 30 minutes later carrying only {threadId}. Clears the recorded thread id so a later request reports no active thread instead of failing against one the server has forgotten. No CLI rendering exists to mirror -- the CLI TUI stays subscribed while it runs, so its threads are never unloaded this way.",
       "status": "handled"
@@ -489,6 +641,10 @@
     },
     "thread/compacted": {
       "status": "handled"
+    },
+    "thread/decrement_elicitation": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Out-of-band elicitation pause reference counter. Emacs handles server-originated MCP requests and has no external elicitation producer needing this counter. Not the MCP elicitation response mechanism. Evidence: Generated experimental schema and read-only rust-v0.155.1 source; not live captured",
+      "status": "wont-implement"
     },
     "thread/delete": {
       "status": "handled"
@@ -525,6 +681,10 @@
     "thread/goal/updated": {
       "status": "handled"
     },
+    "thread/increment_elicitation": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Out-of-band elicitation pause reference counter. Emacs handles server-originated MCP requests and has no external elicitation producer needing this counter. Not the MCP elicitation response mechanism. Evidence: Generated experimental schema and read-only rust-v0.155.1 source; not live captured",
+      "status": "wont-implement"
+    },
     "thread/inject_items": {
       "note": "programmatic injection, not a user action",
       "status": "wont-implement"
@@ -540,6 +700,10 @@
       "note": "captured response is only {data:[threadId],nextCursor} -- ids of in-memory threads, no metadata. thread/list already backs the resume picker with full thread objects including preview.",
       "status": "wont-implement"
     },
+    "thread/memoryMode/set": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Existing /memories command sends current-thread enabled/disabled generation mode. Method coverage does not establish CLI /memories settings parity. Evidence: codex-app-server.el:985; rust-v0.155.1 codex-rs/tui/src/app/config_persistence.rs:906",
+      "status": "handled"
+    },
     "thread/metadata/update": {
       "note": "captured: params take only gitInfo (branch, originUrl, sha) -- it is for a client to report git metadata to the server, not for renaming a thread. Sending {name:...} errors with 'gitInfo must include at least one field'. No Emacs surface needs it.",
       "status": "wont-implement"
@@ -554,13 +718,49 @@
       "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Carries threadId and nullable projectId. No server-project association is displayed or cached by this client; local cwd is not a server project ID. Revisit with a server-project interface.",
       "status": "wont-implement"
     },
+    "thread/queue/add": {
+      "note": "Reviewed 2026-09-19: durable server queue management is used by the separate codex session queue command, not the interactive TUI Tab queue. The tagged TUI retains queued_user_messages locally and explicitly ignores ThreadQueueChanged. Keep the native local Tab queue for terminal-UI parity; revisit server queues with a separately designed daemon/remote submission interface. Source evidence only; no equivalence claim for durable queues.",
+      "status": "wont-implement"
+    },
     "thread/queue/changed": {
-      "note": "Corrected 2026-09-19: the experimental schema includes thread/queue/list and mutation operations. The earlier stable-only inventory hid them. Capture server queue behavior and determine its relationship to the client-local Tab queue before implementation.",
-      "status": "todo"
+      "note": "Reviewed 2026-09-19: durable server queue management is used by the separate codex session queue command, not the interactive TUI Tab queue. The tagged TUI retains queued_user_messages locally and explicitly ignores ThreadQueueChanged. Keep the native local Tab queue for terminal-UI parity; revisit server queues with a separately designed daemon/remote submission interface. Source evidence only; no equivalence claim for durable queues.",
+      "status": "wont-implement"
+    },
+    "thread/queue/delete": {
+      "note": "Reviewed 2026-09-19: durable server queue management is used by the separate codex session queue command, not the interactive TUI Tab queue. The tagged TUI retains queued_user_messages locally and explicitly ignores ThreadQueueChanged. Keep the native local Tab queue for terminal-UI parity; revisit server queues with a separately designed daemon/remote submission interface. Source evidence only; no equivalence claim for durable queues.",
+      "status": "wont-implement"
+    },
+    "thread/queue/list": {
+      "note": "Reviewed 2026-09-19: durable server queue management is used by the separate codex session queue command, not the interactive TUI Tab queue. The tagged TUI retains queued_user_messages locally and explicitly ignores ThreadQueueChanged. Keep the native local Tab queue for terminal-UI parity; revisit server queues with a separately designed daemon/remote submission interface. Source evidence only; no equivalence claim for durable queues.",
+      "status": "wont-implement"
+    },
+    "thread/queue/reorder": {
+      "note": "Reviewed 2026-09-19: durable server queue management is used by the separate codex session queue command, not the interactive TUI Tab queue. The tagged TUI retains queued_user_messages locally and explicitly ignores ThreadQueueChanged. Keep the native local Tab queue for terminal-UI parity; revisit server queues with a separately designed daemon/remote submission interface. Source evidence only; no equivalence claim for durable queues.",
+      "status": "wont-implement"
+    },
+    "thread/queue/start": {
+      "note": "Reviewed 2026-09-19: durable server queue management is used by the separate codex session queue command, not the interactive TUI Tab queue. The tagged TUI retains queued_user_messages locally and explicitly ignores ThreadQueueChanged. Keep the native local Tab queue for terminal-UI parity; revisit server queues with a separately designed daemon/remote submission interface. Source evidence only; no equivalence claim for durable queues.",
+      "status": "wont-implement"
+    },
+    "thread/queue/update": {
+      "note": "Reviewed 2026-09-19: durable server queue management is used by the separate codex session queue command, not the interactive TUI Tab queue. The tagged TUI retains queued_user_messages locally and explicitly ignores ThreadQueueChanged. Keep the native local Tab queue for terminal-UI parity; revisit server queues with a separately designed daemon/remote submission interface. Source evidence only; no equivalence claim for durable queues.",
+      "status": "wont-implement"
     },
     "thread/read": {
       "note": "captured response returns the same thread object thread/list and thread/start already return (id, preview, forkedFromId, historyMode, timestamps). No surface needs a single-thread fetch.",
       "status": "wont-implement"
+    },
+    "thread/realtime/appendAudio": {
+      "note": "Triaged 2026-09-19 against installed experimental schema and official rust-v0.155.1 source; no live capture. Audio input, speakable text delivery, or voice selection for realtime audio. Current Emacs realtime surface deliberately uses text output and has no microphone/speaker transport. Requires a separate audio feature; not implemented by text-session controls.",
+      "status": "wont-implement"
+    },
+    "thread/realtime/appendSpeech": {
+      "note": "Triaged 2026-09-19 against installed experimental schema and official rust-v0.155.1 source; no live capture. Audio input, speakable text delivery, or voice selection for realtime audio. Current Emacs realtime surface deliberately uses text output and has no microphone/speaker transport. Requires a separate audio feature; not implemented by text-session controls.",
+      "status": "wont-implement"
+    },
+    "thread/realtime/appendText": {
+      "note": "Triaged 2026-09-19 against installed experimental schema and official rust-v0.155.1 source; no live capture. Existing interactive codex-app-server-realtime-start/stop/send-text issue these methods with schema-compatible parameters; start deliberately requests text output. This inventory status records implementation, not real-service voice acceptance.",
+      "status": "handled"
     },
     "thread/realtime/closed": {
       "status": "handled"
@@ -569,19 +769,23 @@
       "status": "handled"
     },
     "thread/realtime/item/completed": {
-      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Experimental canonical item finalization includes transcript segments, session lifecycle and promoted-item variants. Capture finalization/replay and deduplication relative to legacy notifications before adapting rendering.",
-      "status": "todo"
+      "note": "Triaged 2026-09-19 against installed experimental schema and official rust-v0.155.1 source; no live capture. Canonical realtime timeline/history events coexist with role-based legacy transcript events. core/realtime_history.rs:202-217 derives canonical transcript streams from Input/OutputTranscriptDelta/Done; app-server bespoke_event_handling.rs forwards both families. Official TUI chatwidget/protocol.rs:336-339 deliberately ignores all three canonical notifications while rendering legacy transcript/delta and transcript/done (:286-295). Keep legacy display to avoid duplicate transcripts; timeline/replay support is a separate feature. Done-only final text still needs correct legacy handling.",
+      "status": "wont-implement"
     },
     "thread/realtime/item/started": {
-      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Experimental canonical realtime item starts before content streams. Existing text rendering handles legacy transcript/itemAdded events. Capture coexistence and ordering, then establish item-ID tracking to prevent duplicate rendering.",
-      "status": "todo"
+      "note": "Triaged 2026-09-19 against installed experimental schema and official rust-v0.155.1 source; no live capture. Canonical realtime timeline/history events coexist with role-based legacy transcript events. core/realtime_history.rs:202-217 derives canonical transcript streams from Input/OutputTranscriptDelta/Done; app-server bespoke_event_handling.rs forwards both families. Official TUI chatwidget/protocol.rs:336-339 deliberately ignores all three canonical notifications while rendering legacy transcript/delta and transcript/done (:286-295). Keep legacy display to avoid duplicate transcripts; timeline/replay support is a separate feature. Done-only final text still needs correct legacy handling.",
+      "status": "wont-implement"
     },
     "thread/realtime/item/transcript/delta": {
-      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Experimental transcript delta carries threadId, itemId and delta, unlike the role-based legacy renderer. Associate it with the canonical started item and capture coexistence with legacy events before adapting rendering.",
-      "status": "todo"
+      "note": "Triaged 2026-09-19 against installed experimental schema and official rust-v0.155.1 source; no live capture. Canonical realtime timeline/history events coexist with role-based legacy transcript events. core/realtime_history.rs:202-217 derives canonical transcript streams from Input/OutputTranscriptDelta/Done; app-server bespoke_event_handling.rs forwards both families. Official TUI chatwidget/protocol.rs:336-339 deliberately ignores all three canonical notifications while rendering legacy transcript/delta and transcript/done (:286-295). Keep legacy display to avoid duplicate transcripts; timeline/replay support is a separate feature. Done-only final text still needs correct legacy handling.",
+      "status": "wont-implement"
     },
     "thread/realtime/itemAdded": {
       "status": "handled"
+    },
+    "thread/realtime/listVoices": {
+      "note": "Triaged 2026-09-19 against installed experimental schema and official rust-v0.155.1 source; no live capture. Audio input, speakable text delivery, or voice selection for realtime audio. Current Emacs realtime surface deliberately uses text output and has no microphone/speaker transport. Requires a separate audio feature; not implemented by text-session controls.",
+      "status": "wont-implement"
     },
     "thread/realtime/outputAudio/delta": {
       "note": "voice mode; no audio path in Emacs",
@@ -591,7 +795,15 @@
       "note": "voice mode; no audio path in Emacs",
       "status": "wont-implement"
     },
+    "thread/realtime/start": {
+      "note": "Triaged 2026-09-19 against installed experimental schema and official rust-v0.155.1 source; no live capture. Existing interactive codex-app-server-realtime-start/stop/send-text issue these methods with schema-compatible parameters; start deliberately requests text output. This inventory status records implementation, not real-service voice acceptance.",
+      "status": "handled"
+    },
     "thread/realtime/started": {
+      "status": "handled"
+    },
+    "thread/realtime/stop": {
+      "note": "Triaged 2026-09-19 against installed experimental schema and official rust-v0.155.1 source; no live capture. Existing interactive codex-app-server-realtime-start/stop/send-text issue these methods with schema-compatible parameters; start deliberately requests text output. This inventory status records implementation, not real-service voice acceptance.",
       "status": "handled"
     },
     "thread/realtime/transcript/delta": {
@@ -604,20 +816,32 @@
       "status": "handled"
     },
     "thread/revert": {
-      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. History-edit candidate for paginated threads: removes beforeTurnId and all subsequent turns, not local file changes. Reevaluate the old rollback exclusion now this replacement exists; capture the CLI interaction first. The response requires paginated history hydration.",
-      "status": "todo"
+      "note": "Reviewed 2026-09-19 against official TUI app_backtrack.rs and chatwidget/protocol.rs: editing an earlier prompt now sends ForkSessionForPromptEdit to preserve the original conversation, not an in-place revert. The TUI explicitly ignores ThreadReverted. Do not implement destructive history rewriting as the backtracking equivalent. Source-preserving prompt-edit branching is tracked separately as a feature gap.",
+      "status": "wont-implement"
     },
     "thread/reverted": {
-      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. History invalidation carries only threadId. Evaluate with thread/revert and paginated hydration so displayed history can be rebuilt; capture actual delivery and ordering.",
-      "status": "todo"
+      "note": "Reviewed 2026-09-19 against official TUI app_backtrack.rs and chatwidget/protocol.rs: editing an earlier prompt now sends ForkSessionForPromptEdit to preserve the original conversation, not an in-place revert. The TUI explicitly ignores ThreadReverted. Do not implement destructive history rewriting as the backtracking equivalent. Source-preserving prompt-edit branching is tracked separately as a feature gap.",
+      "status": "wont-implement"
     },
     "thread/rollback": {
       "note": "schema says verbatim 'DEPRECATED: thread/rollback will be removed soon', and it only edits thread history without reverting files the agent wrote. codex.el has no undo surface; building one on a method upstream is removing would be wasted.",
       "status": "wont-implement"
     },
+    "thread/search": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. New indexed/full-text search API. Existing resume UI uses thread/list and completion; pinned TUI session lookup also uses thread/list. No dedicated full-text cross-thread interface currently exists. Revisit if introducing that UI. Evidence: Generated experimental schema and read-only rust-v0.155.1 source; not live captured",
+      "status": "wont-implement"
+    },
+    "thread/searchOccurrences": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Searches message occurrences in paginated history. Native Emacs can search fully hydrated transcript with isearch/occur; no server-paginated hit navigation interface is needed. Evidence: Generated experimental schema and read-only rust-v0.155.1 source; not live captured",
+      "status": "wont-implement"
+    },
     "thread/section/move": {
       "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Moves a thread into, within or out of server-owned section ordering. The existing resume picker has no section organization UI. Revisit with a section-aware picker.",
       "status": "wont-implement"
+    },
+    "thread/settings/update": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Used for model, reasoning effort, personality, permissions, and service tier. Method presence is covered; collaboration modes and settings notification synchronization remain separate gaps. Evidence: Generated experimental schema and read-only rust-v0.155.1 source; not live captured",
+      "status": "handled"
     },
     "thread/settings/updated": {
       "note": "could not trigger: thread/settings/update from this client returns {} and emits no notification, so it appears to exist for out-of-band changes (another client or remote control) that a single Emacs client will not see. Not observed here, so not implemented rather than guessed.",
@@ -635,6 +859,10 @@
     "thread/status/changed": {
       "note": "session status transitions",
       "status": "handled"
+    },
+    "thread/timeline/list": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Interleaves ordinary turns and realtime history in rollout order. Existing history fallback fetches thread/turns/list only; determine whether resumable realtime history is lost before excluding or integrating timeline. Evidence: Generated experimental schema and read-only rust-v0.155.1 source; not live captured",
+      "status": "todo"
     },
     "thread/tokenUsage/updated": {
       "status": "handled"
@@ -688,6 +916,10 @@
     "turn/plan/updated": {
       "status": "handled"
     },
+    "turn/settings/update": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Changes current running turn only, not future settings; no matching UI call found in pinned TUI app/thread_settings.rs or app_server_session.rs. Existing settings interface updates subsequent turns. Revisit if a distinct active-turn control is added. Evidence: Generated experimental schema and read-only rust-v0.155.1 source; not live captured",
+      "status": "wont-implement"
+    },
     "turn/start": {
       "status": "handled"
     },
@@ -696,6 +928,26 @@
     },
     "turn/steer": {
       "status": "handled"
+    },
+    "userVerification/cancel": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Investigate native RPC cancellation alongside verification implementation. Distinct cancellation request ID required; cancellation is not rollback. Evidence: schema/v2/UserVerificationCancelParams.json; schema/v2/UserVerificationCancelResponse.json; rust-v0.155.1 codex-rs/tui/src/app/user_verification.rs",
+      "status": "todo"
+    },
+    "userVerification/delete": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Native credential lifecycle/readiness administration is outside current approval scope; inspected official TUI approval path calls verify directly without these methods. Evidence: schema/v2/UserVerificationStatusResponse.json; schema/v2/UserVerificationEnrollResponse.json; rust-v0.155.1 codex-rs/tui/src/app/user_verification.rs:65",
+      "status": "wont-implement"
+    },
+    "userVerification/enroll": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Native credential lifecycle/readiness administration is outside current approval scope; inspected official TUI approval path calls verify directly without these methods. Evidence: schema/v2/UserVerificationStatusResponse.json; schema/v2/UserVerificationEnrollResponse.json; rust-v0.155.1 codex-rs/tui/src/app/user_verification.rs:65",
+      "status": "wont-implement"
+    },
+    "userVerification/status": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Native credential lifecycle/readiness administration is outside current approval scope; inspected official TUI approval path calls verify directly without these methods. Evidence: schema/v2/UserVerificationStatusResponse.json; schema/v2/UserVerificationEnrollResponse.json; rust-v0.155.1 codex-rs/tui/src/app/user_verification.rs:65",
+      "status": "wont-implement"
+    },
+    "userVerification/verify": {
+      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. CLI invokes native verification for MCP userVerification elicitation, returns proof, and guards against stale replies; generic editor elicitation cannot provide this proof. Evidence: rust-v0.155.1 codex-rs/tui/src/app/user_verification.rs:65; codex-app-server.el:3819",
+      "status": "todo"
     },
     "warning": {
       "status": "handled"
