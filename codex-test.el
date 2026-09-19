@@ -2570,6 +2570,94 @@ the same request with {}."
       (should (equal codex--app-server-rate-limit 57))
       (should (equal started-weekly 77)))))
 
+(ert-deftest codex-test-app-server-resume-and-fork-paginate-history ()
+  "Resume and fork hydrate all full turn pages before enabling input."
+  (dolist (operation '("thread/resume" "thread/fork"))
+    (with-temp-buffer
+      (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+      (let (pending ready calls)
+        (cl-letf (((symbol-function 'codex--app-server-send-request)
+                   (lambda (method params callback)
+                     (push (cons method params) calls)
+                     (setq pending callback)))
+                  ((symbol-function 'codex--app-server-render-transcript-history)
+                   (lambda (_file) nil))
+                  ((symbol-function 'codex--app-server-thread-started)
+                   (lambda (_result _defer)
+                     (setq codex--app-server-thread-id "history-id")))
+                  ((symbol-function 'codex--app-server-setup-thread-input)
+                   (lambda () (setq ready t))))
+          (codex--app-server-send-resume operation '((id . "history-id")))
+          (should (eq (alist-get 'excludeTurns (cdar calls)) t))
+          (should-not (assq 'initialTurnsPage (cdar calls)))
+          (funcall pending '((thread (id . "history-id"))) nil)
+          (should (equal (caar calls) "thread/turns/list"))
+          (should (equal (alist-get 'itemsView (cdar calls)) "full"))
+          (should (equal (alist-get 'sortDirection (cdar calls)) "asc"))
+          (should-not ready)
+          (funcall pending
+                   '((data . (((items . (((type . "agentMessage")
+                                         (text . "FIRST_PAGE")))))))
+                     (nextCursor . "page-two")) nil)
+          (should (equal (alist-get 'cursor (cdar calls)) "page-two"))
+          (should-not ready)
+          (funcall pending
+                   '((data . (((items . (((type . "agentMessage")
+                                         (text . "LAST_PAGE")))))))
+                     (nextCursor . nil)) nil)
+          (should ready)
+          (should-not codex--app-server-history-loading-p)
+          (should (string-match-p "FIRST_PAGE\\(.\\|\n\\)*LAST_PAGE"
+                                  (buffer-string))))))))
+
+(ert-deftest codex-test-app-server-history-rejects-external-input ()
+  "External input cannot create live output between historical pages."
+  (with-temp-buffer
+    (setq-local codex--app-server-history-loading-p t)
+    (setq-local codex--app-server-thread-id "history-id")
+    (let (sent)
+      (cl-letf (((symbol-function 'codex--app-server-send-request)
+                 (lambda (&rest _) (setq sent t))))
+        (should-error (codex--app-server-submit-command "hello")
+                      :type 'user-error)
+        (should-error (codex--app-server-send-turn-input '(:text "hello"))
+                      :type 'user-error)
+        (should-not sent)
+        (should (string-empty-p (buffer-string)))))))
+
+(ert-deftest codex-test-app-server-history-page-error-is-visible ()
+  "A failed history page reports incomplete history before enabling input."
+  (with-temp-buffer
+    (setq-local codex--app-server-thread-id "history-id")
+    (setq-local codex--app-server-history-loading-p t)
+    (let (ready)
+      (cl-letf (((symbol-function 'codex--app-server-send-request)
+                 (lambda (_method _params callback)
+                   (funcall callback nil '((message . "page unavailable")))))
+                ((symbol-function 'codex--app-server-setup-thread-input)
+                 (lambda () (setq ready t))))
+        (codex--app-server-load-history-page "history-id" nil)
+        (should ready)
+        (should-not codex--app-server-history-loading-p)
+        (should (string-match-p "history incomplete.*page unavailable"
+                                (buffer-string)))))))
+
+(ert-deftest codex-test-app-server-history-defers-notification-input ()
+  "A thread-started notification cannot enable input during hydration."
+  (with-temp-buffer
+    (setq-local codex--app-server-history-loading-p t)
+    (let (ready)
+      (cl-letf (((symbol-function 'codex--record-session-metadata) #'ignore)
+                ((symbol-function 'codex--app-server-render-header) #'ignore)
+                ((symbol-function 'codex--app-server-request-account) #'ignore)
+                ((symbol-function 'codex--app-server-refresh-model-cache) #'ignore)
+                ((symbol-function 'codex--app-server-send-skill-extra-roots) #'ignore)
+                ((symbol-function 'codex--app-server-refresh-mention-rows) #'ignore)
+                ((symbol-function 'codex--app-server-setup-thread-input)
+                 (lambda () (setq ready t))))
+        (codex--app-server-thread-started '((thread (id . "history-id")))))
+      (should-not ready))))
+
 (ert-deftest codex-test-app-server-resume-renders-transcript-history ()
   "Resume replays JSONL user-visible transcript text before lossy turn items."
   (let ((file (make-temp-file "codex-app-server-transcript" nil ".jsonl")))

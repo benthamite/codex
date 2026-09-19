@@ -530,8 +530,8 @@
       "status": "wont-implement"
     },
     "thread/items/list": {
-      "note": "Corrected 2026-09-19: full turn pages can supply all persisted items via itemsView=full. Evaluate whether this separate per-item pagination API is needed after complete thread/turns/list hydration; not a prerequisite merely because it exists.",
-      "status": "todo"
+      "note": "Full thread/turns/list pages with itemsView=full supply persisted items for the complete resume/fork history interface. A separate per-item pagination path adds no needed surface here. Revisit for lazy item expansion or item-specific navigation; 103-turn resume/fork hydration verified live on 2026-09-19.",
+      "status": "wont-implement"
     },
     "thread/list": {
       "status": "handled"
@@ -640,8 +640,8 @@
       "status": "handled"
     },
     "thread/turns/list": {
-      "note": "Corrected 2026-09-19: initialTurnsPage is present in the experimental schema, matching the client capability. An isolated real 0.155.1 app-server resumed a 103-turn fixture with 100 initial turns and a nextCursor for the remaining three. The client ignores that cursor. Fork has no initialTurnsPage response at all. Implement complete history hydration when local JSONL replay is unavailable.",
-      "status": "todo"
+      "note": "Verified 2026-09-19 with real codex-cli 0.155.1 and live Emacs: resume and fork load ascending itemsView=full pages until nextCursor is null when no local transcript is available. An isolated 103-turn fixture produced exactly 103 user messages and 103 replies in order in both Emacs paths, matching the official CLI rendered in Eat. A transparent test proxy hid transcript paths to exercise protocol hydration. Composer and external submissions wait for history loading.",
+      "status": "handled"
     },
     "thread/unarchive": {
       "note": "archive is handled, unarchive is not",

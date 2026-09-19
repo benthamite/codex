@@ -255,6 +255,9 @@ Used to name a background terminal when rendering stdin sent to it, since
 (defvar-local codex--app-server-realtime-role nil
   "Speaker role of the realtime transcript segment being rendered.")
 
+(defvar-local codex--app-server-history-loading-p nil
+  "Non-nil while resumed or forked history is being loaded.")
+
 (defvar-local codex--app-server-input-history nil
   "Most-recent-first list of prompts submitted from this buffer.")
 
@@ -785,7 +788,7 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
       (codex--app-server-refresh-model-cache)
       (codex--app-server-send-skill-extra-roots)
       (codex--app-server-refresh-mention-rows)
-      (unless defer-input
+      (unless (or defer-input codex--app-server-history-loading-p)
         (codex--app-server-setup-thread-input)))))
 
 (defun codex--app-server-setup-thread-input ()
@@ -3383,12 +3386,6 @@ Like the CLI, this shows the textual result rather than the raw envelope."
     (dolist (item (append (alist-get 'items turn) nil))
       (codex--app-server-render-history-item item))))
 
-(defun codex--app-server-render-resumed-history (turns)
-  "Render resumed history from the transcript, falling back to TURNS."
-  (unless (codex--app-server-render-transcript-history
-           codex--session-transcript-file)
-    (codex--app-server-render-history turns)))
-
 (defun codex--app-server-render-transcript-history (file)
   "Render user-visible session transcript FILE.
 Return non-nil when FILE supplied at least one displayable transcript
@@ -4093,20 +4090,52 @@ shape, such as an elicitation's `action'."
 
 (defun codex--app-server-send-resume (method thread)
   "Resume or fork THREAD via METHOD and render its history."
+  (setq codex--app-server-history-loading-p t)
   (codex--app-server-send-request
    method
    `((path . ,(alist-get 'path thread))
      (threadId . ,(alist-get 'id thread))
      (cwd . ,codex--buffer-directory)
-     (initialTurnsPage . ((limit . 100) (sortDirection . "asc"))))
+     (excludeTurns . t))
    (lambda (result error)
      (if error
-         (codex--app-server-insert-status
-          (format "Codex resume failed: %S" error))
+         (progn
+           (setq codex--app-server-history-loading-p nil)
+           (codex--app-server-insert-status
+            (format "Codex resume failed: %S" error)))
        (codex--app-server-thread-started result t)
-       (codex--app-server-render-resumed-history
-        (alist-get 'data (alist-get 'initialTurnsPage result)))
-       (codex--app-server-setup-thread-input)))))
+       (if (codex--app-server-render-transcript-history
+            codex--session-transcript-file)
+           (codex--app-server-finish-history)
+         (codex--app-server-load-history-page
+          codex--app-server-thread-id nil))))))
+
+(defun codex--app-server-load-history-page (thread-id cursor)
+  "Render a full history page for THREAD-ID at CURSOR, then continue.
+The composer is enabled only after the last page or a visible loading error."
+  (codex--app-server-send-request
+   "thread/turns/list"
+   `((threadId . ,thread-id)
+     (limit . 100)
+     (sortDirection . "asc")
+     (itemsView . "full")
+     ,@(when cursor `((cursor . ,cursor))))
+   (lambda (result error)
+     (when (equal thread-id codex--app-server-thread-id)
+       (if error
+           (progn
+             (codex--app-server-insert-status
+              (format "Codex history incomplete: %S" error))
+             (codex--app-server-finish-history))
+         (codex--app-server-render-history (alist-get 'data result))
+         (if-let* ((next (alist-get 'nextCursor result)))
+             (codex--app-server-load-history-page thread-id next)
+           (codex--app-server-finish-history)))))))
+
+(defun codex--app-server-finish-history ()
+  "Finish loading history and enable this thread's permitted input controls."
+  (setq codex--app-server-history-loading-p nil)
+  (codex--app-server-setup-thread-input))
 
 (defun codex--app-server-begin-resume-session-id (session-id &optional method)
   "Resume SESSION-ID in the current app-server buffer.
@@ -4213,6 +4242,8 @@ Its output arrives as a command-execution item like the CLI's \"!\"."
 (defun codex--app-server-send-turn-input (submission)
   "Send captured SUBMISSION to the app-server as a turn input."
   (cond
+   (codex--app-server-history-loading-p
+    (user-error "Waiting for Codex history to finish loading"))
    ((not (eq codex--app-server-direct-input-p t))
     (codex--app-server-ensure-direct-input))
    (codex--app-server-pending-reasoning-steps
@@ -4228,6 +4259,8 @@ Its output arrives as a command-execution item like the CLI's \"!\"."
 
 (defun codex--app-server-ensure-direct-input ()
   "Signal a user error unless the current thread accepts direct input."
+  (when codex--app-server-history-loading-p
+    (user-error "Waiting for Codex history to finish loading"))
   (pcase codex--app-server-direct-input-p
     ('t t)
     ('unknown

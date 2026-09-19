@@ -60,3 +60,32 @@ credentials. The real server accepted initialTurnsPage, returned 100 of 103
 turns plus a continuation cursor, and returned all 103 fork turns in
 thread.turns without an initialTurnsPage field. These observations supersede
 the original schema-mismatch hypothesis.
+
+## History follow-up completed
+
+Both resume and fork now request metadata with `excludeTurns: true`, prefer
+displayable local transcript history, and otherwise load ascending
+`thread/turns/list` pages with `itemsView: full` until `nextCursor` is null.
+Input is held until hydration finishes; external submissions during loading
+are rejected explicitly. A failed page displays an incomplete-history warning.
+`thread/turns/list` is now handled; `thread/items/list` is excluded because full
+turn pages supply this interface. The original 25 additions now have 11 todo,
+13 exclusions and one handled method.
+
+Live acceptance used the same independent synthetic 103-turn session on
+Codex 0.155.1. The official TUI rendered in Eat, native Emacs resume, and native
+Emacs fork each contained exactly 103 user messages and 103 assistant replies
+in chronological order. Resume retained fixture identity
+`28e89cc7-d0b0-4ba6-b876-10121ac1ec7e`; fork created a distinct thread with the
+same history. A transparent transport proxy replaced server transcript paths
+with unavailable paths, leaving requests and history payloads intact; this
+forced the native clients to exercise protocol hydration rather than JSONL
+replay. Actual requests fetched two pages per native path. No model turns,
+credentials, shared accounts, or pre-existing threads were used.
+
+This establishes complete idle-thread history hydration, not concurrent replay
+while another client is generating output, nor pixel-identical rendering.
+All 418 ERT tests, shell/Python checks, strict byte compilation, and manual
+Texinfo export/validation passed. The Makefile needed the installed `llama`
+dependency supplied through `LOAD_PATH_EXTRA`; the Python TUI harness lacked
+`pyte`, so the reference capture used the existing Eat terminal backend.
