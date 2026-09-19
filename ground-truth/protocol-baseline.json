@@ -352,7 +352,7 @@
       "status": "wont-implement"
     },
     "mcpServer/elicitation/request": {
-      "note": "Form-mode MCP requests support strings, booleans, single-select enums, required/default/optional fields, and advertised session/always permission choices. Actual CLI and native forms returned matching blue/false/small; native session permission suppressed repeat approval; the client permanent-response encoding persisted across fresh real server processes. Live cancellation sent action:cancel and completed the turn. Unsupported/native-identity modes explicitly cancel instead of offering invalid generic Allow. Commit a52a632; native identity proof remains a separate worklist gap.",
+      "note": "Form-mode MCP requests support strings, booleans, single-select enums, required/default/optional fields, and advertised session/always permission choices. Actual CLI and native forms returned matching blue/false/small; native session permission suppressed repeat approval; the client permanent-response encoding persisted across fresh real server processes. Live cancellation sent action:cancel and completed the turn. Unsupported modes explicitly cancel instead of offering invalid generic Allow. Native identity requests now use dedicated consent and async verification; see userVerification/verify and userVerification/cancel for acceptance limits. Commits a52a632 and c1cafb6.",
       "status": "handled"
     },
     "mcpServer/event/stream/notification": {
@@ -576,7 +576,7 @@
       "status": "wont-implement"
     },
     "serverRequest/resolved": {
-      "note": "Handles request-specific tool-question dismissal before current-thread filtering; queued and active requests cannot send a stale answer after resolution. Regression tested.",
+      "note": "Dismisses matching queued/active tool questions and native identity verification before current-thread filtering; late answers/proofs cannot approve resolved requests. Question dismissal verified live; native resolution/lifecycle suppression regression tested.",
       "status": "handled"
     },
     "skills/changed": {
@@ -933,8 +933,8 @@
       "status": "handled"
     },
     "userVerification/cancel": {
-      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Investigate native RPC cancellation alongside verification implementation. Distinct cancellation request ID required; cancellation is not rollback. Evidence: schema/v2/UserVerificationCancelParams.json; schema/v2/UserVerificationCancelResponse.json; rust-v0.155.1 codex-rs/tui/src/app/user_verification.rs",
-      "status": "todo"
+      "note": "Verified 2026-09-19: live frontend Escape with no active turn canceled pending synthetic verification. Cancellation RPC id 12 referenced native id 11; the original elicitation received exactly one cancel and deliberately late proof was ignored with callback/state removed. Explicit Cancel started no native operation. Lifecycle/account/source-replacement regressions verified. No real biometric ceremony was invoked.",
+      "status": "handled"
     },
     "userVerification/delete": {
       "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Native credential lifecycle/readiness administration is outside current approval scope; inspected official TUI approval path calls verify directly without these methods. Evidence: schema/v2/UserVerificationStatusResponse.json; schema/v2/UserVerificationEnrollResponse.json; rust-v0.155.1 codex-rs/tui/src/app/user_verification.rs:65",
@@ -949,8 +949,8 @@
       "status": "wont-implement"
     },
     "userVerification/verify": {
-      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. CLI invokes native verification for MCP userVerification elicitation, returns proof, and guards against stale replies; generic editor elicitation cannot provide this proof. Evidence: rust-v0.155.1 codex-rs/tui/src/app/user_verification.rs:65; codex-app-server.el:3819",
-      "status": "todo"
+      "note": "Implemented 2026-09-19 with explicit Verify and approve/Cancel consent, async proof delivery, exact proof validation and process/thread/account lifecycle guards. Live local-stdio account-null request returned providerUnavailable and canceled the original elicitation. Controlled synthetic success delivered proof only to the original request and kept proof/challenge out of transcript. Actual CLI consent and remote-workspace cancellation captured. Genuine host-owned routing and successful biometric signing still need human acceptance.",
+      "status": "handled"
     },
     "warning": {
       "status": "handled"

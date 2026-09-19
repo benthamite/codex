@@ -2,8 +2,8 @@
 
 ## Current inventory
 
-The complete experimental inventory is now reviewed: **258 methods, 98 named
-in the client, 158 deliberately excluded, 2 todo, zero unreviewed**. The
+The complete experimental inventory is now reviewed: **258 methods, 100 named
+in the client, 158 deliberately excluded, zero todo, zero unreviewed**. The
 additional 63 methods comprised 7 already handled, 50 scope exclusions and
 6 follow-ups. These counts are method coverage, not feature parity.
 
@@ -204,3 +204,17 @@ now become ready directly after permission setup. Local replay reads only
 aligned `user.text` items, excludes injected context and avoids duplicate legacy
 representations. Null transcript metadata no longer breaks resumed headers.
 These are live-observed fixes, beyond method-name coverage.
+
+Native identity verification now offers explicit Verify and approve/Cancel
+consent, asynchronously routes exact validated proof to the original request,
+and guards process, thread and account changes. Actual CLI consent was captured;
+the remote CLI then canceled because verification is unavailable remotely.
+The native frontend exercised the real local-stdio unavailable-account error
+and canceled its original elicitation. Controlled synthetic success returned
+only the proof fields, with neither challenge nor proof in the transcript.
+Escape outside an active turn canceled a delayed verification using a distinct
+RPC ID; the original request received one cancellation and a deliberately late
+proof was ignored. Explicit Cancel started no native operation. The final suite
+contains 519 successful ERT checks, plus shell/Python and strict compilation
+checks. Genuine host-owned request routing and successful biometric signing
+remain human acceptance work; no real biometric ceremony was invoked.
