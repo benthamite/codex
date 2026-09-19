@@ -56,7 +56,8 @@ def codex_version():
 def generate_schema(outdir):
     """Write the app-server JSON schema for the installed CLI into OUTDIR."""
     subprocess.run(
-        ["codex", "app-server", "generate-json-schema", "--out", outdir],
+        ["codex", "app-server", "generate-json-schema", "--experimental",
+         "--out", outdir],
         check=True, capture_output=True, text=True,
     )
 

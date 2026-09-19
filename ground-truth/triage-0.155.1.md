@@ -15,13 +15,13 @@ are in [protocol-baseline.json](protocol-baseline.json).
 
 | Methods | Count | Decision | Follow-up |
 | --- | ---: | --- | --- |
-| `thread/turns/list`, `thread/items/list` | 2 | Defer implementation; todo, first priority | Resolve history hydration compatibility. The client requests and reads `initialTurnsPage`, absent from the installed schema. Local JSONL replay may hide the mismatch. Capture resume without an available local transcript and determine whether full turn pages suffice or item pages are also needed. |
+| `thread/turns/list`, `thread/items/list` | 2 | Defer implementation; todo, first priority | Resolve history hydration compatibility. The experimental schema supports `initialTurnsPage`, contrary to the original stable-only inspection. A real 103-turn fixture confirms resume returns only 100 turns initially; the client ignores the continuation cursor. Fork returns no initial page. Local JSONL replay masks these gaps. Capture resume without an available local transcript and determine whether full turn pages suffice or item pages are also needed. |
 | `autoApprovalReview/strictReviewRequired` | 1 | Defer implementation; todo | Capture a strict-review wait and its CLI presentation. Do not assume equivalence with existing guardian warnings. |
 | `modelProvider/authRecoveryStarted`, `modelProvider/authRecoveryCompleted` | 2 | Defer implementation; todo | Capture authentication-recovery messages and event ordering for status rendering. |
 | `thread/realtime/item/started`, `thread/realtime/item/transcript/delta`, `thread/realtime/item/completed` | 3 | Defer implementation; todo | Capture canonical and legacy events together before adding item-aware rendering and deduplication. |
 | `thread/revert`, `thread/reverted` | 2 | Defer implementation; todo | Reconsider the old deprecated rollback exclusion. Establish the CLI interaction and hydrate retained history. This edits conversation history, not files. |
-| `thread/queue/changed` | 1 | Defer implementation; todo investigation | Establish the trigger and how server queue state is retrieved. The notification contains only a thread ID; its relationship to the local Tab queue is unproven. |
-| `mcpServer/event/stream/notification` | 1 | Defer implementation; todo investigation | Find the subscription mechanism and a relevant emitting scenario before deciding on presentation. |
+| `thread/queue/changed` | 1 | Defer implementation; todo investigation | Establish the trigger and how server queue state is retrieved. The notification contains only a thread ID; experimental queue list/mutation methods exist, but its relationship to the local Tab queue is unproven. |
+| `mcpServer/event/stream/notification` | 1 | Defer implementation; todo investigation | Capture the experimental stream/start and stream/stop subscription mechanism and a relevant emitting scenario before deciding on presentation. |
 | `plugin/reconcile` | 1 | Defer implementation; todo investigation | Determine whether plugin refresh should request reconciliation and how the CLI reports failures. A response is not a runtime-readiness guarantee. |
 | `thread/attachment/add`, `thread/attachment/list`, `thread/attachment/remove`, `thread/attachment/updated` | 4 | Skip; wont-implement | Stored resource associations, such as linked pull requests. Revisit if we add that interface; these are not prompt file/image attachments. |
 | `project/changed`, `thread/project/updated` | 2 | Skip; wont-implement | No server-project association display or cache. Local working directories are a separate concept. |
@@ -38,7 +38,25 @@ are in [protocol-baseline.json](protocol-baseline.json).
 - Did not send model turns, alter existing threads, invoke reconciliation or
   change account authentication. None of the 25 methods is newly marked handled.
 - The detector checks method names, not parameter/response compatibility. The
-  `initialTurnsPage` mismatch illustrates a gap outside that check. Its
-  user-visible effect remains to be measured before a repair is chosen.
+  original `initialTurnsPage` mismatch claim was incorrect: that field is
+  experimental and the client opts into it. Pagination and fork rendering
+  still require behavioral checks beyond method-name coverage.
 - Re-running `protocol_coverage.py` after triage must report no new, removed or
   regressed methods, zero unreviewed methods, and the 13 explicit todo entries.
+
+## Experimental-schema correction
+
+The follow-up investigation found that the detector omitted `--experimental`,
+even though the Emacs client advertises `experimentalApi: true`. The corrected
+detector inventories 258 methods: 63 more than the original review. These are
+newly visible to the detector, not necessarily new in Codex 0.155.1. They remain
+outside the reviewed baseline, so the detector intentionally reports drift
+until a separate triage records decisions. The earlier zero-unreviewed result
+applied only to the 195-method non-experimental subset.
+
+Read-only schema checks and a disposable local app-server fixture used an
+isolated CODEX_HOME, a loopback-only model provider, and no model turns or
+credentials. The real server accepted initialTurnsPage, returned 100 of 103
+turns plus a continuation cursor, and returned all 103 fork turns in
+thread.turns without an initialTurnsPage field. These observations supersede
+the original schema-mismatch hypothesis.

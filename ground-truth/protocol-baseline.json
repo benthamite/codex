@@ -316,7 +316,7 @@
       "status": "handled"
     },
     "mcpServer/event/stream/notification": {
-      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Forwards arbitrary MCP notifications with subscriptionId and notification.method/params. Investigate the subscription mechanism and capture a relevant event before choosing a client surface; no matching subscription request appears in the generated ClientRequest schema.",
+      "note": "Corrected 2026-09-19: the experimental schema includes mcpServer/event/stream/start and stop, omitted by the earlier stable-only inventory. Capture subscription/event behavior and choose a client surface; the notification carries subscriptionId and arbitrary method/params.",
       "status": "todo"
     },
     "mcpServer/oauth/login": {
@@ -530,7 +530,7 @@
       "status": "wont-implement"
     },
     "thread/items/list": {
-      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Cursor-paginated history hydration, optionally filtered by turn. Evaluate with thread/turns/list: the schema deprecates full-history hydration for paginated threads. Capture resume behavior and choose full-turn versus individual-item loading; both methods need not be used if one provides the required history.",
+      "note": "Corrected 2026-09-19: full turn pages can supply all persisted items via itemsView=full. Evaluate whether this separate per-item pagination API is needed after complete thread/turns/list hydration; not a prerequisite merely because it exists.",
       "status": "todo"
     },
     "thread/list": {
@@ -555,7 +555,7 @@
       "status": "wont-implement"
     },
     "thread/queue/changed": {
-      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Carries only threadId. The existing Tab queue is client-local; the schema does not establish its relationship to this server queue or how to fetch the queue state. Capture an emitting scenario and establish the API before choosing behavior.",
+      "note": "Corrected 2026-09-19: the experimental schema includes thread/queue/list and mutation operations. The earlier stable-only inventory hid them. Capture server queue behavior and determine its relationship to the client-local Tab queue before implementation.",
       "status": "todo"
     },
     "thread/read": {
@@ -640,7 +640,7 @@
       "status": "handled"
     },
     "thread/turns/list": {
-      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Priority: resume code still requests and reads initialTurnsPage.data, absent from the installed resume schema, which exposes backwards cursors instead. Local JSONL replay can mask the protocol mismatch. Confirm live behavior and capture CLI history before implementing paginated hydration; itemsView defaults to summary, not full.",
+      "note": "Corrected 2026-09-19: initialTurnsPage is present in the experimental schema, matching the client capability. An isolated real 0.155.1 app-server resumed a 103-turn fixture with 100 initial turns and a nextCursor for the remaining three. The client ignores that cursor. Fork has no initialTurnsPage response at all. Implement complete history hydration when local JSONL replay is unavailable.",
       "status": "todo"
     },
     "thread/unarchive": {

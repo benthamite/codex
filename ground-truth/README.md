@@ -103,6 +103,11 @@ and silently does not exist here. This script asks the installed CLI for its
 protocol schema, extracts every JSON-RPC method, and diffs that against a
 reviewed baseline in `protocol-baseline.json`.
 
+Schema generation includes `--experimental`, matching the client's
+`experimentalApi` initialization capability. Without it, both experimental
+methods and fields disappear from the inventory. The initial 0.155.1 triage
+used the narrower schema; its correction is recorded in the triage document.
+
 ```bash
 make protocol-coverage          # or: python3 ground-truth/protocol_coverage.py
 python3 ground-truth/protocol_coverage.py --update   # after triaging
