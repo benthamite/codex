@@ -19,6 +19,8 @@
 (defvar codex-full-auto)
 (defvar codex-model)
 (defvar codex-profile)
+(defvar codex-program)
+(defvar codex-process-environment-functions)
 (defvar codex-reasoning-effort)
 (defvar codex-skill-extra-roots)
 (defvar codex-sandbox-mode)
@@ -378,13 +380,15 @@ keys; see `codex--app-server-take-submission'.")
 
 (defvar codex--app-server-pending-startup-action 'start
   "Startup action for the next app-server session.
-One of `start', `resume', `resume-session', `fork', or `fork-session'.
+One of `start', `resume', `resume-session', `fork', `fork-session', or
+`edit-prompt'.
 `resume' and `fork' prompt for a thread; `resume-session' and
 `fork-session' act on a known session id.")
 
 (defvar-local codex--app-server-startup-action 'start
   "Startup action for this app-server buffer.
-One of `start', `resume', `resume-session', `fork', or `fork-session'.
+One of `start', `resume', `resume-session', `fork', `fork-session', or
+`edit-prompt'.
 `resume' and `fork' prompt for a thread; `resume-session' and
 `fork-session' act on a known session id.")
 
@@ -393,6 +397,25 @@ One of `start', `resume', `resume-session', `fork', or `fork-session'.
 
 (defvar-local codex--app-server-startup-session-id nil
   "Session id for this app-server resume-by-id startup.")
+
+(defvar-local codex--app-server-effective-permissions nil
+  "Effective approval, reviewer, profile, and sandbox settings from the server.")
+
+(defvar-local codex--app-server-launch-origin nil
+  "In-memory program, switches, environment, and listener used at launch.
+This may contain private environment values; never serialize or display it.")
+
+(defvar codex--app-server-pending-edit nil
+  "Prompt-edit specification for the next app-server launch.")
+
+(defvar-local codex--app-server-startup-edit nil
+  "Prompt-edit specification being prepared in this new buffer.")
+
+(defvar-local codex--app-server-edit-selection nil
+  "Unique token for an outstanding previous-prompt selection.")
+
+(defvar-local codex--app-server-edit-literal-p nil
+  "Whether the restored previous prompt is awaiting literal submission.")
 
 ;;;;; app-server backend implementation
 
@@ -454,6 +477,11 @@ arguments."
          (stderr-buffer (generate-new-buffer
                          (format " %s stderr"
                                  (string-trim buffer-name "\\*"))))
+         (origin (list :program (or (executable-find program) program)
+                       :switches (copy-tree switches)
+                       :environment (copy-sequence process-environment)
+                       :exec-path (copy-sequence exec-path)
+                       :listen codex-app-server-listen-url))
          (command (append (list program "app-server"
                                 "--listen" codex-app-server-listen-url)
                           switches)))
@@ -464,6 +492,7 @@ arguments."
         (codex--app-server-kill-stderr-buffer
          codex--app-server-stderr-buffer))
       (codex-app-server-mode)
+      (setq-local codex--app-server-launch-origin origin)
       (let ((inhibit-read-only t))
         (erase-buffer))
       (setq-local codex--app-server-pending-output "")
@@ -563,9 +592,12 @@ arguments."
               codex--app-server-pending-startup-action)
   (setq-local codex--app-server-startup-session-id
               codex--app-server-pending-startup-session-id)
+  (setq-local codex--app-server-startup-edit codex--app-server-pending-edit)
+  (when codex--app-server-startup-edit
+    (setq-local codex--app-server-history-loading-p t))
   (setq-local codex--app-server-direct-input-p
               (if (memq codex--app-server-startup-action
-                        '(resume resume-session fork fork-session))
+                        '(resume resume-session fork fork-session edit-prompt))
                   'unknown
                 t))
   (setq-local codex--app-server-pending-images
@@ -835,6 +867,9 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
                      (alist-get 'reasoning_effort metadata)
                      (alist-get 'effort metadata)
                      codex-reasoning-effort)))
+    (unless (equal codex--app-server-thread-id thread-id)
+      (setq codex--app-server-effective-permissions nil))
+    (codex--app-server-record-permission-settings params)
     (setq codex--app-server-direct-input-p
           (if (assq 'canAcceptDirectInput thread)
               (and (alist-get 'canAcceptDirectInput thread) t)
@@ -860,6 +895,32 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
       (codex--app-server-refresh-mention-rows)
       (unless (or defer-input codex--app-server-history-loading-p)
         (codex--app-server-setup-thread-input)))))
+
+(defun codex--app-server-record-permission-settings (settings)
+  "Record effective permission SETTINGS from a startup or settings response."
+  (dolist (key '(approvalPolicy approvalsReviewer activePermissionProfile sandboxPolicy))
+    (let ((field (or (assq key settings)
+                     (and (eq key 'sandboxPolicy) (assq 'sandbox settings)))))
+      (when field
+        (setf (alist-get key codex--app-server-effective-permissions)
+              (codex--app-server-preserve-permission-booleans (cdr field)))))))
+
+(defun codex--app-server-preserve-permission-booleans (value)
+  "Copy permission VALUE, retaining false booleans for later JSON requests."
+  (if (not (consp value)) value
+    (mapcar
+     (lambda (entry)
+       (if (and (consp entry) (symbolp (car entry)))
+           (cons (car entry)
+                 (if (and (null (cdr entry))
+                          (memq (car entry)
+                                '(networkAccess excludeTmpdirEnvVar excludeSlashTmp
+                                  sandbox_approval rules skill_approval mcp_elicitations
+                                  request_permissions)))
+                     :json-false
+                   (codex--app-server-preserve-permission-booleans (cdr entry))))
+         (codex--app-server-preserve-permission-booleans entry)))
+     value)))
 
 (defun codex--app-server-setup-thread-input ()
   "Render input controls permitted for the current app-server thread."
@@ -1031,6 +1092,7 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
       ("/new" (codex-new-instance))
       ("/resume" (codex-resume nil))
       ("/fork" (codex-fork nil))
+      ("/edit" (codex-app-server-edit-previous-prompt))
       ("/permissions" (codex--app-server-list-permission-profiles))
       ("/model" (codex--app-server-change-model))
       ("/plan" (codex--app-server-select-mode "plan" argument))
@@ -1185,6 +1247,7 @@ Restore SUBMISSION if the transport signals before accepting the request."
                     (alist-get 'model (alist-get 'settings mode))))
          (effort (if (assq 'effort settings) (alist-get 'effort settings)
                    (alist-get 'reasoning_effort (alist-get 'settings mode)))))
+    (codex--app-server-record-permission-settings settings)
     (when (and (member kind '("plan" "default")) model)
       (unless codex--app-server-collaboration-mode
         (setq codex--app-server-default-effort codex-reasoning-effort))
@@ -2911,7 +2974,7 @@ END is updated to the new end of the replaced region."
 
 (defconst codex--app-server-slash-commands
   '("/archive" "/clear" "/compact" "/copy" "/debug-config" "/delete"
-    "/diff" "/exit" "/experimental" "/fast" "/feedback" "/fork" "/goal"
+    "/diff" "/edit" "/exit" "/experimental" "/fast" "/feedback" "/fork" "/goal"
     "/goal-clear" "/hooks" "/init" "/logout" "/mcp" "/memories" "/mention"
     "/model" "/new" "/plan" "/default" "/permissions" "/personality" "/plugins" "/ps" "/quit"
     "/raw" "/rename" "/resume" "/review" "/skills" "/status" "/stop"
@@ -3122,7 +3185,8 @@ With no active turn, send the input immediately like Return."
              (setq codex--app-server-queued-turn-inputs
                    (append codex--app-server-queued-turn-inputs
                            (list
-                            (if (codex--app-server-local-command-p text)
+                            (if (and (not codex--app-server-edit-literal-p)
+                                     (codex--app-server-local-command-p text))
                                 (list :text text :images nil :mentions nil
                                       :owned-images nil)
                               (codex--app-server-take-submission text)))))
@@ -4850,6 +4914,7 @@ shape, such as an elicitation's `action'."
 (defun codex--app-server-after-initialize ()
   "Continue app-server startup after initialize-time setup."
   (pcase codex--app-server-startup-action
+    ('edit-prompt (codex--app-server-begin-edit-branch))
     ('resume (codex--app-server-begin-resume "thread/resume"))
     ('resume-session
      (codex--app-server-begin-resume-session-id
@@ -4859,6 +4924,244 @@ shape, such as an elicitation's `action'."
       codex--app-server-startup-session-id "thread/fork"))
     ('fork (codex--app-server-begin-resume "thread/fork"))
     (_ (codex--app-server-send-thread-start))))
+
+(defun codex-app-server-edit-previous-prompt ()
+  "Open a source-preserving branch with a previous prompt ready to edit.
+The original conversation and its draft remain untouched.  No prompt is sent."
+  (interactive)
+  (codex--app-server-check-edit-source)
+  (when codex--app-server-edit-selection
+    (user-error "A previous-prompt selection is already loading"))
+  (let ((token (list codex--app-server-thread-id)))
+    (setq codex--app-server-edit-selection token)
+    (codex--app-server-collect-edit-turns token nil nil)))
+
+(defun codex--app-server-check-edit-source ()
+  "Reject a source buffer that cannot safely prepare a prompt-edit branch."
+  (unless (and codex--app-server-thread-id
+               (eq codex--app-server-direct-input-p t))
+    (user-error "Prompt editing requires a directly editable conversation"))
+  (unless codex--app-server-launch-origin
+    (user-error "Reopen this conversation before editing a previous prompt"))
+  (when (or codex--app-server-history-loading-p
+            codex--app-server-turn-active-p
+            codex--app-server-turn-start-pending-p
+            codex--app-server-mode-change-pending-p
+            codex--app-server-queued-turn-inputs)
+    (user-error "Wait for pending conversation work before editing a prompt")))
+
+(defun codex--app-server-collect-edit-turns (token cursor turns)
+  "Collect canonical TURNS for selection TOKEN, continuing at CURSOR."
+  (condition-case err
+      (codex--app-server-send-request
+       "thread/turns/list"
+       `((threadId . ,(car token)) (limit . 100)
+         (sortDirection . "asc") (itemsView . "full")
+         ,@(when cursor `((cursor . ,cursor))))
+       (lambda (result error)
+         (when (eq token codex--app-server-edit-selection)
+           (cond
+            ((not (equal (car token) codex--app-server-thread-id))
+             (setq codex--app-server-edit-selection nil))
+            (error
+             (setq codex--app-server-edit-selection nil)
+             (codex--app-server-insert-status
+              (format "Cannot load previous prompts: %S" error)))
+            (t
+             (let ((all (append turns (alist-get 'data result))))
+               (if-let* ((next (alist-get 'nextCursor result)))
+                   (codex--app-server-collect-edit-turns token next all)
+                 (run-at-time 0 nil #'codex--app-server-finish-edit-selection
+                              (current-buffer) token all))))))))
+    (error
+     (setq codex--app-server-edit-selection nil)
+     (signal (car err) (cdr err)))))
+
+(defun codex--app-server-finish-edit-selection (buffer token turns)
+  "Choose from TURNS for TOKEN in BUFFER, outside the process filter."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when (eq token codex--app-server-edit-selection)
+        (unwind-protect
+            (when (equal (car token) codex--app-server-thread-id)
+              (codex--app-server-choose-edit-prompt (car token) turns))
+          (when (eq token codex--app-server-edit-selection)
+            (setq codex--app-server-edit-selection nil)))))))
+
+(defun codex--app-server-choose-edit-prompt (thread-id turns)
+  "Choose a prompt from canonical TURNS belonging to THREAD-ID."
+  (condition-case err
+      (let* ((choices (codex--app-server-edit-candidates turns))
+             (source (current-buffer)))
+        (codex--app-server-check-edit-source)
+        (unless choices (user-error "No completed prompts are available to edit"))
+        (let* ((choice (completing-read "Edit previous prompt: " choices nil t))
+               (selected (cdr (assoc choice choices))))
+          (unless selected (user-error "No prompt selected"))
+          (unless (and (buffer-live-p source)
+                       (equal thread-id codex--app-server-thread-id))
+            (user-error "The source conversation changed during selection"))
+          (codex--app-server-check-edit-source)
+          (codex--app-server-check-edit-permissions
+           codex--app-server-effective-permissions)
+          (codex--app-server-launch-edit-branch
+           (list :thread-id thread-id
+                 :permissions (copy-tree codex--app-server-effective-permissions)
+                 :before-turn-id (plist-get selected :before-turn-id)
+                 :submission (codex--app-server-edit-submission
+                              (plist-get selected :content))
+                 :model codex--app-server-current-model-id
+                 :effort codex--app-server-current-reasoning-effort))))
+    (quit nil)
+    (error (codex--app-server-insert-status (error-message-string err)))))
+
+(defun codex--app-server-edit-candidates (turns)
+  "Return uniquely identified initial prompt candidates from canonical TURNS."
+  (let ((index 0) review candidates)
+    (dolist (turn turns)
+      (let (seen-user)
+        (dolist (item (alist-get 'items turn))
+          (pcase (alist-get 'type item)
+            ("enteredReviewMode" (setq review t))
+            ("exitedReviewMode" (setq review nil))
+            ("userMessage"
+             (unless (or seen-user review
+                         (equal (alist-get 'status turn) "inProgress"))
+               (let ((text (codex--app-server-content-text
+                            (alist-get 'content item)))
+                     (id (alist-get 'id turn)))
+                 (when (and (stringp id) (not (string-blank-p text)))
+                   (push (cons (format "%d. %s  [%s]" (1+ index)
+                                       (truncate-string-to-width
+                                        (replace-regexp-in-string "[\n\r]+" " " text) 70)
+                                       id)
+                               (list :before-turn-id (and (> index 0) id)
+                                     :content (alist-get 'content item)))
+                         candidates))))
+             (setq seen-user t)))))
+      (setq index (1+ index)))
+    (nreverse candidates)))
+
+(defun codex--app-server-edit-submission (content)
+  "Convert canonical CONTENT to a lossless supported editable submission."
+  (let (text images mentions)
+    (dolist (part content)
+      (pcase (alist-get 'type part)
+        ("text"
+         (when (or text
+                   (not (seq-empty-p (alist-get 'text_elements part)))
+                   (not (seq-empty-p (alist-get 'textElements part))))
+           (user-error "This prompt has text elements that cannot be restored"))
+         (setq text (alist-get 'text part)))
+        ("localImage"
+         (let ((path (alist-get 'path part)))
+           (unless (and (stringp path) (file-name-absolute-p path)
+                        (file-readable-p path))
+             (user-error "An image from this prompt is no longer available"))
+           (push path images)))
+        ("mention"
+         (let ((name (alist-get 'name part)) (path (alist-get 'path part)))
+           (unless (and (stringp name) (stringp path))
+             (user-error "This prompt has an invalid mention"))
+           (push (cons name path) mentions)))
+        (_ (user-error "Cannot restore prompt input type: %s"
+                       (alist-get 'type part)))))
+    (unless (and (stringp text) (not (string-blank-p text)))
+      (user-error "This prompt has no editable text"))
+    (list :text text :images (nreverse images) :mentions (nreverse mentions))))
+
+(defun codex--app-server-launch-edit-branch (edit)
+  "Launch a fresh buffer preparing prompt EDIT with this source's origin."
+  (let* ((origin codex--app-server-launch-origin)
+         (dir codex--buffer-directory)
+         (name (generate-new-buffer-name
+                (codex--buffer-name-for-directory dir "edit")))
+         (codex-program (plist-get origin :program))
+         (codex-app-server-listen-url (plist-get origin :listen))
+         (process-environment (copy-sequence (plist-get origin :environment)))
+         (exec-path (copy-sequence (plist-get origin :exec-path)))
+         (codex-process-environment-functions nil)
+         (codex-default-images nil)
+         (codex--app-server-pending-startup-action 'edit-prompt)
+         (codex--app-server-pending-edit edit))
+    (unless origin (user-error "The source launch context is unavailable"))
+    (codex--launch-session dir 'app-server name "edit"
+                           (copy-tree (plist-get origin :switches)) t)))
+
+(defun codex--app-server-begin-edit-branch ()
+  "Start the branch described by this buffer's pending edit specification."
+  (let* ((edit codex--app-server-startup-edit)
+         (boundary (plist-get edit :before-turn-id))
+         (method (if boundary "thread/fork" "thread/start")))
+    (setq codex--app-server-history-loading-p t)
+    (condition-case err
+        (codex--app-server-send-request
+         method (codex--app-server-edit-start-params edit)
+         (lambda (result error)
+           (if error
+               (codex--app-server-insert-status
+                (format "Cannot prepare prompt-edit branch: %S" error))
+             (codex--app-server-thread-started result t)
+             (codex--app-server-prepare-edit-history edit))))
+      (error (codex--app-server-insert-status (error-message-string err))))))
+
+(defun codex--app-server-edit-start-params (edit)
+  "Return a boundary fork or fresh-thread request for EDIT."
+  (let* ((settings (plist-get edit :permissions))
+         (profile (alist-get 'id (alist-get 'activePermissionProfile settings)))
+         (boundary (plist-get edit :before-turn-id)))
+    (codex--app-server-check-edit-permissions settings)
+    (append
+     (if boundary
+         `((threadId . ,(plist-get edit :thread-id))
+           (beforeTurnId . ,boundary) (excludeTurns . t)
+           (deferGoalContinuation . t))
+       `((cwd . ,codex--buffer-directory)
+         (model . ,(plist-get edit :model))
+         (config . ,(when (plist-get edit :effort)
+                      `((model_reasoning_effort . ,(plist-get edit :effort)))))))
+     `((approvalPolicy . ,(alist-get 'approvalPolicy settings))
+       (approvalsReviewer . ,(alist-get 'approvalsReviewer settings))
+       ,@(when profile `((permissions . ,profile)))))))
+
+(defun codex--app-server-check-edit-permissions (settings)
+  "Require authoritative permission SETTINGS before preparing an edit branch."
+  (unless (and (assq 'approvalPolicy settings)
+               (assq 'approvalsReviewer settings)
+               (alist-get 'sandboxPolicy settings))
+    (user-error "Source permission settings are unavailable; reopen this conversation")))
+
+(defun codex--app-server-prepare-edit-history (edit)
+  "Apply EDIT's custom sandbox when needed before hydrating the branch."
+  (let* ((settings (plist-get edit :permissions))
+         (thread-id codex--app-server-thread-id))
+    (if (alist-get 'id (alist-get 'activePermissionProfile settings))
+        (codex--app-server-load-history-page
+         thread-id nil #'codex--app-server-finish-edit-branch)
+      (codex--app-server-send-request
+       "thread/settings/update"
+       `((threadId . ,thread-id)
+         (sandboxPolicy . ,(alist-get 'sandboxPolicy settings))
+         (approvalPolicy . ,(alist-get 'approvalPolicy settings))
+         (approvalsReviewer . ,(alist-get 'approvalsReviewer settings)))
+       (lambda (_result error)
+         (when (equal thread-id codex--app-server-thread-id)
+           (if error
+               (codex--app-server-insert-status
+                (format "Cannot preserve source permissions; branch input blocked: %S" error))
+             (codex--app-server-load-history-page
+              thread-id nil #'codex--app-server-finish-edit-branch))))))))
+
+(defun codex--app-server-finish-edit-branch (success)
+  "Restore the unsent edited prompt after history hydration SUCCESS."
+  (when success
+    (let ((submission (plist-get codex--app-server-startup-edit :submission)))
+      (setq codex--app-server-startup-edit nil
+            codex--app-server-startup-submissions nil
+            codex--app-server-deferred-resume-prompt nil)
+      (codex--app-server-finish-history)
+      (codex--app-server-restore-submission submission)
+      (setq codex--app-server-edit-literal-p t))))
 
 (defun codex--app-server-begin-resume (method)
   "List threads and resume or fork one via METHOD."
@@ -4918,9 +5221,10 @@ shape, such as an elicitation's `action'."
          (codex--app-server-load-history-page
           codex--app-server-thread-id nil))))))
 
-(defun codex--app-server-load-history-page (thread-id cursor)
+(defun codex--app-server-load-history-page (thread-id cursor &optional completion)
   "Render a full history page for THREAD-ID at CURSOR, then continue.
-The composer is enabled only after the last page or a visible loading error."
+Call COMPLETION with success or failure when provided.  Otherwise enable
+input after the final page or a visible loading error."
   (codex--app-server-send-request
    "thread/turns/list"
    `((threadId . ,thread-id)
@@ -4934,11 +5238,13 @@ The composer is enabled only after the last page or a visible loading error."
            (progn
              (codex--app-server-insert-status
               (format "Codex history incomplete: %S" error))
-             (codex--app-server-finish-history))
+             (if completion (funcall completion nil)
+               (codex--app-server-finish-history)))
          (codex--app-server-render-history (alist-get 'data result))
          (if-let* ((next (alist-get 'nextCursor result)))
-             (codex--app-server-load-history-page thread-id next)
-           (codex--app-server-finish-history)))))))
+             (codex--app-server-load-history-page thread-id next completion)
+           (if completion (funcall completion t)
+             (codex--app-server-finish-history))))))))
 
 (defun codex--app-server-finish-history ()
   "Finish loading history and enable this thread's permitted input controls."
@@ -5003,6 +5309,8 @@ command, and everything else is sent to the model as a turn.
 When SUBMISSION is non-nil, it owns COMMAND's already-captured
 attachments."
   (codex--app-server-ensure-direct-input)
+  (when (and (null submission) codex--app-server-edit-literal-p)
+    (setq submission (codex--app-server-take-submission command)))
   (codex--run-command-submitted-hook)
   (let ((trimmed (string-trim-left command)))
     (cond
@@ -5101,7 +5409,8 @@ When FRONT is non-nil, preserve it ahead of already queued submissions."
        `((threadId . ,codex--app-server-thread-id)
          (input . ,(codex--app-server-user-input-vector submission))
          (cwd . ,codex--buffer-directory)
-         (approvalPolicy . ,(codex--app-server-approval-policy))
+         ,@(unless (assq 'approvalPolicy codex--app-server-effective-permissions)
+             `((approvalPolicy . ,(codex--app-server-approval-policy))))
          (effort . ,codex-reasoning-effort)
          ,@(when codex--app-server-collaboration-mode
              `((collaborationMode
@@ -5173,7 +5482,8 @@ an already captured submission plist and do not consume buffer state."
 The result has `:text', `:images', `:mentions', and `:owned-images'
 keys.  Taking a submission clears the buffer's pending images and
 mentions; `:owned-images' identifies clipboard files whose lifetime
-must follow server acceptance and turn completion."
+must follow server acceptance and turn completion.  A restored edited
+prompt also carries `:literal', consumed here for every submission path."
   (let ((submission
          (list :text text
                :images codex--app-server-pending-images
@@ -5183,8 +5493,11 @@ must follow server acceptance and turn completion."
                 (lambda (path)
                   (member path codex--app-server-owned-image-files))
                 codex--app-server-pending-images))))
+    (when codex--app-server-edit-literal-p
+      (setq submission (plist-put submission :literal t)))
     (setq codex--app-server-pending-images nil
-          codex--app-server-pending-mentions nil)
+          codex--app-server-pending-mentions nil
+          codex--app-server-edit-literal-p nil)
     submission))
 
 (defun codex--app-server-restore-submission (submission)
@@ -5196,6 +5509,7 @@ must follow server acceptance and turn completion."
       (codex--app-server-enqueue-submission
        (codex--app-server-take-submission newer-text))))
   (codex--app-server-restore-submission-attachments submission)
+  (setq codex--app-server-edit-literal-p (plist-get submission :literal))
   (codex--app-server-replace-input (plist-get submission :text)))
 
 (defun codex--app-server-restore-submission-attachments (submission)

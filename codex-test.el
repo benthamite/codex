@@ -3019,6 +3019,411 @@ the same request with {}."
       (should (equal codex--app-server-rate-limit 57))
       (should (equal started-weekly 77)))))
 
+(defun codex-test--edit-turn (id text &optional status)
+  "Return a canonical edit-fixture turn with ID, TEXT, and optional STATUS."
+  `((id . ,id) (status . ,(or status "completed"))
+    (items . (((type . "userMessage")
+               (content . (((type . "text") (text . ,text)))))))))
+
+(ert-deftest codex-test-app-server-edit-collects-canonical-pages ()
+  "Collect all turns without rendering or changing the source draft."
+  (with-temp-buffer
+    (setq-local codex--app-server-thread-id "source")
+    (let* ((token (list "source")) pending requests chosen)
+      (setq-local codex--app-server-edit-selection token)
+      (insert "ORIGINAL DRAFT")
+      (cl-letf (((symbol-function 'codex--app-server-send-request)
+                 (lambda (method params callback)
+                   (push (cons method params) requests)
+                   (setq pending callback)))
+                ((symbol-function 'codex--app-server-choose-edit-prompt)
+                 (lambda (id turns) (setq chosen (cons id turns))))
+                ((symbol-function 'run-at-time)
+                 (lambda (_time _repeat function &rest args) (apply function args))))
+        (codex--app-server-collect-edit-turns token nil nil)
+        (should (equal (alist-get 'itemsView (cdar requests)) "full"))
+        (funcall pending `((data . (,(codex-test--edit-turn "one" "same")))
+                           (nextCursor . "next")) nil)
+        (should-not chosen)
+        (should (equal (alist-get 'cursor (cdar requests)) "next"))
+        (funcall pending `((data . (,(codex-test--edit-turn "two" "same")))) nil)
+        (should (equal (car chosen) "source"))
+        (should (equal (mapcar (lambda (turn) (alist-get 'id turn)) (cdr chosen))
+                       '("one" "two")))
+        (should-not codex--app-server-edit-selection)
+        (should (equal (buffer-string) "ORIGINAL DRAFT"))))))
+
+(ert-deftest codex-test-app-server-edit-candidates-preserve-identity ()
+  "Duplicate prompts retain boundaries, while steers and active turns stay out."
+  (let* ((first (codex-test--edit-turn "one" "same"))
+         (second (codex-test--edit-turn "two" "same"))
+         (active (codex-test--edit-turn "three" "active" "inProgress")))
+    (setf (alist-get 'items second)
+          (append (alist-get 'items second)
+                  '(((type . "userMessage")
+                     (content . (((type . "text") (text . "steer"))))))))
+    (let ((choices (codex--app-server-edit-candidates (list first second active))))
+      (should (= (length choices) 2))
+      (should-not (equal (caar choices) (caadr choices)))
+      (should-not (plist-get (cdar choices) :before-turn-id))
+      (should (equal (plist-get (cdadr choices) :before-turn-id) "two")))))
+
+(ert-deftest codex-test-app-server-edit-skips-review-prompts ()
+  "Review bookkeeping is not presented as an editable user prompt."
+  (let ((turn (codex-test--edit-turn "review" "hidden")))
+    (setf (alist-get 'items turn)
+          (append '(((type . "enteredReviewMode")))
+                  (alist-get 'items turn) '(((type . "exitedReviewMode")))))
+    (let ((choices (codex--app-server-edit-candidates
+                    (list turn (codex-test--edit-turn "visible" "hello")))))
+      (should (= (length choices) 1))
+      (should (equal (plist-get (cdar choices) :before-turn-id) "visible")))))
+
+(ert-deftest codex-test-app-server-edit-rejects-lossy-inputs ()
+  "Unsupported historical inputs are refused before a branch can be created."
+  (dolist (part '(((type . "image") (url . "data:image/png;base64,AAAA"))
+                  ((type . "skill") (name . "helper") (path . "/tmp/helper"))
+                  ((type . "localImage") (path . "/no-such-edit-fixture.png"))
+                  ((type . "text") (text . "hello")
+                   (text_elements . (((start . 0) (end . 1)))))))
+    (should-error (codex--app-server-edit-submission (list part)) :type 'user-error))
+  (should-error (codex--app-server-edit-submission
+                 '(((type . "text") (text . "one"))
+                   ((type . "text") (text . "two")))) :type 'user-error))
+
+(ert-deftest codex-test-app-server-edit-preserves-supported-attachments ()
+  "Restore available images and canonical mentions without taking ownership."
+  (let ((file (make-temp-file "codex-edit-image-")))
+    (unwind-protect
+        (let ((submission
+               (codex--app-server-edit-submission
+                `(((type . "text") (text . "use @file") (text_elements . []))
+                  ((type . "localImage") (path . ,file))
+                  ((type . "mention") (name . "file") (path . "/tmp/file"))))))
+          (should (equal (plist-get submission :images) (list file)))
+          (should (equal (plist-get submission :mentions) '(("file" . "/tmp/file"))))
+          (should-not (plist-get submission :owned-images)))
+      (delete-file file))))
+
+(ert-deftest codex-test-app-server-edit-origin-captures-actual-launch-buffer ()
+  "Snapshot the actual spawn context even when the caller has a local environment."
+  (with-temp-buffer
+    (setq-local process-environment '("CODEX_HOME=/local-fixture"))
+    (let ((name (generate-new-buffer-name " *codex-edit-origin-test*"))
+          buffer spawned-environment stderr)
+      (unwind-protect
+          (cl-letf (((symbol-function 'make-process)
+                     (lambda (&rest args)
+                       (setq spawned-environment (copy-sequence process-environment)
+                             stderr (plist-get args :stderr))
+                       nil)))
+            (setq buffer (codex--term-make 'app-server name "/fixture/codex" '("--fixture")))
+            (with-current-buffer buffer
+              (should (equal (plist-get codex--app-server-launch-origin :environment)
+                             spawned-environment))
+              (should (equal (plist-get codex--app-server-launch-origin :switches)
+                             '("--fixture")))
+              (should (member "CODEX_HOME=/local-fixture" spawned-environment))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))
+        (when (buffer-live-p stderr) (kill-buffer stderr))))))
+
+(ert-deftest codex-test-app-server-edit-launch-retains-source-origin ()
+  "Launching a branch preserves its source environment instead of ambient auth."
+  (with-temp-buffer
+    (let ((codex-program "ambient")
+          (process-environment '("CODEX_HOME=/ambient"))
+          (codex-default-images '("unrelated.png"))
+          (codex-process-environment-functions '(ignore)))
+      (setq-local codex--buffer-directory "/tmp/")
+      (setq-local codex--app-server-launch-origin
+                  '(:program "/fixture/codex" :switches ("-c" "model_provider=fixture")
+                    :environment ("CODEX_HOME=/source" "CODEX_BUFFER_NAME=old")
+                    :exec-path ("/fixture") :listen "stdio://"))
+      (cl-letf (((symbol-function 'codex--launch-session)
+                 (lambda (dir backend _name _instance switches _show)
+                   (should (equal dir "/tmp/"))
+                   (should (eq backend 'app-server))
+                   (should (equal codex-program "/fixture/codex"))
+                   (should (equal (getenv "CODEX_HOME") "/source"))
+                   (should (equal switches '("-c" "model_provider=fixture")))
+                   (should (equal exec-path '("/fixture")))
+                   (should-not codex-default-images)
+                   (should-not codex-process-environment-functions)
+                   (should (eq codex--app-server-pending-startup-action 'edit-prompt))
+                   (should (equal (plist-get codex--app-server-pending-edit :thread-id) "source")))))
+        (codex--app-server-launch-edit-branch '(:thread-id "source")))
+      (should (equal (getenv "CODEX_HOME") "/ambient")))))
+
+(ert-deftest codex-test-app-server-edit-old-origin-and-busy-refused ()
+  "Legacy buffers and active work fail explicitly instead of selecting another account."
+  (with-temp-buffer
+    (setq-local codex--app-server-thread-id "source")
+    (setq-local codex--app-server-direct-input-p t)
+    (should-error (codex--app-server-check-edit-source) :type 'user-error)
+    (setq-local codex--app-server-launch-origin '(:program "fixture"))
+    (setq-local codex--app-server-turn-active-p t)
+    (should-error (codex--app-server-check-edit-source) :type 'user-error)))
+
+(ert-deftest codex-test-app-server-edit-fork-defers-goal-and-keeps-prompt-unsent ()
+  "The boundary fork defers goals and restores input only after hydration."
+  (with-temp-buffer
+    (setq-local codex--app-server-startup-edit
+                '(:thread-id "source" :before-turn-id "two" :submission (:text "second")
+                  :permissions ((activePermissionProfile . ((id . ":workspace")))
+                                (approvalPolicy . "on-request") (approvalsReviewer . "auto_review")
+                                (sandboxPolicy . ((type . "workspaceWrite"))))))
+    (let (request callback finish ready)
+      (cl-letf (((symbol-function 'codex--app-server-send-request)
+                 (lambda (method params done) (setq request (cons method params) callback done)))
+                ((symbol-function 'codex--app-server-thread-started)
+                 (lambda (_result _defer) (setq codex--app-server-thread-id "branch")))
+                ((symbol-function 'codex--app-server-load-history-page)
+                 (lambda (id cursor completion)
+                   (should (equal id "branch")) (should-not cursor)
+                   (setq finish completion)))
+                ((symbol-function 'codex--app-server-setup-thread-input)
+                 (lambda () (setq ready t) (codex--app-server-setup-input-region)))
+                ((symbol-function 'codex--app-server-submit-command)
+                 (lambda (&rest _) (ert-fail "Auto-submitted edited prompt"))))
+        (codex--app-server-begin-edit-branch)
+        (should (equal (car request) "thread/fork"))
+        (should (equal (alist-get 'beforeTurnId (cdr request)) "two"))
+        (should (eq (alist-get 'deferGoalContinuation (cdr request)) t))
+        (should (equal (alist-get 'permissions (cdr request)) ":workspace"))
+        (should (equal (alist-get 'approvalsReviewer (cdr request)) "auto_review"))
+        (should-not (assq 'path (cdr request)))
+        (funcall callback '((thread (id . "branch"))) nil)
+        (should-not ready)
+        (funcall finish t)
+        (should ready)
+        (should (equal (codex--app-server-input-text) "second"))
+        (should codex--app-server-edit-literal-p)
+        (should-not codex--app-server-startup-edit)))))
+
+(ert-deftest codex-test-app-server-edit-first-prompt-starts-empty-thread ()
+  "Editing the first persisted prompt starts fresh, as the actual CLI does."
+  (with-temp-buffer
+    (setq-local codex--buffer-directory "/tmp/")
+    (setq-local codex--app-server-startup-edit
+                '(:thread-id "source" :before-turn-id nil :model "fixture"
+                  :effort "high" :submission (:text "first")
+                  :permissions ((approvalPolicy . "never") (approvalsReviewer . "user")
+                                (sandboxPolicy . ((type . "readOnly"))))))
+    (cl-letf (((symbol-function 'codex--app-server-send-request)
+               (lambda (method params _callback)
+                 (should (equal method "thread/start"))
+                 (should (equal (alist-get 'model params) "fixture"))
+                 (should-not (assq 'threadId params))
+                 (should-not (assq 'beforeTurnId params)))))
+      (codex--app-server-begin-edit-branch))))
+
+(ert-deftest codex-test-app-server-edit-records-effective-permission-changes ()
+  "Fresh branches preserve a selected profile and reviewer from current settings."
+  (with-temp-buffer
+    (codex--app-server-record-permission-settings
+     '((approvalPolicy . "never") (approvalsReviewer . "user")
+       (sandbox . ((type . "readOnly"))) (activePermissionProfile . nil)))
+    (codex--app-server-settings-updated
+     '((threadSettings . ((approvalPolicy . "on-request")
+                          (approvalsReviewer . "auto_review")
+                          (sandboxPolicy . ((type . "workspaceWrite")))
+                          (activePermissionProfile . ((id . "custom-profile")))))))
+    (let ((params (codex--app-server-edit-start-params
+                   (list :permissions codex--app-server-effective-permissions))))
+      (should (equal (alist-get 'permissions params) "custom-profile"))
+      (should (equal (alist-get 'approvalPolicy params) "on-request"))
+      (should (equal (alist-get 'approvalsReviewer params) "auto_review"))
+      (should-not (assq 'sandbox params)))))
+
+(ert-deftest codex-test-app-server-edit-custom-sandbox-before-input ()
+  "Apply the exact custom sandbox and reviewer before permitting branch hydration."
+  (dolist (failure '(nil t))
+    (with-temp-buffer
+      (setq-local codex--app-server-thread-id "branch")
+      (setq-local codex--app-server-history-loading-p t)
+      (let* ((policy '((type . "workspaceWrite") (writableRoots . ("/tmp/owned"))
+                       (networkAccess . nil) (excludeTmpdirEnvVar . t)
+                       (excludeSlashTmp . t)))
+             (edit (list :before-turn-id "two" :permissions
+                         `((approvalPolicy . "on-request") (approvalsReviewer . "auto_review")
+                           (activePermissionProfile . nil) (sandboxPolicy . ,policy))))
+             request callback loaded)
+        (cl-letf (((symbol-function 'codex--app-server-send-request)
+                   (lambda (method params done) (setq request (cons method params) callback done)))
+                  ((symbol-function 'codex--app-server-load-history-page)
+                   (lambda (&rest _) (setq loaded t))))
+          (codex--app-server-prepare-edit-history edit)
+          (should (equal (car request) "thread/settings/update"))
+          (should (equal (alist-get 'sandboxPolicy (cdr request)) policy))
+          (should (equal (alist-get 'approvalsReviewer (cdr request)) "auto_review"))
+          (should-not loaded)
+          (funcall callback nil (and failure '((message . "unsupported policy"))))
+          (if failure
+              (progn (should-not loaded)
+                     (should codex--app-server-history-loading-p)
+                     (should (string-match-p "branch input blocked" (buffer-string))))
+            (should loaded)))))))
+
+(ert-deftest codex-test-app-server-edit-permissions-preserve-json-false ()
+  "Round-trip effective false policy flags as false rather than JSON null."
+  (with-temp-buffer
+    (codex--app-server-record-permission-settings
+     '((approvalPolicy . ((granular . ((sandbox_approval . nil) (rules . t)
+                                       (mcp_elicitations . nil)))))
+       (approvalsReviewer . "user")
+       (sandbox . ((type . "workspaceWrite") (networkAccess . nil)
+                   (excludeTmpdirEnvVar . nil) (excludeSlashTmp . t)))))
+    (let ((encoded (json-encode codex--app-server-effective-permissions)))
+      (should (string-match-p "\"networkAccess\":false" encoded))
+      (should (string-match-p "\"excludeTmpdirEnvVar\":false" encoded))
+      (should (string-match-p "\"sandbox_approval\":false" encoded))
+      (should-not (string-match-p ":null" encoded)))))
+
+(ert-deftest codex-test-app-server-edit-first-turn-retains-server-approval-policy ()
+  "A first edited turn cannot replace restored approvals with global full-auto."
+  (with-temp-buffer
+    (setq-local codex--app-server-thread-id "branch")
+    (setq-local codex--buffer-directory "/tmp/")
+    (let ((codex-full-auto t) requests)
+      (codex--app-server-record-permission-settings
+       '((approvalPolicy . "on-request") (approvalsReviewer . "auto_review")
+         (sandbox . ((type . "workspaceWrite")))))
+      (cl-letf (((symbol-function 'codex--app-server-send-request)
+                 (lambda (method params _callback)
+                   (should (equal method "turn/start"))
+                   (push params requests))))
+        (codex--app-server-send-turn-start '(:text "edited" :literal t))
+        (should-not (assq 'approvalPolicy (car requests)))
+        (codex--app-server-settings-updated
+         '((threadSettings . ((approvalPolicy . "untrusted")
+                              (approvalsReviewer . "user")
+                              (sandboxPolicy . ((type . "readOnly")))))))
+        (codex--app-server-send-turn-start '(:text "next"))
+        (should-not (assq 'approvalPolicy (car requests)))
+        (should (equal (alist-get 'approvalPolicy codex--app-server-effective-permissions)
+                       "untrusted"))))))
+
+(ert-deftest codex-test-app-server-turn-start-before-authoritative-settings-uses-config ()
+  "Legacy startup without server settings still uses configured approval policy."
+  (with-temp-buffer
+    (let ((codex-full-auto t) params)
+      (cl-letf (((symbol-function 'codex--app-server-send-request)
+                 (lambda (_method body _callback) (setq params body))))
+        (codex--app-server-send-turn-start '(:text "hello")))
+      (should (equal (alist-get 'approvalPolicy params) "never")))))
+
+(ert-deftest codex-test-app-server-edit-permissions-missing-refused ()
+  "A fresh thread cannot silently fall back to unknown source permissions."
+  (should-error (codex--app-server-edit-start-params '(:model "fixture"))
+                :type 'user-error))
+
+(ert-deftest codex-test-app-server-edit-incomplete-history-keeps-input-blocked ()
+  "A failed branch history page cannot enable an apparently complete editable chat."
+  (with-temp-buffer
+    (setq-local codex--app-server-thread-id "branch")
+    (setq-local codex--app-server-history-loading-p t)
+    (setq-local codex--app-server-startup-edit '(:submission (:text "second")))
+    (cl-letf (((symbol-function 'codex--app-server-send-request)
+               (lambda (_method _params callback)
+                 (funcall callback nil '((message . "incomplete")))))
+              ((symbol-function 'codex--app-server-setup-thread-input)
+               (lambda () (ert-fail "Incomplete history enabled input"))))
+      (codex--app-server-load-history-page
+       "branch" nil #'codex--app-server-finish-edit-branch)
+      (should codex--app-server-history-loading-p)
+      (should codex--app-server-startup-edit))))
+
+(ert-deftest codex-test-app-server-edit-literal-input-survives-send-retry ()
+  "A restored slash prompt and its failed retry remain model input."
+  (with-temp-buffer
+    (codex--app-server-setup-input-region)
+    (codex--app-server-replace-input "/literal prompt")
+    (setq-local codex--app-server-thread-id "branch")
+    (setq-local codex--app-server-edit-literal-p t)
+    (let (sent)
+      (cl-letf (((symbol-function 'codex--app-server-send-turn-input)
+                 (lambda (submission)
+                   (setq sent submission)
+                   (codex--app-server-restore-submission submission)))
+                ((symbol-function 'codex--app-server-dispatch-slash)
+                 (lambda (&rest _) (ert-fail "Dispatched historical slash command"))))
+        (codex--app-server-send-input))
+      (should (plist-get sent :literal))
+      (should codex--app-server-edit-literal-p)
+      (should (equal (codex--app-server-input-text) "/literal prompt")))))
+
+(ert-deftest codex-test-app-server-edit-compose-send-consumes-literal-once ()
+  "External-editor submission sends historical shell text to the model once."
+  (let ((target (generate-new-buffer " *codex-edit-compose-target*"))
+        (composer (generate-new-buffer " *codex-edit-compose*")) sent shell)
+    (unwind-protect
+        (progn
+          (with-current-buffer target
+            (codex--app-server-setup-input-region)
+            (setq-local codex--app-server-thread-id "branch")
+            (setq-local codex--app-server-edit-literal-p t))
+          (with-current-buffer composer
+            (setq-local codex--app-server-compose-target target)
+            (insert "!historical command"))
+          (cl-letf (((symbol-function 'codex--app-server-send-turn-input)
+                     (lambda (submission) (setq sent submission)))
+                    ((symbol-function 'codex--app-server-run-shell-command)
+                     (lambda (command) (setq shell command)))
+                    ((symbol-function 'pop-to-buffer) #'ignore))
+            (with-current-buffer composer (codex-app-server-compose-send))
+            (should (plist-get sent :literal))
+            (should (equal (plist-get sent :text) "!historical command"))
+            (should-not shell)
+            (with-current-buffer target
+              (should-not codex--app-server-edit-literal-p)
+              (codex--app-server-submit-command "!new command"))
+            (should (equal shell "new command"))))
+      (when (buffer-live-p target) (kill-buffer target))
+      (when (buffer-live-p composer) (kill-buffer composer)))))
+
+(ert-deftest codex-test-app-server-edit-tab-queue-preserves-literal-and-attachments ()
+  "Tab captures an edited shell-looking draft as model input, consuming its flag."
+  (with-temp-buffer
+    (codex--app-server-setup-input-region)
+    (codex--app-server-replace-input "!historical command")
+    (setq-local codex--app-server-turn-active-p t)
+    (setq-local codex--app-server-edit-literal-p t)
+    (setq-local codex--app-server-pending-mentions '(("file" . "/tmp/file")))
+    (cl-letf (((symbol-function 'codex--app-server-render-queue) #'ignore))
+      (codex--app-server-queue-input))
+    (let ((submission (car codex--app-server-queued-turn-inputs)))
+      (should (plist-get submission :literal))
+      (should (equal (plist-get submission :mentions) '(("file" . "/tmp/file"))))
+      (should-not codex--app-server-edit-literal-p)
+      (should-not codex--app-server-pending-mentions))))
+
+(ert-deftest codex-test-app-server-edit-stale-selection-does-not-open ()
+  "A thread switch while fetching pages invalidates the deferred selection."
+  (with-temp-buffer
+    (let ((token (list "old")))
+      (setq-local codex--app-server-edit-selection token)
+      (setq-local codex--app-server-thread-id "new")
+      (cl-letf (((symbol-function 'codex--app-server-choose-edit-prompt)
+                 (lambda (&rest _) (ert-fail "Opened stale prompt selector"))))
+        (codex--app-server-finish-edit-selection
+         (current-buffer) token (list (codex-test--edit-turn "one" "first"))))
+      (should-not codex--app-server-edit-selection))))
+
+(ert-deftest codex-test-app-server-edit-selection-cancel-preserves-source ()
+  "Canceling canonical prompt selection makes no branch and keeps the draft."
+  (with-temp-buffer
+    (setq-local codex--app-server-thread-id "source")
+    (setq-local codex--app-server-direct-input-p t)
+    (setq-local codex--app-server-launch-origin '(:program "fixture"))
+    (insert "DRAFT")
+    (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) (signal 'quit nil)))
+              ((symbol-function 'codex--app-server-launch-edit-branch)
+               (lambda (&rest _) (ert-fail "Created a canceled branch"))))
+      (codex--app-server-choose-edit-prompt
+       "source" (list (codex-test--edit-turn "one" "first"))))
+    (should (equal codex--app-server-thread-id "source"))
+    (should (equal (buffer-string) "DRAFT"))))
+
 (ert-deftest codex-test-app-server-resume-and-fork-paginate-history ()
   "Resume and fork hydrate all full turn pages before enabling input."
   (dolist (operation '("thread/resume" "thread/fork"))
