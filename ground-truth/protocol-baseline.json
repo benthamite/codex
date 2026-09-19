@@ -81,8 +81,8 @@
       "status": "wont-implement"
     },
     "autoApprovalReview/strictReviewRequired": {
-      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Carries threadId, turnId and startedAtMs. Capture the trigger and CLI presentation before adding a review indicator; existing exclusions for item-level auto-review events do not establish equivalence with guardianWarning.",
-      "status": "todo"
+      "note": "Verified 2026-09-19: explicit schema-valid event injection through isolated real app-server transports into both official TUI (Eat) and native Emacs. Start displays bullet plus server message, completion checkmark plus server message, strict review displays the CLI warning about additional safety checks. Matching-thread filtering tested. This proves frontend rendering, not real credential recovery or safety-review triggering; no credentials accessed.",
+      "status": "handled"
     },
     "collaborationMode/list": {
       "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Official TUI discovers presets and cycles plan/default. Emacs currently has no collaborationMode request or submission; add discovery and mode selection. Evidence: Generated experimental schema and read-only rust-v0.155.1 source; not live captured",
@@ -416,12 +416,12 @@
       "status": "wont-implement"
     },
     "modelProvider/authRecoveryCompleted": {
-      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Carries message, provider, threadId and turnId; ignored by the current dispatcher. Capture authentication-recovery start/completion messages and ordering before adding status rendering. The schema does not define a success/failure field.",
-      "status": "todo"
+      "note": "Verified 2026-09-19: explicit schema-valid event injection through isolated real app-server transports into both official TUI (Eat) and native Emacs. Start displays bullet plus server message, completion checkmark plus server message, strict review displays the CLI warning about additional safety checks. Matching-thread filtering tested. This proves frontend rendering, not real credential recovery or safety-review triggering; no credentials accessed.",
+      "status": "handled"
     },
     "modelProvider/authRecoveryStarted": {
-      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Carries message, provider, threadId and turnId; ignored by the current dispatcher. Capture authentication-recovery start/completion messages and ordering before adding status rendering. The schema does not define a success/failure field.",
-      "status": "todo"
+      "note": "Verified 2026-09-19: explicit schema-valid event injection through isolated real app-server transports into both official TUI (Eat) and native Emacs. Start displays bullet plus server message, completion checkmark plus server message, strict review displays the CLI warning about additional safety checks. Matching-thread filtering tested. This proves frontend rendering, not real credential recovery or safety-review triggering; no credentials accessed.",
+      "status": "handled"
     },
     "modelProvider/capabilities/read": {
       "note": "captured response is feature flags {namespaceTools, imageGeneration, webSearch}; nothing in the buffer is gated on them.",

@@ -704,6 +704,16 @@ can arrive before this buffer has learned its thread id; both belong here."
                     (if to (format " to %s" to) "")))))
         ("mcpServer/startupStatus/updated"
          (codex--app-server-render-mcp-status params))
+        ("modelProvider/authRecoveryStarted"
+         (when-let* ((message (alist-get 'message params)))
+           (codex--app-server-insert-status (concat "• " message))))
+        ("modelProvider/authRecoveryCompleted"
+         (when-let* ((message (alist-get 'message params)))
+           (codex--app-server-insert-status (concat "✓ " message))))
+        ("autoApprovalReview/strictReviewRequired"
+         (codex--app-server-insert-status
+          (concat "⚠ This request requires additional safety checks, "
+                  "some tool calls might take extra time")))
         ("thread/realtime/started"
          (codex--app-server-insert-status "Realtime session started"))
         ("thread/realtime/closed"

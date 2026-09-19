@@ -3171,6 +3171,25 @@ the same request with {}."
     (should (string-match-p "Model rerouted to gpt-new" (buffer-string)))
     (should (equal codex--app-server-current-model-id "gpt-new"))))
 
+(ert-deftest codex-test-app-server-renders-recovery-and-review-notices ()
+  "Render captured CLI notices only for the matching thread."
+  (with-temp-buffer
+    (setq-local codex--app-server-thread-id "ours")
+    (dolist (entry '(("modelProvider/authRecoveryStarted" "Recovering" "• Recovering")
+                     ("modelProvider/authRecoveryCompleted" "Recovered" "✓ Recovered")
+                     ("autoApprovalReview/strictReviewRequired" nil
+                      "⚠ This request requires additional safety checks")))
+      (let ((notification (copy-tree
+                           `((method . ,(car entry))
+                             (params (threadId . "other")
+                                     (turnId . "turn-1")
+                                     (message . ,(cadr entry)))))))
+        (codex--app-server-handle-notification notification)
+        (should-not (string-match-p (regexp-quote (caddr entry)) (buffer-string)))
+        (setf (alist-get 'threadId (alist-get 'params notification)) "ours")
+        (codex--app-server-handle-notification notification)
+        (should (string-match-p (regexp-quote (caddr entry)) (buffer-string)))))))
+
 (ert-deftest codex-test-app-server-renders-realtime-transcript ()
   "Realtime lifecycle and transcript events render in the buffer."
   (with-temp-buffer

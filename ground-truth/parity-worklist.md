@@ -6,7 +6,7 @@ behavioral gap here. Evidence is for installed Codex 0.155.1.
 
 | Work | Decision | Evidence needed |
 | --- | --- | --- |
-| Render authentication recovery and strict-review notices | Do | Compare controlled notifications in the actual TUI and native renderer; real account recovery is a separate backend condition. |
+| Render authentication recovery and strict-review notices | Done | Controlled notifications rendered in actual TUI/Eat and native Emacs with matching text and prefixes; thread filtering tested. Real credential recovery and review triggering were not exercised. |
 | Select server-discovered Plan/Default modes | Do | Capture `/plan`, discover presets, verify effective settings and subsequent turn behavior in isolated sessions. |
 | Answer external-clock requests | Do | Enable external clock in an isolated server; observe the real callback and reminder reaching a loopback model provider. |
 | Match `/memories` controls | Do | Capture use/generate/reset settings, persist effective config and current-thread generation; test reset only in an owned disposable memory store. |
