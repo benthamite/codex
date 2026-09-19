@@ -1,16 +1,15 @@
 """Report app-server protocol methods codex-app-server.el does not handle.
 
 codex-app-server.el reimplements the Codex client instead of hosting the CLI's
-own TUI, so it inherits nothing when Codex ships a feature. Every new protocol
-method is a feature that exists in Codex and silently does not exist here. This
-script makes that visible: it asks the installed CLI for its protocol schema,
+own TUI, so it inherits nothing when Codex ships a feature. New protocol
+methods identify candidate client capabilities to investigate. This
+script makes those visible: it asks the installed CLI for its protocol schema,
 extracts the method surface, and diffs it against a reviewed baseline.
 
-This finds CANDIDATES, not parity. Appearing in the schema says a method exists,
-not what the CLI does with it, and a method counted as handled here may still be
+This finds CANDIDATES, not parity. Appearing in the schema says a method is
+declared, not whether the server implements it or what the CLI does with it, and a method counted as handled here may still be
 rendered wrongly. Implementing anything it surfaces still means capturing the
-CLI's real behavior first with codex_gt.py and capture_protocol.py, per the
-repo's one rule.
+CLI's real behavior first with codex_gt.py and capture_protocol.py.
 
 Usage:
     python3 protocol_coverage.py            # report against the baseline

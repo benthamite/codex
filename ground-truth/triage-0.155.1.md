@@ -2,8 +2,8 @@
 
 ## Current inventory
 
-The complete experimental inventory is now reviewed: **258 methods, 90 named
-in the client, 159 deliberately excluded, 9 todo, zero unreviewed**. The
+The complete experimental inventory is now reviewed: **258 methods, 96 named
+in the client, 159 deliberately excluded, 3 todo, zero unreviewed**. The
 additional 63 methods comprised 7 already handled, 50 scope exclusions and
 6 follow-ups. These counts are method coverage, not feature parity.
 
@@ -130,3 +130,23 @@ Primary source anchors are the tagged TUI `chatwidget/protocol.rs`,
 `app/background_requests.rs`, app-server `request_processors/plugins.rs`,
 and core-plugins `manager.rs`. Decisions are source/schema conclusions, not
 new live parity claims.
+
+## Live follow-up acceptance
+
+The installed 0.155.1 TUI was exercised inside Eat with isolated homes and
+owned threads. Native acceptance used the same installed app-server and a
+loopback model provider, without account credentials or paid requests.
+
+- Recovery/strict-review notices match captured TUI text and prefixes under
+  explicit transport injection. Their real backend triggers were not tested.
+- Plan/Default selection uses discovered presets. Native Plan selected medium
+  effort, Default restored high, and an inline Plan prompt completed with
+  collaboration settings present in the actual turn request.
+- External-clock requests reached native Emacs from the real server; whole
+  Unix-second responses produced the corresponding reminder at the provider.
+- A mixed ordinary/realtime history fixture resumed successfully, but
+  `thread/timeline/list` returned -32601, “not supported yet”. That endpoint is
+  deferred until server support exists.
+
+See the worklist for remaining behavior gaps; named-method counts do not
+measure completed feature parity.

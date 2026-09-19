@@ -85,8 +85,8 @@
       "status": "handled"
     },
     "collaborationMode/list": {
-      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Official TUI discovers presets and cycles plan/default. Emacs currently has no collaborationMode request or submission; add discovery and mode selection. Evidence: Generated experimental schema and read-only rust-v0.155.1 source; not live captured",
-      "status": "todo"
+      "status": "handled",
+      "note": "Implemented server-discovered Plan/Default presets and authoritative settings notifications. Live verified against installed 0.155.1 with isolated loopback provider: Plan uses medium, Default restores prior high effort, inline prompt waits for selection and completes a turn whose payload carries collaborationMode. FIFO/failure and notification-before-response order covered by ERT. Commit 20ce53f."
     },
     "command/exec": {
       "note": "client->server, not server->client: codex.el would be the caller, never a terminal host. Verified live ({command:[...]} -> {exitCode,stdout,stderr}). Thread-less, for GUI clients running commands in the server sandbox outside a turn; codex.el already covers the user-visible feature via thread/shellCommand (the CLI's ! prefix) and thread/backgroundTerminals/*.",
@@ -129,8 +129,8 @@
       "status": "handled"
     },
     "currentTime/read": {
-      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Server-to-client external-clock callback is unsupported. Needed when current_time_reminder.clock_source is external; response contains whole Unix seconds currentTimeAt. Evidence: rust-v0.155.1 codex-rs/app-server/tests/suite/v2/current_time.rs:45; schema/CurrentTimeReadResponse.json; codex-app-server.el:3795",
-      "status": "todo"
+      "status": "handled",
+      "note": "Implemented immediate whole Unix seconds reply. Live native Emacs/real 0.155.1 server accepted three currentTime/read callbacks in an isolated external-clock configuration; the current_time_reminder with supplied time reached the loopback model and the turn completed. Commit c3f6bb1."
     },
     "deprecationNotice": {
       "status": "handled"
@@ -844,8 +844,8 @@
       "status": "handled"
     },
     "thread/settings/updated": {
-      "note": "could not trigger: thread/settings/update from this client returns {} and emits no notification, so it appears to exist for out-of-band changes (another client or remote control) that a single Emacs client will not see. Not observed here, so not implemented rather than guessed.",
-      "status": "wont-implement"
+      "status": "handled",
+      "note": "Implemented server-discovered Plan/Default presets and authoritative settings notifications. Live verified against installed 0.155.1 with isolated loopback provider: Plan uses medium, Default restores prior high effort, inline prompt waits for selection and completes a turn whose payload carries collaborationMode. FIFO/failure and notification-before-response order covered by ERT. Commit 20ce53f."
     },
     "thread/shellCommand": {
       "status": "handled"

@@ -1,9 +1,8 @@
 # Ground-truth harness
 
 Tools for verifying codex.el against the **real Codex CLI** instead of against
-codex.el's own code. See the repo `CLAUDE.md` for the rule these enforce: a
-parity claim is only done when the CLI's actual user-visible behavior was
-captured first and codex.el's output was diffed against it.
+codex.el's own code. A parity claim requires capturing the CLI's actual
+user-visible behavior first, then comparing codex.el against it.
 
 ## `codex_gt.py` — what the user SEES
 
@@ -98,8 +97,7 @@ CGT_TRACE=1 CGT_EXTRA='[{"method":"thread/read","params":{"threadId":"{threadId}
 
 `codex-app-server.el` reimplements the client rather than hosting the CLI's own
 TUI, so unlike `codex-eat.el` and `codex-vterm.el` it inherits nothing when
-Codex ships a feature. A new protocol method is a feature that exists in Codex
-and silently does not exist here. This script asks the installed CLI for its
+Codex ships a feature. A new protocol method is a candidate client capability to investigate. This script asks the installed CLI for its
 protocol schema, extracts every JSON-RPC method, and diffs that against a
 reviewed baseline in `protocol-baseline.json`.
 
@@ -116,8 +114,9 @@ python3 ground-truth/protocol_coverage.py --update   # after triaging
 Run it after every Codex upgrade. It exits non-zero when the protocol gained or
 lost methods, so it can gate a target.
 
-This finds **candidates, not parity**. A method in the schema tells you it
-exists, not what the CLI does with it, and a method counted as handled may still
+This finds **candidates, not parity**. A method in the schema tells you it is
+declared, not whether the installed server implements it or what the CLI does
+with it, and a method counted as handled may still
 render wrongly — the check is a name match against the source. Anything it
 surfaces still goes through the workflow below before you can claim it works.
 
@@ -127,7 +126,8 @@ Each method carries a decision in the baseline, so the report stays short. Set
 once means later runs show only what actually changed.
 
 The [0.155.1 triage](triage-0.155.1.md) records the 2026-09-19 decisions for
-25 additions since 0.145.0, their evidence limits, and follow-up priorities.
+the original 25 stable-schema additions and 63 subsequently discovered
+experimental methods, their evidence limits, and follow-up priorities.
 
 ## `elicit_server.py` — provoking an MCP elicitation
 
@@ -165,10 +165,17 @@ Keep override values free of spaces: `CGT_CODEX_ARGS` is split naively.
 
 - This directory is tracked. It holds only source: captures go to `CGT_DIR`
   (default `/tmp/codex-gt`), never here, and `protocol-baseline.json` is a
-  reviewed decision record that is meant to be versioned. The repo's one rule
-  requires this harness, so a clone without it cannot verify a parity claim.
+  reviewed decision record that is meant to be versioned.
 - Requires `pyte` (`pip install pyte`) and the `codex` CLI on PATH.
 - `CGT_DIR` must be an initialized git repo; on first run the CLI shows a trust
   prompt which `codex_gt.py` answers with Enter.
 - Image paste: put a PNG on the clipboard first, then use a `key:ctrlv` step.
 - `elicit_server.py` needs the `mcp` package (`pip install mcp`).
+
+For isolated acceptance, use a disposable `CODEX_HOME`, owned threads and a
+loopback model provider. The installed TUI can also be captured inside Eat
+when the standalone Python terminal dependencies are unavailable. Distinguish
+real server-triggered flows from explicitly injected notifications: injection
+can verify rendering, but does not establish authentication, safety-review or
+voice-service behavior. `thread/timeline/list` in 0.155.1 illustrates the schema
+limit: the server declares it but returns “not supported yet”.
