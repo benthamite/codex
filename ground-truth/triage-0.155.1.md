@@ -96,8 +96,12 @@ forced the native clients to exercise protocol hydration rather than JSONL
 replay. Actual requests fetched two pages per native path. No model turns,
 credentials, shared accounts, or pre-existing threads were used.
 
-This establishes complete idle-thread history hydration, not concurrent replay
-while another client is generating output, nor pixel-identical rendering.
+This establishes complete idle-thread history hydration, not pixel-identical
+rendering. A subsequent two-process test used a copied 103-turn fixture and a
+slow loopback provider: the second app-server rejected resume with -32600,
+“already has an active writer”. It never entered hydration. The proposed live
+interleaving route therefore did not reproduce in the current per-buffer
+stdio architecture; shared-server transports remain a separate untested case.
 All 418 ERT tests, shell/Python checks, strict byte compilation, and manual
 Texinfo export/validation passed. The Makefile needed the installed `llama`
 dependency supplied through `LOAD_PATH_EXTRA`; the Python TUI harness lacked
