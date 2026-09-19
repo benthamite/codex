@@ -336,7 +336,7 @@
       "status": "wont-implement"
     },
     "item/tool/requestUserInput": {
-      "note": "implemented from the app-server schema, which is authoritative for the request and reply shapes. The CLI's own presentation was NOT captured: no configured tool asks this and no listed experimental feature enables it (checked experimentalFeature/list), so no trigger was found. Prompt wording is this client's own and has not been diffed against the CLI.",
+      "note": "Verified 2026-09-19 with actual 0.155.1 CLI and native Emacs using an isolated Plan-mode loopback provider: first-option default, descriptions, selected answer plus user_note, None-of-above notes, and request-specific interruption. Native unanswered confirmation and secret masking tested. Nonblocking timing uses the CLI 60-second hidden grace plus 60-second countdown; any interaction permanently snoozes. Injected timing acceptance is tracked in parity-worklist.md.",
       "status": "handled"
     },
     "marketplace/add": {
@@ -576,8 +576,8 @@
       "status": "wont-implement"
     },
     "serverRequest/resolved": {
-      "note": "protocol bookkeeping",
-      "status": "wont-implement"
+      "note": "Handles request-specific tool-question dismissal before current-thread filtering; queued and active requests cannot send a stale answer after resolution. Regression tested.",
+      "status": "handled"
     },
     "skills/changed": {
       "note": "Refreshed 2026-09-19 from client source: the notification dispatcher now calls codex--app-server-refresh-mention-rows. The older exclusion predates this handler. Source inspection only, not a new live parity verification.",

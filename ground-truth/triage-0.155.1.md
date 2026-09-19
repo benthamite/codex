@@ -2,8 +2,8 @@
 
 ## Current inventory
 
-The complete experimental inventory is now reviewed: **258 methods, 97 named
-in the client, 159 deliberately excluded, 2 todo, zero unreviewed**. The
+The complete experimental inventory is now reviewed: **258 methods, 98 named
+in the client, 158 deliberately excluded, 2 todo, zero unreviewed**. The
 additional 63 methods comprised 7 already handled, 50 scope exclusions and
 6 follow-ups. These counts are method coverage, not feature parity.
 
@@ -177,3 +177,14 @@ current thread memory mode; confirmed reset removed owned v1/v2 memory files
 and preserved all eight fixture threads. A real sparse config response
 exposed null-versus-false ambiguity, now covered by a captured-shape regression
 and live readback returning false use / true default generation.
+
+Tool questions now have actual Plan-mode CLI captures from an owned loopback
+provider. Native defaults and selected answers plus notes match the wire
+responses; nested-note cancellation interrupted the request’s own turn without
+an answers response. Injected native nonblocking questions remained open past
+60 seconds and returned `{answers:{}}` after 120 seconds with an unanswered
+summary. CLI and native interaction kept requests open beyond that deadline; the
+native request was still snoozed at 145 seconds, and a matching resolution
+notification dismissed it without sending an answer. The
+`serverRequest/resolved` exclusion was obsolete: queued and active questions
+now honor resolution, with lifecycle and stale-timer regression coverage.
