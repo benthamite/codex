@@ -3554,6 +3554,39 @@ the same request with {}."
               (should-not (string-match-p "lossy final only" text)))))
       (delete-file file))))
 
+(ert-deftest codex-test-app-server-resume-transcript-null-optionals ()
+  "Null transcript metadata and message content must not block resumed input."
+  (let ((file (make-temp-file "codex-null-transcript" nil ".jsonl"))
+        (codex-reasoning-effort nil)
+        (codex-hooks-config-path nil))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "{\"type\":\"session_meta\",\"payload\":{\"cwd\":null}}\n"
+                    "{\"type\":\"turn_context\",\"payload\":{\"model\":\"fixture-model\",\"effort\":null,\"collaboration_mode\":{\"settings\":{\"reasoning_effort\":null}}}}\n"
+                    "{\"type\":\"turn_context\",\"payload\":{\"collaboration_mode\":null}}\n"
+                    "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":null}}\n"
+                    "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":null},{\"type\":\"output_text\",\"text\":\"Retained response\"}]}}\n"))
+          (should (equal (codex--app-server-transcript-header-metadata file)
+                         '((model . "fixture-model"))))
+          (with-temp-buffer
+            (setq-local codex--app-server-agent-items
+                        (make-hash-table :test 'equal))
+            (setq-local codex--app-server-command-items
+                        (make-hash-table :test 'equal))
+            (cl-letf (((symbol-function 'codex--app-server-send-request)
+                       (lambda (_method _params callback)
+                         (funcall callback
+                                  `((thread (id . "null-source")
+                                            (path . ,file))) nil))))
+              (codex--app-server-send-resume
+               "thread/resume" `((id . "null-source") (path . ,file))))
+            (should-not codex--app-server-history-loading-p)
+            (should (marker-position codex--app-server-input-marker))
+            (should (string-match-p "Retained response" (buffer-string)))
+            (should-not (string-match-p ":null" (buffer-string)))))
+      (delete-file file))))
+
 (ert-deftest codex-test-app-server-resume-renders-response-item-assistant-message ()
   "Resume replays assistant text stored as a response item message."
   (let ((file (make-temp-file "codex-app-server-response-item" nil ".jsonl")))

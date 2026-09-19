@@ -2687,7 +2687,9 @@ than appends."
           (when-let* ((entry (ignore-errors
                                (json-parse-string line
                                                   :object-type 'alist
-                                                  :array-type 'list)))
+                                                  :array-type 'list
+                                                  :null-object nil
+                                                  :false-object nil)))
                       (payload (alist-get 'payload entry)))
             (pcase (alist-get 'type entry)
               ("session_meta"
@@ -3899,7 +3901,9 @@ event."
         (when-let* ((entry (ignore-errors
                              (json-parse-string line
                                                 :object-type 'alist
-                                                :array-type 'list)))
+                                                :array-type 'list
+                                                :null-object nil
+                                                :false-object nil)))
                     (event (codex--app-server-transcript-event entry)))
           (push event events))))
     (nreverse events)))
