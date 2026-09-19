@@ -2,8 +2,8 @@
 
 ## Current inventory
 
-The complete experimental inventory is now reviewed: **258 methods, 96 named
-in the client, 159 deliberately excluded, 3 todo, zero unreviewed**. The
+The complete experimental inventory is now reviewed: **258 methods, 97 named
+in the client, 159 deliberately excluded, 2 todo, zero unreviewed**. The
 additional 63 methods comprised 7 already handled, 50 scope exclusions and
 6 follow-ups. These counts are method coverage, not feature parity.
 
@@ -166,3 +166,10 @@ live native JSON dispatcher. Caption text, speaker prefixes and finalization
 order matched for corrected finals, final-only messages, interleaved speakers
 and successive captions sharing a prefix. This verifies rendering, not a
 working voice-service connection.
+
+Memory controls were compared with actual CLI use/generate/reset and feature
+enablement flows. The native menu persisted both booleans and changed the
+current thread memory mode; confirmed reset removed owned v1/v2 memory files
+and preserved all eight fixture threads. A real sparse config response
+exposed null-versus-false ambiguity, now covered by a captured-shape regression
+and live readback returning false use / true default generation.

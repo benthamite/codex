@@ -390,8 +390,8 @@
       "status": "handled"
     },
     "memory/reset": {
-      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. CLI /memories exposes confirmed Reset all memories; editor lacks the reset interface. Evidence: rust-v0.155.1 codex-rs/tui/src/bottom_pane/memories_settings_view.rs:93; codex-rs/tui/src/app/config_persistence.rs:945",
-      "status": "todo"
+      "status": "handled",
+      "note": "Confirmed reset available from native /memories. Actual CLI and native reset cleared only owned disposable v1/v2 memory files; native reset preserved all eight fixture threads. Separate use/generate settings persist through config/batchWrite, update current-thread generation, and reconcile overrides. Native feature-enable wrote features.memories for future threads. Actual sparse config preserved false versus null/default true. Commit aa82638."
     },
     "memory/status": {
       "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Reports v2 consolidation rollout readiness/count, not memory settings or memory contents; no editor rollout dashboard. Evidence: schema/v2/MemoryStatusParams.json; schema/v2/MemoryStatusResponse.json",
