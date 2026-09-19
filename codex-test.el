@@ -8,6 +8,321 @@
 (require 'ert)
 (require 'codex)
 
+(defmacro codex-test--with-verification-session (&rest body)
+  "Run BODY with fresh native-verification state and captured wire messages."
+  (declare (indent 0) (debug t))
+  `(with-temp-buffer
+     (setq-local codex--app-server-thread-id "verify-thread"
+                 codex--app-server-process 'verification-source
+                 codex--app-server-pending-requests (make-hash-table :test 'equal))
+     (let (wire scheduled)
+       (cl-letf (((symbol-function 'process-live-p)
+                  (lambda (process) (memq process '(verification-source replacement))))
+                 ((symbol-function 'codex--app-server-send-json)
+                  (lambda (message) (push (copy-tree message) wire)))
+                 ((symbol-function 'run-at-time)
+                  (lambda (_time _repeat function &rest args)
+                    (push (cons function args) scheduled) nil)))
+         ,@body))))
+
+(defun codex-test--verification-message (&optional id)
+  "Return a fresh synthetic native-verification request with ID."
+  (let ((message (json-parse-string
+                  "{\"id\":\"verify-request\",\"method\":\"mcpServer/elicitation/request\",\"params\":{\"mode\":\"openai/userVerification\",\"threadId\":\"verify-thread\",\"serverName\":\"fixture\",\"title\":\"Confirm action\",\"description\":\"Owned fixture\",\"challenge\":\"PRIVATE_CHALLENGE\"}}"
+                  :object-type 'alist)))
+    (when id (setf (alist-get 'id message) id))
+    message))
+
+(defun codex-test--verification-approve (scheduled)
+  "Choose explicit Verify and approve in the deferred SCHEDULED prompt."
+  (cl-letf (((symbol-function 'read-multiple-choice)
+             (lambda (prompt _choices &rest _)
+               (should (string-match-p "Confirm action" prompt))
+               (should (string-match-p "Owned fixture" prompt))
+               (should (string-match-p "fixture" prompt))
+               (should-not (string-match-p "PRIVATE_CHALLENGE" prompt))
+               '(?y "Verify and approve"))))
+    (apply (caar scheduled) (cdar scheduled))))
+
+(ert-deftest codex-test-app-server-verification-success-and-privacy ()
+  "Approval sends exact signing params and returns only the exact proof."
+  (codex-test--with-verification-session
+    (codex--app-server-handle-server-request (codex-test--verification-message 0))
+    (should-not wire)
+    (codex-test--verification-approve scheduled)
+    (should (equal (alist-get 'method (car wire)) "userVerification/verify"))
+    (should (equal (alist-get 'params (car wire))
+                   '((challenge . "PRIVATE_CHALLENGE") (title . "Confirm action")
+                     (description . "Owned fixture"))))
+    (codex--app-server-handle-line
+     "{\"id\":1,\"result\":{\"proof\":{\"credentialId\":\"PRIVATE_CREDENTIAL\",\"signature\":\"PRIVATE_SIGNATURE\"}}}")
+    (should (equal (car wire)
+                   '((id . 0) (result (action . "accept")
+                                     (content (credentialId . "PRIVATE_CREDENTIAL")
+                                              (signature . "PRIVATE_SIGNATURE"))))))
+    (should (= (hash-table-count codex--app-server-verifications) 0))
+    (should (= (hash-table-count codex--app-server-pending-requests) 0))
+    (should-not (string-match-p "PRIVATE_" (buffer-string)))))
+
+(ert-deftest codex-test-app-server-verification-cancel-and-quit ()
+  "Cancel and C-g answer the original request without starting native work."
+  (dolist (quit '(nil t))
+    (codex-test--with-verification-session
+      (codex--app-server-handle-server-request (codex-test--verification-message))
+      (cl-letf (((symbol-function 'read-multiple-choice)
+                 (lambda (&rest _) (if quit (signal 'quit nil) '(?c "Cancel")))))
+        (apply (caar scheduled) (cdar scheduled)))
+      (should (equal wire '(((id . "verify-request") (result (action . "cancel"))))))
+      (should (= (hash-table-count codex--app-server-verifications) 0)))))
+
+(ert-deftest codex-test-app-server-verification-resolved-before-and-during-prompt ()
+  "Resolution before or during the minibuffer prevents a stale native call."
+  (dolist (during '(nil t))
+    (codex-test--with-verification-session
+      (codex--app-server-handle-server-request (codex-test--verification-message))
+      (let ((resolve (lambda ()
+                       (codex--app-server-handle-notification
+                        '((method . "serverRequest/resolved")
+                          (params (threadId . "verify-thread")
+                                  (requestId . "verify-request")))))))
+        (unless during (funcall resolve))
+        (cl-letf (((symbol-function 'read-multiple-choice)
+                   (lambda (&rest _) (should during) (funcall resolve) '(?y "Verify"))))
+          (apply (caar scheduled) (cdar scheduled))))
+      (should-not wire))))
+
+(ert-deftest codex-test-app-server-verification-resolved-cancels-native ()
+  "Resolution uses a fresh cancel id and suppresses late proof completion."
+  (codex-test--with-verification-session
+    (codex--app-server-handle-server-request (codex-test--verification-message))
+    (codex-test--verification-approve scheduled)
+    (let ((callback (gethash 1 codex--app-server-pending-requests)))
+      (codex--app-server-handle-notification
+       '((method . "serverRequest/resolved")
+         (params (threadId . "verify-thread") (requestId . "verify-request"))))
+      (should (equal (car wire)
+                     '((id . 2) (method . "userVerification/cancel")
+                       (params (requestId . 1)))))
+      (should-not (gethash 1 codex--app-server-pending-requests))
+      (funcall callback '((proof (credentialId . "secret") (signature . "secret"))) nil)
+      (should (= (length wire) 2)))))
+
+(ert-deftest codex-test-app-server-verification-reused-server-id ()
+  "Replacing a request cancels old native work without answering the new id."
+  (codex-test--with-verification-session
+    (codex--app-server-handle-server-request (codex-test--verification-message))
+    (codex-test--verification-approve scheduled)
+    (let ((callback (gethash 1 codex--app-server-pending-requests)))
+      (codex--app-server-handle-server-request (codex-test--verification-message))
+      (should (equal (alist-get 'method (car wire)) "userVerification/cancel"))
+      (funcall callback '((proof (credentialId . "old") (signature . "old"))) nil)
+      (should (= (hash-table-count codex--app-server-verifications) 1))
+      (should (= (length wire) 2))
+      (codex-test--verification-approve scheduled)
+      (should (equal (alist-get 'id (car wire)) 3)))))
+
+(ert-deftest codex-test-app-server-verification-invalid-proof-and-error-private ()
+  "Malformed proofs and raw native errors never enter the transcript."
+  (dolist (response
+           '("{\"result\":{\"proof\":\"PRIVATE_BAD_PROOF\"}}"
+             "{\"result\":{\"proof\":[\"PRIVATE_BAD_PROOF\"]}}"
+             "{\"result\":\"PRIVATE_BAD_RESULT\"}"
+             "{\"result\":{\"proof\":{\"credentialId\":\"PRIVATE_C\",\"signature\":\"PRIVATE_S\",\"extra\":\"PRIVATE_EXTRA\"}}}"
+             "{\"result\":{\"proof\":{\"credentialId\":\"PRIVATE_C\",\"signature\":\"\"}}}"
+             "{\"error\":{\"message\":\"PRIVATE_ERROR\",\"data\":{\"type\":\"PRIVATE_TYPE\"}}}"))
+    (codex-test--with-verification-session
+      (codex--app-server-handle-server-request (codex-test--verification-message))
+      (codex-test--verification-approve scheduled)
+      (codex--app-server-handle-line (concat "{\"id\":1," (substring response 1)))
+      (should (equal (alist-get 'result (car wire)) '((action . "cancel"))))
+      (should-not (string-match-p "PRIVATE_" (buffer-string)))
+      (should-not (string-match-p "Malformed app-server" (buffer-string)))
+      (should (= (hash-table-count codex--app-server-verifications) 0))))
+  (should-not (codex--app-server-verification-proof-p
+               '((credentialId . "one") (credentialId . "two")))))
+
+(ert-deftest codex-test-app-server-verification-interrupt-without-turn ()
+  "Escape cancels a standalone verification even with no active turn."
+  (codex-test--with-verification-session
+    (codex--app-server-handle-server-request (codex-test--verification-message))
+    (codex-test--verification-approve scheduled)
+    (codex--app-server-interrupt-turn)
+    (should (equal (alist-get 'result (car wire)) '((action . "cancel"))))
+    (should (equal (alist-get 'method (cadr wire)) "userVerification/cancel"))
+    (should (= (length wire) 3))))
+
+(ert-deftest codex-test-app-server-verification-account-change ()
+  "An account revision invalidates approval without inferring nullable fields."
+  (codex-test--with-verification-session
+    (codex--app-server-handle-server-request (codex-test--verification-message))
+    (codex-test--verification-approve scheduled)
+    (cl-letf (((symbol-function 'codex--app-server-request-account) #'ignore))
+      (codex--app-server-account-updated nil))
+    (should (= (hash-table-count codex--app-server-verifications) 0))
+    (should (equal (alist-get 'method (car wire)) "userVerification/cancel"))
+    (should (= (length wire) 2))))
+
+(ert-deftest codex-test-app-server-verification-old-source-cannot-cancel-new-id ()
+  "Discarding an old request neither writes nor removes a replacement callback."
+  (codex-test--with-verification-session
+    (codex--app-server-handle-server-request (codex-test--verification-message))
+    (codex-test--verification-approve scheduled)
+    (let ((old-callbacks codex--app-server-pending-requests))
+      (setq codex--app-server-process 'replacement
+            codex--app-server-pending-requests (make-hash-table :test 'equal))
+      (puthash 1 #'ignore codex--app-server-pending-requests)
+      (codex--app-server-dismiss-verifications t)
+      (should (eq (gethash 1 codex--app-server-pending-requests) #'ignore))
+      (should-not (gethash 1 old-callbacks))
+      (should (= (length wire) 1)))))
+
+(ert-deftest codex-test-app-server-verification-synchronous-completion ()
+  "A completion during send does not resurrect finished native state."
+  (codex-test--with-verification-session
+    (codex--app-server-handle-server-request (codex-test--verification-message))
+    (let ((send (symbol-function 'codex--app-server-send-json)))
+      (cl-letf (((symbol-function 'codex--app-server-send-json)
+                 (lambda (message)
+                   (funcall send message)
+                   (when (equal (alist-get 'method message) "userVerification/verify")
+                     (codex--app-server-handle-response
+                      `((id . ,(alist-get 'id message))
+                        (result (proof (credentialId . "c") (signature . "s")))))))))
+        (codex-test--verification-approve scheduled)))
+    (should (= (hash-table-count codex--app-server-verifications) 0))
+    (should (= (hash-table-count codex--app-server-pending-requests) 0))
+    (should (= (length wire) 2))))
+
+(ert-deftest codex-test-app-server-verification-send-failure-sanitized ()
+  "A native transport exception is sanitized and cancels the elicitation."
+  (codex-test--with-verification-session
+    (codex--app-server-handle-server-request (codex-test--verification-message))
+    (let ((send (symbol-function 'codex--app-server-send-json)))
+      (cl-letf (((symbol-function 'codex--app-server-send-json)
+                 (lambda (message)
+                   (if (equal (alist-get 'method message) "userVerification/verify")
+                       (error "PRIVATE_TRANSPORT %S" message)
+                     (funcall send message)))))
+        (codex-test--verification-approve scheduled)))
+    (should (equal (alist-get 'result (car wire)) '((action . "cancel"))))
+    (should-not (string-match-p "PRIVATE_" (buffer-string)))
+    (should-not (gethash 1 codex--app-server-pending-requests))))
+
+(ert-deftest codex-test-app-server-obsolete-process-frames-and-exit ()
+  "An old connection cannot dispatch frames or tear down its replacement."
+  (codex-test--with-verification-session
+    (cl-letf (((symbol-function 'process-buffer) (lambda (_process) (current-buffer)))
+              ((symbol-function 'codex--app-server-drain-lines)
+               (lambda () (ert-fail "Obsolete process output was dispatched")))
+              ((symbol-function 'codex--app-server-fail-pending-requests)
+               (lambda (&rest _) (ert-fail "Obsolete exit failed new callbacks"))))
+      (codex--app-server-process-filter 'obsolete "PRIVATE_OLD_FRAME\n")
+      (codex--app-server-process-sentinel 'obsolete "exited\n")
+      (should (equal codex--app-server-pending-output ""))
+      (should (string-empty-p (buffer-string))))))
+
+(ert-deftest codex-test-app-server-verification-defers-busy-ui ()
+  "Another minibuffer or native prompt defers approval without canceling it."
+  (dolist (native '(nil t))
+    (codex-test--with-verification-session
+      (codex--app-server-handle-server-request (codex-test--verification-message))
+      (let ((codex--app-server-verification-prompt-active native))
+        (cl-letf (((symbol-function 'active-minibuffer-window) (lambda () (not native)))
+                  ((symbol-function 'read-multiple-choice)
+                   (lambda (&rest _) (ert-fail "Nested native approval prompt"))))
+          (apply (caar scheduled) (cdar scheduled))))
+      (should (= (length scheduled) 2))
+      (should-not wire)
+      (codex-test--verification-approve scheduled)
+      (should (equal (alist-get 'method (car wire)) "userVerification/verify")))))
+
+(ert-deftest codex-test-app-server-verification-cancel-during-send ()
+  "Reentrant resolution cancels the already allocated native request id."
+  (codex-test--with-verification-session
+    (codex--app-server-handle-server-request (codex-test--verification-message))
+    (let ((send (symbol-function 'codex--app-server-send-json)))
+      (cl-letf (((symbol-function 'codex--app-server-send-json)
+                 (lambda (message)
+                   (funcall send message)
+                   (when (equal (alist-get 'method message) "userVerification/verify")
+                     (codex--app-server-resolve-verification
+                      '((threadId . "verify-thread") (requestId . "verify-request")))))))
+        (codex-test--verification-approve scheduled)))
+    (should (equal (car wire) '((id . 2) (method . "userVerification/cancel")
+                                      (params (requestId . 1)))))
+    (should-not (gethash 1 codex--app-server-pending-requests))
+    (should (= (hash-table-count codex--app-server-verifications) 0))))
+
+(ert-deftest codex-test-app-server-verification-thread-and-cleanup-lifecycle ()
+  "Thread closure, buffer cleanup, and logout cancel active native requests."
+  (dolist (action '(closed cleanup logout))
+    (codex-test--with-verification-session
+      (codex--app-server-handle-server-request (codex-test--verification-message))
+      (codex-test--verification-approve scheduled)
+      (pcase action
+        ('closed (codex--app-server-thread-closed '((threadId . "verify-thread"))))
+        ('cleanup (codex--term-cleanup 'app-server))
+        ('logout (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+                   (codex--app-server-logout))))
+      (should (= (hash-table-count codex--app-server-verifications) 0))
+      (should-not (gethash 1 codex--app-server-pending-requests))
+      (should (seq-some (lambda (message)
+                          (equal (alist-get 'result message) '((action . "cancel")))) wire))
+      (should (seq-some (lambda (message)
+                          (equal (alist-get 'method message) "userVerification/cancel")) wire)))))
+
+(ert-deftest codex-test-app-server-verification-turn-resolution-keeps-independent ()
+  "Turn completion cancels only its own verification, retaining standalone work."
+  (codex-test--with-verification-session
+    (let ((message (codex-test--verification-message "turn-request")))
+      (setf (alist-get 'turnId (alist-get 'params message)) "turn")
+      (codex--app-server-handle-server-request message))
+    (codex-test--verification-approve scheduled)
+    (codex--app-server-handle-server-request (codex-test--verification-message "standalone"))
+    (codex--app-server-resolve-verification-turn
+     '((threadId . "verify-thread") (turn (id . "other-turn"))))
+    (should (= (hash-table-count codex--app-server-verifications) 2))
+    (codex--app-server-resolve-verification-turn
+     '((threadId . "verify-thread") (turn (id . "turn"))))
+    (should (= (hash-table-count codex--app-server-verifications) 1))
+    (should (gethash '("verify-thread" . "standalone") codex--app-server-verifications))
+    (should (equal (alist-get 'method (car wire)) "userVerification/cancel"))))
+
+(ert-deftest codex-test-app-server-verification-thread-switch-invalidates ()
+  "Switching threads cancels native work before installing the new identity."
+  (codex-test--with-verification-session
+    (codex--app-server-handle-server-request (codex-test--verification-message))
+    (codex-test--verification-approve scheduled)
+    (cl-letf (((symbol-function 'codex--app-server-transcript-header-metadata) #'ignore)
+              ((symbol-function 'codex--record-session-metadata) #'ignore)
+              ((symbol-function 'codex--app-server-render-header) #'ignore)
+              ((symbol-function 'codex--app-server-request-account) #'ignore)
+              ((symbol-function 'codex--app-server-refresh-model-cache) #'ignore)
+              ((symbol-function 'codex--app-server-send-skill-extra-roots) #'ignore)
+              ((symbol-function 'codex--app-server-refresh-mention-rows) #'ignore))
+      (codex--app-server-thread-started '((thread (id . "new-thread"))) t))
+    (should (equal codex--app-server-thread-id "new-thread"))
+    (should (= (hash-table-count codex--app-server-verifications) 0))
+    (should (equal (alist-get 'result (car wire)) '((action . "cancel"))))
+    (should (equal (alist-get 'method (cadr wire)) "userVerification/cancel"))))
+
+(ert-deftest codex-test-app-server-verification-death-invalidates-before-callbacks ()
+  "Process exit invalidates native callbacks before generic pending failure."
+  (codex-test--with-verification-session
+    (codex--app-server-handle-server-request (codex-test--verification-message))
+    (codex-test--verification-approve scheduled)
+    (let ((failed (symbol-function 'codex--app-server-fail-pending-requests)))
+      (cl-letf (((symbol-function 'process-buffer) (lambda (_process) (current-buffer)))
+                ((symbol-function 'process-live-p) (lambda (_process) nil))
+                ((symbol-function 'codex--app-server-fail-pending-requests)
+                 (lambda (message)
+                   (should (= (hash-table-count codex--app-server-verifications) 0))
+                   (should-not (gethash 1 codex--app-server-pending-requests))
+                   (funcall failed message))))
+        (codex--app-server-process-sentinel 'verification-source "exited\n")))
+    (should (= (length wire) 1))
+    (should-not (string-match-p "PRIVATE_" (buffer-string)))))
+
 (defmacro codex-test--with-memory-session (&rest body)
   "Run BODY with an isolated memory context and recorded protocol traffic."
   (declare (indent 0) (debug t))
@@ -2899,6 +3214,7 @@ the same request with {}."
       (puthash 1
                (lambda (_result error) (setq callback-error error))
                codex--app-server-pending-requests)
+      (setq-local codex--app-server-process 'fake)
       (cl-letf (((symbol-function 'process-buffer)
                  (lambda (_process) (current-buffer)))
                 ((symbol-function 'process-live-p) (lambda (_process) nil)))
@@ -5047,6 +5363,7 @@ not a `markdown-mode' metadata key/value block."
         (let ((process (start-process "codex-test-cat" buffer "cat")))
           (set-process-sentinel process #'ignore)
           (with-current-buffer buffer
+            (setq-local codex--app-server-process process)
             (setq-local codex--app-server-agent-items
                         (make-hash-table :test 'equal))
             (codex--app-server-process-filter

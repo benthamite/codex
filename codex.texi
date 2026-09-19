@@ -181,7 +181,9 @@ The @samp{app-server} backend renders conversation items the way the Codex CLI d
 
 When Codex requests approval, codex.el prompts with the same choices the CLI offers for that request.  For a command, the choices come from the request's @code{availableDecisions} -- approve once, approve and stop asking for this command (the execpolicy amendment), or decline -- so the decision sent back is always one the server accepts.  For a file change, the choices are apply once, apply for the rest of the session, decline, or cancel the turn.
 
-MCP elicitations offer session or permanent approval only when the server advertises those choices.  Structured forms support text, booleans, and single-choice enums, including defaults and skipping optional fields.  Quitting cancels the pending request.  Unsupported schemas and native biometric verification requests are canceled with an explicit notice; the native backend does not perform biometric verification.
+MCP elicitations offer session or permanent approval only when the server advertises those choices.  Structured forms support text, booleans, and single-choice enums, including defaults and skipping optional fields.  Quitting cancels the pending request.  Unsupported schemas are canceled with an explicit notice.
+
+Native identity verification requests show the server, title, and description with explicit @samp{Verify identity} and @samp{Cancel} choices.  Verification starts only after approval and uses the app server's local signing operation; availability depends on its account and platform support.  @samp{ESC} cancels a pending verification even outside a turn.  Resolved requests, account changes, thread changes, and disconnection invalidate pending approvals and discard late results.  Challenges and returned proofs are not shown or saved in the conversation.  This frontend does not enroll or delete identity credentials.
 
 
 Consecutive file reads append names to the existing @samp{Explored} line. This avoids retaining earlier copies of the whole line in undo history as the list grows.

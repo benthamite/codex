@@ -209,6 +209,12 @@ because per-tool hooks can be frequent."
 (defvar-local codex--app-server-current-turn-id nil
   "Current app-server turn id.")
 
+(defvar-local codex--app-server-verifications nil
+  "Pending identity verifications, keyed by thread and server request id.")
+
+(defvar codex--app-server-verification-prompt-active nil
+  "Non-nil while a native identity verification prompt is reading a choice.")
+
 (defvar-local codex--app-server-account nil
   "Active account as reported by `account/read'.
 An alist with `type', `email', and `planType', or nil when no usable
@@ -486,6 +492,7 @@ arguments."
                                 "--listen" codex-app-server-listen-url)
                           switches)))
     (with-current-buffer buffer
+      (codex--app-server-dismiss-verifications t)
       (when (bound-and-true-p codex--app-server-owned-image-files)
         (codex--app-server-cleanup-owned-image-files))
       (when (bound-and-true-p codex--app-server-stderr-buffer)
@@ -567,6 +574,7 @@ arguments."
 (cl-defmethod codex--term-kill-process ((_backend (eql app-server)) buffer)
   "Kill the app-server process in BUFFER."
   (with-current-buffer buffer
+    (codex--app-server-dismiss-verifications t)
     (when (process-live-p codex--app-server-process)
       (delete-process codex--app-server-process))
     (kill-buffer buffer)))
@@ -620,6 +628,7 @@ arguments."
 
 (cl-defmethod codex--term-cleanup ((_backend (eql app-server)))
   "Clean up app-server buffer-local state."
+  (codex--app-server-dismiss-verifications t)
   (codex--app-server-dismiss-questions)
   (codex--app-server-cancel-markdown-render)
   (codex--app-server-stop-status-timer)
@@ -644,9 +653,10 @@ arguments."
   (when-let* ((buffer (process-buffer process)))
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
-        (setq codex--app-server-pending-output
-              (concat codex--app-server-pending-output output))
-        (codex--app-server-drain-lines)))))
+        (when (eq process codex--app-server-process)
+          (setq codex--app-server-pending-output
+                (concat codex--app-server-pending-output output))
+          (codex--app-server-drain-lines))))))
 
 (defun codex--app-server-drain-lines ()
   "Process complete app-server JSON lines in the current buffer."
@@ -733,7 +743,8 @@ can arrive before this buffer has learned its thread id; both belong here."
   (let ((method (alist-get 'method message nil nil #'equal))
         (params (alist-get 'params message)))
     (when (equal method "serverRequest/resolved")
-      (codex--app-server-resolve-question params))
+      (codex--app-server-resolve-question params)
+      (codex--app-server-resolve-verification params))
     (when (codex--app-server-current-thread-notification-p params)
       (pcase method
         ("thread/started" (codex--app-server-thread-started params))
@@ -741,6 +752,7 @@ can arrive before this buffer has learned its thread id; both belong here."
         ("turn/started" (codex--app-server-turn-started params))
         ("turn/completed"
          (codex--app-server-resolve-question-turn params)
+         (codex--app-server-resolve-verification-turn params)
          (codex--app-server-turn-completed params))
         ("item/agentMessage/delta"
          (codex--app-server-render-agent-delta params))
@@ -880,6 +892,7 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
       (setq codex--app-server-current-reasoning-effort effort)
       (setq-local codex-reasoning-effort effort))
     (unless (equal codex--app-server-thread-id thread-id)
+      (codex--app-server-dismiss-verifications t)
       (setq codex--app-server-collaboration-mode nil
             codex--app-server-default-effort nil
             codex--app-server-mode-change-pending-p nil)
@@ -1473,6 +1486,7 @@ There is no CLI rendering to mirror here: the CLI's own TUI stays
 subscribed for as long as it runs, so its threads are never unloaded this
 way.  The wording below is therefore this client's own."
   (when (equal (alist-get 'threadId params) codex--app-server-thread-id)
+    (codex--app-server-dismiss-verifications t)
     (codex--app-server-dismiss-questions)
     (setq codex--app-server-thread-id nil)
     (codex--app-server-insert-status
@@ -1484,6 +1498,7 @@ The notification is only a change signal: its nullable fields do not
 identify the account and cannot distinguish an omitted value from logout.
 Read the authoritative account so `/status' neither keeps stale fields nor
 invents a partial account."
+  (codex--app-server-dismiss-verifications)
   (codex--app-server-request-account))
 
 (defun codex--app-server-plugin-mention-label (plugin)
@@ -2140,6 +2155,7 @@ Return non-nil only when a reset was requested."
 (defun codex--app-server-logout ()
   "Log out through `account/logout' after confirmation."
   (when (yes-or-no-p "Log out of Codex? ")
+    (codex--app-server-dismiss-verifications t)
     (codex--app-server-send-request
      "account/logout" '()
      (lambda (_result error)
@@ -4318,9 +4334,188 @@ when it follows the item bullet, which precedes START on the same line."
      (codex--app-server-send-response
       (alist-get 'id message) `((currentTimeAt . ,(floor (float-time))))))
     ("item/tool/requestUserInput" (codex--app-server-queue-question message))
+    ((and "mcpServer/elicitation/request"
+          (guard (equal (alist-get 'mode (alist-get 'params message))
+                        "openai/userVerification")))
+     (codex--app-server-queue-verification message))
     (_ (let ((buffer (current-buffer)))
          (run-at-time 0 nil #'codex--app-server-answer-server-request
                       buffer message)))))
+
+(defun codex--app-server-queue-verification (message)
+  "Register identity verification MESSAGE before deferring its approval UI."
+  (unless (hash-table-p codex--app-server-verifications)
+    (setq codex--app-server-verifications (make-hash-table :test 'equal)))
+  (let* ((params (alist-get 'params message))
+         (key (cons (alist-get 'threadId params) (alist-get 'id message)))
+         (record (list :key key :process codex--app-server-process
+                       :callbacks codex--app-server-pending-requests
+                       :params params :turn (alist-get 'turnId params)
+                       :timer nil :native-id nil :finished nil)))
+    (when-let* ((old (gethash key codex--app-server-verifications)))
+      (codex--app-server-cancel-verification old))
+    (puthash key record codex--app-server-verifications)
+    (if (codex--app-server-verification-current-p record)
+        (setf (plist-get record :timer)
+              (run-at-time 0 nil #'codex--app-server-prompt-verification
+                           (current-buffer) record))
+      (codex--app-server-cancel-verification record t))))
+
+(defun codex--app-server-verification-current-p (record)
+  "Return non-nil if RECORD still belongs to this live connection and thread."
+  (and (not (plist-get record :finished))
+       (hash-table-p codex--app-server-verifications)
+       (eq record (gethash (plist-get record :key)
+                          codex--app-server-verifications))
+       (eq (plist-get record :process) codex--app-server-process)
+       (process-live-p codex--app-server-process)
+       (equal (car (plist-get record :key)) codex--app-server-thread-id)))
+
+(defun codex--app-server-prompt-verification (buffer record)
+  "Offer Verify and approve or Cancel for RECORD in its original BUFFER."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when (codex--app-server-verification-current-p record)
+        (if (or codex--app-server-verification-prompt-active
+                (active-minibuffer-window))
+            (setf (plist-get record :timer)
+                  (run-at-time 0.1 nil #'codex--app-server-prompt-verification
+                               buffer record))
+          (let ((codex--app-server-verification-prompt-active t))
+            (condition-case nil
+                (let ((choice (codex--app-server-read-verification
+                               (plist-get record :params))))
+                  (when (codex--app-server-verification-current-p record)
+                    (if (eq choice ?y)
+                        (codex--app-server-start-verification record)
+                      (codex--app-server-cancel-verification record t))))
+              (quit (codex--app-server-cancel-verification record t))
+              (error (codex--app-server-verification-failed record)))))))))
+
+(defun codex--app-server-read-verification (params)
+  "Validate PARAMS and return the explicit native approval choice."
+  (let ((title (alist-get 'title params))
+        (description (alist-get 'description params))
+        (server (alist-get 'serverName params))
+        (challenge (alist-get 'challenge params)))
+    (unless (and (stringp title) (> (string-bytes title) 0)
+                 (<= (string-bytes title) 256)
+                 (stringp description) (<= (string-bytes description) 4096)
+                 (stringp server) (stringp challenge)
+                 (not (string-empty-p challenge)))
+      (error "Invalid identity verification request"))
+    (car (read-multiple-choice
+          (format "%s\nServer: %s\n%s" title server description)
+          '((?y "Verify and approve" "Approve this verification only")
+            (?c "Cancel this request" "Cancel this request"))))))
+
+(defun codex--app-server-start-verification (record)
+  "Start the explicitly approved local signing operation for RECORD."
+  (let ((buffer (current-buffer))
+        (params (plist-get record :params)))
+    ;; Reserve the identity before send-json can reenter through a filter.
+    ;; send-request allocates this exact next id before touching the transport.
+    (setf (plist-get record :native-id) (1+ codex--app-server-next-request-id))
+    (codex--app-server-send-request
+     "userVerification/verify"
+     `((challenge . ,(alist-get 'challenge params))
+       (title . ,(alist-get 'title params))
+       (description . ,(alist-get 'description params)))
+     (lambda (result error)
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (codex--app-server-complete-verification record result error)))))))
+
+(defun codex--app-server-complete-verification (record result error)
+  "Complete RECORD with RESULT or ERROR without exposing private payloads."
+  (condition-case nil
+      (when (codex--app-server-verification-current-p record)
+        (let ((proof (and (not error) (alist-get 'proof result))))
+          (if (codex--app-server-verification-proof-p proof)
+              (let ((id (cdr (plist-get record :key))))
+                (codex--app-server-forget-verification record)
+                (codex--app-server-send-response
+                 id `((action . "accept") (content . ,proof)))
+                (codex--app-server-insert-status "Identity verification completed"))
+            (codex--app-server-verification-failed record))))
+    (error (codex--app-server-verification-failed record))))
+
+(defun codex--app-server-verification-proof-p (proof)
+  "Return non-nil if PROOF contains exactly the two nonempty proof strings."
+  (and (proper-list-p proof) (= (length proof) 2)
+       (seq-every-p (lambda (entry)
+                      (and (consp entry)
+                           (memq (car entry) '(credentialId signature))
+                           (stringp (cdr entry))
+                           (not (string-empty-p (cdr entry)))))
+                    proof)
+       (assq 'credentialId proof) (assq 'signature proof)))
+
+(defun codex--app-server-verification-failed (record)
+  "Cancel RECORD and report failure without rendering response or error data."
+  (codex--app-server-cancel-verification record t)
+  (codex--app-server-insert-status "Identity verification failed or unavailable"))
+
+(defun codex--app-server-forget-verification (record)
+  "Invalidate RECORD and remove its timer, callback and private parameters."
+  (setf (plist-get record :finished) t)
+  (when (and (hash-table-p codex--app-server-verifications)
+             (eq record (gethash (plist-get record :key)
+                                codex--app-server-verifications)))
+    (remhash (plist-get record :key) codex--app-server-verifications))
+  (when (timerp (plist-get record :timer))
+    (cancel-timer (plist-get record :timer)))
+  (when (and (plist-get record :native-id)
+             (hash-table-p (plist-get record :callbacks)))
+    (remhash (plist-get record :native-id) (plist-get record :callbacks)))
+  (setf (plist-get record :timer) nil
+        (plist-get record :params) nil
+        (plist-get record :callbacks) nil))
+
+(defun codex--app-server-cancel-verification (record &optional respond)
+  "Cancel RECORD's native operation and, when RESPOND is non-nil, elicitation."
+  (unless (plist-get record :finished)
+    (codex--app-server-forget-verification record)
+    (when (and (eq (plist-get record :process) codex--app-server-process)
+               (process-live-p codex--app-server-process))
+      (when-let* ((id (plist-get record :native-id)))
+        (condition-case nil
+            (codex--app-server-send-request
+             "userVerification/cancel" `((requestId . ,id))
+             (lambda (_result _error) nil))
+          (error (message "Could not cancel identity verification"))))
+      (when respond
+        (condition-case nil
+            (codex--app-server-send-response
+             (cdr (plist-get record :key)) '((action . "cancel")))
+          (error (message "Could not send identity verification cancellation")))))
+    t))
+
+(defun codex--app-server-dismiss-verifications (&optional respond)
+  "Cancel pending native verifications, optionally RESPOND to elicitations."
+  (when (hash-table-p codex--app-server-verifications)
+    (let ((records (hash-table-values codex--app-server-verifications)))
+      (dolist (record records)
+        (codex--app-server-cancel-verification record respond))
+      (and records t))))
+
+(defun codex--app-server-resolve-verification (params)
+  "Invalidate the already resolved elicitation identified by PARAMS."
+  (when (hash-table-p codex--app-server-verifications)
+    (when-let* ((record (gethash (cons (alist-get 'threadId params)
+                                      (alist-get 'requestId params))
+                                codex--app-server-verifications)))
+      (codex--app-server-cancel-verification record))))
+
+(defun codex--app-server-resolve-verification-turn (params)
+  "Invalidate pending native verifications for the completed turn in PARAMS."
+  (when (hash-table-p codex--app-server-verifications)
+    (let ((thread (or (alist-get 'threadId params) codex--app-server-thread-id))
+          (turn (alist-get 'id (alist-get 'turn params))))
+      (dolist (record (hash-table-values codex--app-server-verifications))
+        (when (and turn (equal turn (plist-get record :turn))
+                   (equal thread (car (plist-get record :key))))
+          (codex--app-server-cancel-verification record))))))
 
 (defun codex--app-server-answer-server-request (buffer message)
   "Answer app-server MESSAGE in BUFFER."
@@ -5792,8 +5987,9 @@ returns untracked files, verified against a freshly created one."
       (codex--app-server-send-turn-input submission))))
 
 (defun codex--app-server-interrupt-turn ()
-  "Interrupt the active app-server turn."
-  (if (and codex--app-server-thread-id codex--app-server-current-turn-id)
+  "Cancel pending identity verifications and interrupt the active turn."
+  (let ((canceled (codex--app-server-dismiss-verifications t)))
+    (if (and codex--app-server-thread-id codex--app-server-current-turn-id)
       (codex--app-server-send-request
        "turn/interrupt"
        `((threadId . ,codex--app-server-thread-id)
@@ -5802,7 +5998,8 @@ returns untracked files, verified against a freshly created one."
          (when error
            (codex--app-server-insert-status
             (format "Codex interrupt failed: %S" error)))))
-    (message "No active Codex turn to interrupt")))
+      (unless canceled
+        (message "No active Codex turn to interrupt")))))
 
 (defun codex--app-server-send-request (method params callback)
   "Send app-server METHOD with PARAMS and CALLBACK."
@@ -5923,7 +6120,9 @@ The Codex CLI shows one blank line between successive output items."
   (when-let* ((buffer (process-buffer process)))
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
-        (unless (process-live-p process)
+        (when (and (eq process codex--app-server-process)
+                   (not (process-live-p process)))
+          (codex--app-server-dismiss-verifications)
           (let ((message (format "Codex app-server %s"
                                  (string-trim event))))
             (setq codex--app-server-turn-active-p nil
