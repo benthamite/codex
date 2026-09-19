@@ -252,8 +252,8 @@ Used to name a background terminal when rendering stdin sent to it, since
 (defvar-local codex--app-server-pending-mentions nil
   "Alist of (NAME . PATH) file mentions to attach to the next turn input.")
 
-(defvar-local codex--app-server-realtime-role nil
-  "Speaker role of the realtime transcript segment being rendered.")
+(defvar-local codex--app-server-realtime-segments nil
+  "Alist of speaker roles and unfinished transcript boundary markers.")
 
 (defvar-local codex--app-server-history-loading-p nil
   "Non-nil while resumed or forked history is being loaded.")
@@ -725,9 +725,10 @@ can arrive before this buffer has learned its thread id; both belong here."
           (concat "⚠ This request requires additional safety checks, "
                   "some tool calls might take extra time")))
         ("thread/realtime/started"
+         (codex--app-server-reset-realtime-segments)
          (codex--app-server-insert-status "Realtime session started"))
         ("thread/realtime/closed"
-         (setq codex--app-server-realtime-role nil)
+         (codex--app-server-reset-realtime-segments)
          (codex--app-server-insert-status "Realtime session closed"))
         ("thread/realtime/error"
          (codex--app-server-insert-status
@@ -735,7 +736,7 @@ can arrive before this buffer has learned its thread id; both belong here."
         ("thread/realtime/transcript/delta"
          (codex--app-server-render-realtime-transcript params))
         ("thread/realtime/transcript/done"
-         (codex--app-server-realtime-transcript-done))
+         (codex--app-server-realtime-transcript-done params))
         ("thread/realtime/itemAdded"
          (codex--app-server-render-history-item (alist-get 'item params)))
         ((or "error" "configWarning" "deprecationNotice" "guardianWarning"
@@ -3069,20 +3070,61 @@ once the message completes."
     (codex--app-server-append-message "\n\n" 'codex-app-server-reasoning-face)))
 
 (defun codex--app-server-render-realtime-transcript (params)
-  "Render a realtime transcript delta from PARAMS under a Voice label."
+  "Render the speaker's realtime transcript delta from PARAMS."
   (let ((delta (alist-get 'delta params))
         (role (alist-get 'role params)))
-    (when delta
-      (unless (equal role codex--app-server-realtime-role)
-        (setq codex--app-server-realtime-role role)
-        (codex--app-server-open-message
-         (format "%s(%s) " codex--app-server-bullet (or role "?"))))
-      (codex--app-server-append-message delta))))
+    (when (and (stringp delta) (not (string-empty-p delta)))
+      (let ((segment (cdr (assoc role codex--app-server-realtime-segments))))
+        (unless segment
+          (let ((start (copy-marker (codex--app-server-output-point))))
+            (codex--app-server-open-message
+             (codex--app-server-realtime-prefix role))
+            (setq segment
+                  (cons start (copy-marker (codex--app-server-output-point))))
+            (set-marker-insertion-type start t)
+            (push (cons role segment) codex--app-server-realtime-segments)))
+        (let ((codex--app-server-output-marker (copy-marker (cdr segment) t)))
+          (unwind-protect
+              (progn
+                (codex--app-server-append-message delta)
+                (set-marker (cdr segment) codex--app-server-output-marker))
+            (set-marker codex--app-server-output-marker nil)))))))
 
-(defun codex--app-server-realtime-transcript-done ()
-  "Finish the current realtime transcript segment."
-  (setq codex--app-server-realtime-role nil)
-  (codex--app-server-ensure-trailing-newline))
+(defun codex--app-server-realtime-prefix (role)
+  "Return the transcript prefix for speaker ROLE."
+  (if (equal role "user")
+      codex--app-server-user-prefix
+    codex--app-server-bullet))
+
+(defun codex--app-server-realtime-transcript-done (params)
+  "Finalize PARAMS's speaker transcript using its authoritative text."
+  (let* ((role (alist-get 'role params))
+         (text (alist-get 'text params))
+         (entry (assoc role codex--app-server-realtime-segments)))
+    (when entry
+      (let ((segment (cdr entry))
+            (inhibit-read-only t))
+        (delete-region (car segment) (cdr segment))
+        (when (= (car segment) (point-min))
+          (save-excursion
+            (goto-char (point-min))
+            (while (and (< (point) (codex--app-server-output-point))
+                        (eq (char-after) ?\n))
+              (delete-char 1))))
+        (set-marker (car segment) nil)
+        (set-marker (cdr segment) nil))
+      (setq codex--app-server-realtime-segments
+            (delq entry codex--app-server-realtime-segments)))
+    (when (and (stringp text) (not (string-blank-p text)))
+      (codex--app-server-insert-message
+       (codex--app-server-realtime-prefix role) text))))
+
+(defun codex--app-server-reset-realtime-segments ()
+  "Forget unfinished realtime segments, preserving their visible text."
+  (dolist (entry codex--app-server-realtime-segments)
+    (set-marker (cadr entry) nil)
+    (set-marker (cddr entry) nil))
+  (setq codex--app-server-realtime-segments nil))
 
 (defun codex-app-server-realtime-start ()
   "Start a text-output realtime session in the current Codex thread."

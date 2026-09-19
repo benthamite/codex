@@ -3435,7 +3435,7 @@ the same request with {}."
     (codex--app-server-handle-message
      '((method . "thread/realtime/transcript/delta")
        (params (role . "assistant") (delta . "hello there"))))
-    (should (string-match-p "(assistant)" (buffer-string)))
+    (should (string-match-p "• hello there" (buffer-string)))
     (should (string-match-p "hello there" (buffer-string)))
     (codex--app-server-handle-message
      '((method . "thread/realtime/error") (params (message . "mic lost"))))
@@ -7297,3 +7297,100 @@ the menu, exactly as `@' opens the file equivalent."
                (lambda (&rest _) "one")))
       (codex--app-server-launch-fork-session "abc-123")
       (should (equal recorded '(fork-session "abc-123"))))))
+
+(ert-deftest codex-test-app-server-realtime-final-text-is-authoritative ()
+  "Correct partial text and preserve distinct final-only captions."
+  (with-temp-buffer
+    (codex--app-server-setup-input-region)
+    (codex--app-server-render-realtime-transcript
+     '((role . "assistant") (delta . "WRONG partial")))
+    (codex--app-server-handle-message
+     '((method . "thread/realtime/transcript/done")
+       (params (role . "assistant") (text . "Correct final"))))
+    (dolist (text '("Hello" "Hello again"))
+      (codex--app-server-realtime-transcript-done
+       `((role . "assistant") (text . ,text))))
+    (should (equal (buffer-substring-no-properties
+                    (point-min) (codex--app-server-output-point))
+                   "• Correct final\n\n• Hello\n\n• Hello again"))
+    (should-not codex--app-server-realtime-segments)))
+
+(ert-deftest codex-test-app-server-realtime-interleaving-completion-order ()
+  "Finalize speakers independently in either completion order."
+  (dolist (roles '(("user" "assistant") ("assistant" "user")))
+    (with-temp-buffer
+      (codex--app-server-setup-input-region)
+      (dolist (role '("user" "assistant" "user" "assistant"))
+        (codex--app-server-render-realtime-transcript
+         `((role . ,role) (delta . "partial"))))
+      (dolist (role roles)
+        (codex--app-server-realtime-transcript-done
+         `((role . ,role) (text . ,(concat role " final")))))
+      (should (equal
+               (buffer-substring-no-properties
+                (point-min) (codex--app-server-output-point))
+               (mapconcat
+                (lambda (role)
+                  (concat (if (equal role "user") "› " "• ") role " final"))
+                roles "\n\n")))
+      (should-not codex--app-server-realtime-segments))))
+
+(ert-deftest codex-test-app-server-realtime-preserves-unrelated-output ()
+  "Streaming and correction leave ordinary output and typed input intact."
+  (with-temp-buffer
+    (codex--app-server-setup-input-region)
+    (codex--app-server-replace-input "Unsent draft")
+    (codex--app-server-render-realtime-transcript
+     '((role . "assistant") (delta . "wrong")))
+    (codex--app-server-insert-message "• " "Ordinary answer")
+    (codex--app-server-insert-status "Status survives")
+    (codex--app-server-render-realtime-transcript
+     '((role . "assistant") (delta . " continuation")))
+    (should (string-match-p "wrong continuation" (buffer-string)))
+    (should-not (string-match-p "Status survives continuation" (buffer-string)))
+    (codex--app-server-realtime-transcript-done
+     '((role . "assistant") (text . "Correct\n**final**")))
+    (let ((text (buffer-substring-no-properties
+                 (point-min) (codex--app-server-output-point))))
+      (should (string-match-p
+               "Ordinary answer\\(?:.\\|\n\\)*Status survives\\(?:.\\|\n\\)*Correct\n\\*\\*final\\*\\*"
+               text))
+      (should-not (string-match-p "wrong\\|continuation" text)))
+    (should (string-match-p "› Unsent draft" (buffer-substring-no-properties
+                                   (codex--app-server-output-point)
+                                   (point-max))))))
+
+(ert-deftest codex-test-app-server-realtime-empty-final-removes-only-its-role ()
+  "An empty final removes its provisional caption, preserving the other role."
+  (with-temp-buffer
+    (codex--app-server-setup-input-region)
+    (codex--app-server-render-realtime-transcript
+     '((role . "user") (delta . "Discard me")))
+    (codex--app-server-render-realtime-transcript
+     '((role . "assistant") (delta . "Keep me")))
+    (codex--app-server-realtime-transcript-done
+     '((role . "user") (text . "")))
+    (should-not (string-match-p "Discard me" (buffer-string)))
+    (should (string-match-p "Keep me" (buffer-string)))
+    (codex--app-server-realtime-transcript-done
+     '((role . "assistant") (text . "Kept")))
+    (should (equal (string-trim (buffer-substring-no-properties
+                                (point-min) (codex--app-server-output-point)))
+                   "• Kept"))))
+
+(ert-deftest codex-test-app-server-realtime-lifecycle-preserves-unfinished-text ()
+  "Closing or restarting preserves captions but discards stale marker state."
+  (dolist (method '("thread/realtime/closed" "thread/realtime/started"))
+    (with-temp-buffer
+      (codex--app-server-setup-input-region)
+      (codex--app-server-render-realtime-transcript
+       '((role . "assistant") (delta . "Earlier caption")))
+      (let ((segment (cdar codex--app-server-realtime-segments)))
+        (codex--app-server-handle-message `((method . ,method) (params)))
+        (should-not (marker-buffer (car segment)))
+        (should-not (marker-buffer (cdr segment))))
+      (codex--app-server-realtime-transcript-done
+       '((role . "assistant") (text . "New final")))
+      (should (string-match-p "Earlier caption" (buffer-string)))
+      (should (string-match-p "New final" (buffer-string)))
+      (should-not codex--app-server-realtime-segments))))
