@@ -75,6 +75,8 @@ In the native backend, =/plan= selects the server's Plan preset and =/default= r
 The native backend displays authentication-recovery start and completion messages, and warns when strict automatic approval review requires additional safety checks.  These notices follow the active thread; notifications for another thread do not appear in its buffer.  When Codex requests the client's clock for timed actions, the native backend replies immediately with whole Unix seconds without an approval prompt.
 
 
+The native =/memories= controls read the server's effective settings.  Toggle use of memories in new threads and generation of memories, then select Save.  A generation change also updates the current thread.  Overriding configuration is reported and read back before applying the effective generation setting; a failed thread update is reported separately from a successful configuration save.  Reset all memories clears local memory files and summaries only after confirmation, leaving existing conversations intact.  If memories are disabled, the command instead offers to enable them for new threads.
+
 New sessions started with ~codex~ or ~codex-new-instance~ use the global default value of ~codex-terminal-backend~.  Existing Codex session buffers keep their actual backend in a buffer-local value so commands that act on that buffer continue to dispatch correctly.
 
 When an =app-server= session connects, codex.el renders the same startup banner shape as the terminal TUI: Codex version, model, reasoning effort, service tier, working directory, and the standard keymap tip.  App-server notifications are rendered only when they belong to the buffer's current thread, so sub-agent or side-thread events do not leak command output into the parent thread's buffer.

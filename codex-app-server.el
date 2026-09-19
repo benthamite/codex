@@ -612,14 +612,34 @@ arguments."
   "Parse and handle one app-server JSON LINE.
 JSON null and false decode as nil rather than truthy keyword sentinels.
 This lets optional fields and protocol booleans flow naturally through
-`alist-get', `append', predicates, and other handler operations."
+`alist-get', `append', predicates, and other handler operations.  Nullable
+memory configuration switches retain null so their defaults differ from false."
   (condition-case err
       (codex--app-server-handle-message
-       (json-parse-string line :object-type 'alist :array-type 'list
-                          :null-object nil :false-object nil))
+       (codex--app-server-decode-line line))
     (error
      (codex--app-server-insert-status
       (format "Malformed app-server message: %s" (error-message-string err))))))
+
+(defun codex--app-server-decode-line (line)
+  "Decode JSON LINE, preserving nullable memory switches in config responses."
+  (let* ((message (json-parse-string line :object-type 'alist :array-type 'list
+                                   :null-object nil :false-object nil))
+         (result (alist-get 'result message))
+         (config (and (listp result) (alist-get 'config result)))
+         (memories (and (listp config) (alist-get 'memories config)))
+         (keys '(use_memories generate_memories)))
+    (when (and (listp memories)
+               (seq-some (lambda (key) (and (assq key memories)
+                                           (null (alist-get key memories)))) keys))
+      (let* ((raw (json-parse-string line :object-type 'alist :array-type 'list
+                                    :null-object :json-null :false-object nil))
+             (raw-memories (alist-get 'memories
+                                     (alist-get 'config (alist-get 'result raw)))))
+        (dolist (key keys)
+          (when (eq (alist-get key raw-memories) :json-null)
+            (setf (alist-get key memories) :json-null)))))
+    message))
 
 (defun codex--app-server-handle-message (message)
   "Handle one decoded app-server MESSAGE."
@@ -1009,11 +1029,7 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
                    "thread/archive" nil "Thread archived"))
       ("/unarchive" (codex--app-server-unarchive-thread))
       ("/goal-clear" (codex--app-server-clear-goal))
-      ("/memories" (let ((mode (completing-read "Memory mode: "
-                                                '("enabled" "disabled") nil t)))
-                     (codex--app-server-thread-request
-                      "thread/memoryMode/set" `((mode . ,mode))
-                      (format "Memory mode: %s" mode))))
+      ("/memories" (codex--app-server-open-memories))
       ("/personality" (let ((personality (completing-read
                                           "Personality: "
                                           '("friendly" "pragmatic" "none") nil t)))
@@ -1822,6 +1838,180 @@ the same set the CLI menu shows instead of waiting on two requests."
       (if error
           (format "Experimental runtime update failed: %S" error)
         (format "%s %s" name (if enabled "enabled" "disabled")))))))
+
+(defun codex--app-server-open-memories ()
+  "Discover memory support before opening the memory settings controls."
+  (codex--app-server-read-memory-feature
+   (list :thread-id codex--app-server-thread-id
+         :cwd (codex--app-server-current-cwd))))
+
+(defun codex--app-server-read-memory-feature (context &optional cursor)
+  "Read memory feature state for CONTEXT, continuing from optional CURSOR."
+  (codex--app-server-send-request
+   "experimentalFeature/list"
+   `((threadId . ,(plist-get context :thread-id))
+     ,@(when cursor `((cursor . ,cursor))))
+   (lambda (result error)
+     (when (equal (plist-get context :thread-id) codex--app-server-thread-id)
+       (if error
+           (codex--app-server-insert-status
+            (format "Memory feature discovery failed: %S" error))
+         (let ((feature (cl-find "memories" (append (alist-get 'data result) nil)
+                                 :key (lambda (entry) (alist-get 'name entry))
+                                 :test #'equal))
+               (next (alist-get 'nextCursor result)))
+           (cond
+            (feature
+             (if (eq (alist-get 'enabled feature) t)
+                 (codex--app-server-read-memory-settings context)
+               (run-at-time 0 nil #'codex--app-server-show-memory-controls
+                            (current-buffer) context nil)))
+            ((and next (not (equal next cursor)))
+             (codex--app-server-read-memory-feature context next))
+            (t (codex--app-server-insert-status
+                "Server did not advertise memory feature state")))))))))
+
+(defun codex--app-server-enable-memories ()
+  "Offer to enable memories for future threads without changing this thread."
+  (when (yes-or-no-p "Enable memories for new threads? This thread is unchanged. ")
+    (codex--app-server-write-config
+     '(((keyPath . "features.memories") (value . t) (mergeStrategy . "replace")))
+     (lambda (result error)
+       (codex--app-server-insert-status
+        (cond
+         (error (format "Failed to save memory enablement: %S" error))
+         ((equal (alist-get 'status result) "ok")
+          "Memories enabled for new threads; this thread is unchanged")
+         (t (format "Memory enablement saved but overridden: %s"
+                    (codex--app-server-config-write-warning result)))))))))
+
+(defun codex--app-server-show-memory-controls (buffer context enabled)
+  "Show memory controls in BUFFER for CONTEXT when its thread is still current.
+ENABLED selects settings controls instead of the feature-enable prompt."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when (equal (plist-get context :thread-id) codex--app-server-thread-id)
+        (if enabled
+            (codex--app-server-memory-settings-menu context)
+          (codex--app-server-enable-memories))))))
+
+(defun codex--app-server-config-write-warning (result)
+  "Return the server's overridden-config explanation from RESULT."
+  (or (alist-get 'message (alist-get 'overriddenMetadata result))
+      (format "%S" (alist-get 'status result))))
+
+(defun codex--app-server-read-memory-settings (context &optional saved)
+  "Read effective memory configuration for CONTEXT.
+When SAVED is non-nil, reconcile an overridden write instead of opening
+controls."
+  (codex--app-server-send-request
+   "config/read"
+   `((cwd . ,(plist-get context :cwd)) (includeLayers . :json-false))
+   (lambda (result error)
+     (if (or error (not (assq 'config result))
+             (and saved (not (assq 'memories (alist-get 'config result)))))
+         (codex--app-server-insert-status
+          (format "%s: %S"
+                  (if saved "Memory settings saved, but effective settings could not be read"
+                    "Memory settings could not be read")
+                  (or error "Response omitted effective memory configuration")))
+       (let* ((memories (alist-get 'memories (alist-get 'config result)))
+              (use (codex--app-server-memory-config-value
+                    'use_memories memories))
+              (generate (codex--app-server-memory-config-value
+                         'generate_memories memories)))
+         (if saved
+             (codex--app-server-apply-memory-generation context use generate t)
+           (when (equal (plist-get context :thread-id) codex--app-server-thread-id)
+             (run-at-time 0 nil #'codex--app-server-show-memory-controls
+                          (current-buffer)
+                          (append context (list :use use :generate generate))
+                          t))))))))
+
+(defun codex--app-server-memory-config-value (key memories)
+  "Read boolean KEY from MEMORIES, using Codex's true default for null or absence."
+  (if (or (not (assq key memories)) (eq (alist-get key memories) :json-null))
+      t
+    (eq (alist-get key memories) t)))
+
+(defun codex--app-server-memory-settings-menu (context)
+  "Edit memory settings from CONTEXT, saving only on explicit selection."
+  (let ((use (plist-get context :use))
+        (generate (plist-get context :generate))
+        done)
+    (while (not done)
+      (pcase (car (read-multiple-choice
+                   (format "Memories: use %s, generate %s. "
+                           (if use "on" "off") (if generate "on" "off"))
+                   '((?u "Use memories" "Toggle use in new threads")
+                     (?g "Generate memories" "Toggle generation, including this thread")
+                     (?s "Save" "Save both settings")
+                     (?r "Reset all memories" "Clear local memory files and summaries")
+                     (?q "Cancel" "Keep settings unchanged"))))
+        (?u (setq use (not use)))
+        (?g (setq generate (not generate)))
+        (?s (setq done t)
+            (codex--app-server-save-memory-settings context use generate))
+        (?r (when (codex--app-server-reset-memories) (setq done t)))
+        (?q (setq done t))))))
+
+(defun codex--app-server-save-memory-settings (context use generate)
+  "Persist memory USE and GENERATE settings originally read in CONTEXT."
+  (if (and (eq use (plist-get context :use))
+           (eq generate (plist-get context :generate)))
+      (codex--app-server-insert-status "Memory settings unchanged")
+    (codex--app-server-write-config
+     `(((keyPath . "memories.use_memories")
+        (value . ,(codex--app-server-json-boolean use)) (mergeStrategy . "replace"))
+       ((keyPath . "memories.generate_memories")
+        (value . ,(codex--app-server-json-boolean generate)) (mergeStrategy . "replace")))
+     (lambda (result error)
+       (cond
+        (error (codex--app-server-insert-status
+                (format "Failed to save memory settings: %S" error)))
+        ((equal (alist-get 'status result) "ok")
+         (codex--app-server-apply-memory-generation context use generate))
+        (t
+         (codex--app-server-insert-status
+          (format "Memory settings saved but overridden: %s"
+                  (codex--app-server-config-write-warning result)))
+         (codex--app-server-read-memory-settings context t)))))))
+
+(defun codex--app-server-apply-memory-generation (context use generate &optional overridden)
+  "Apply effective GENERATE state from CONTEXT and report USE state.
+When OVERRIDDEN is non-nil, describe effective rather than requested settings."
+  (let ((summary (format "%s memory settings: use %s (new threads), generate %s"
+                         (if overridden "Effective" "Saved")
+                         (if use "on" "off") (if generate "on" "off")))
+        (thread-id (plist-get context :thread-id)))
+    (cond
+     ((eq generate (plist-get context :generate))
+      (codex--app-server-insert-status summary))
+     ((or (null thread-id) (not (equal thread-id codex--app-server-thread-id)))
+      (codex--app-server-insert-status
+       (concat summary "; original thread is no longer displayed, so it was not updated")))
+     (t
+      (codex--app-server-send-request
+       "thread/memoryMode/set"
+       `((threadId . ,thread-id) (mode . ,(if generate "enabled" "disabled")))
+       (lambda (_result error)
+         (codex--app-server-insert-status
+          (if error
+              (format "Memory settings saved, but current-thread update failed: %S" error)
+            (concat summary "; current thread updated")))))))))
+
+(defun codex--app-server-reset-memories ()
+  "Confirm and clear local memories while leaving existing threads intact.
+Return non-nil only when a reset was requested."
+  (when (yes-or-no-p
+         "Reset all local memory files and summaries? Existing threads stay intact. ")
+    (codex--app-server-send-request
+     "memory/reset" nil
+     (lambda (_result error)
+       (codex--app-server-insert-status
+        (if error (format "Failed to reset memories: %S" error)
+          "Reset local memories"))))
+    t))
 
 (defun codex--app-server-read-config ()
   "Read the effective Codex configuration through `config/read'."

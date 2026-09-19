@@ -8,6 +8,222 @@
 (require 'ert)
 (require 'codex)
 
+(defmacro codex-test--with-memory-session (&rest body)
+  "Run BODY with an isolated memory context and recorded protocol traffic."
+  (declare (indent 0) (debug t))
+  `(with-temp-buffer
+     (setq-local codex--app-server-thread-id "memory-thread")
+     (setq-local codex--buffer-directory "/tmp/memory-fixture")
+     (let ((context (list :thread-id "memory-thread" :cwd "/tmp/memory-fixture"
+                          :use t :generate t))
+           requests statuses)
+       (cl-letf (((symbol-function 'codex--app-server-send-request)
+                  (lambda (method params callback)
+                    (setq requests (append requests
+                                           (list (list method params callback))))))
+                 ((symbol-function 'codex--app-server-insert-status)
+                  (lambda (text) (push text statuses))))
+         ,@body))))
+
+(ert-deftest codex-test-app-server-memories-discovery-paginates-and-reads-config ()
+  "Feature discovery follows cursors, then reads effective directory settings."
+  (codex-test--with-memory-session
+    (let (displayed scheduled)
+      (cl-letf (((symbol-function 'codex--app-server-memory-settings-menu)
+                 (lambda (state) (setq displayed state)))
+                ((symbol-function 'run-at-time)
+                 (lambda (_time _repeat function &rest args)
+                   (setq scheduled (cons function args)))))
+        (codex--app-server-dispatch-slash "/memories")
+        (should (equal (caar requests) "experimentalFeature/list"))
+        (should (equal (alist-get 'threadId (nth 1 (car requests))) "memory-thread"))
+        (funcall (nth 2 (car requests)) (list (cons 'nextCursor "next")) nil)
+        (should (equal (alist-get 'cursor (nth 1 (cadr requests))) "next"))
+        (funcall (nth 2 (cadr requests))
+                 (list (cons 'data (vector (list (cons 'name "memories")
+                                                 (cons 'enabled t))))) nil)
+        (should (equal (car (nth 2 requests)) "config/read"))
+        (should (equal (alist-get 'cwd (nth 1 (nth 2 requests)))
+                       "/tmp/memory-fixture"))
+        (funcall (nth 2 (nth 2 requests))
+                 (list (cons 'config
+                             (list (cons 'memories (list (cons 'use_memories nil))))))
+                 nil)
+        (should-not displayed)
+        (apply (car scheduled) (cdr scheduled))
+        (should-not (plist-get displayed :use))
+        (should (plist-get displayed :generate))))))
+
+(ert-deftest codex-test-app-server-memories-disabled-enables-modern-feature-only ()
+  "Enabling memories persists only the modern key and never updates this thread."
+  (codex-test--with-memory-session
+    (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+      (codex--app-server-enable-memories))
+    (let* ((params (nth 1 (car requests)))
+           (edits (append (alist-get 'edits params) nil)))
+      (should (equal (caar requests) "config/batchWrite"))
+      (should (= (length edits) 1))
+      (should (equal (alist-get 'keyPath (car edits)) "features.memories"))
+      (should (eq (alist-get 'value (car edits)) t)))
+    (funcall (nth 2 (car requests)) (list (cons 'status "ok")) nil)
+    (should (= (length requests) 1))
+    (should (string-match-p "new threads.*unchanged" (car statuses)))))
+
+(ert-deftest codex-test-app-server-memories-wire-null-differs-from-false ()
+  "The observed config/read shape defaults null to true but preserves false."
+  (codex-test--with-memory-session
+    (let (displayed scheduled parsed)
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_time _repeat function &rest args)
+                   (setq scheduled (cons function args))))
+                ((symbol-function 'codex--app-server-memory-settings-menu)
+                 (lambda (state) (setq displayed state))))
+        (codex--app-server-read-memory-settings
+         (list :thread-id "memory-thread" :cwd "/tmp/memory-fixture"))
+        (cl-letf (((symbol-function 'codex--app-server-handle-message)
+                   (lambda (message)
+                     (setq parsed message)
+                     (funcall (nth 2 (car requests)) (alist-get 'result message) nil))))
+          (codex--app-server-handle-line
+           "{\"id\":2,\"result\":{\"config\":{\"model\":null,\"memories\":{\"use_memories\":false,\"generate_memories\":null,\"dedicated_tools\":null}},\"layers\":null}}"))
+        (apply (car scheduled) (cdr scheduled))
+        (should-not (plist-get displayed :use))
+        (should (plist-get displayed :generate))
+        (should-not (alist-get 'layers (alist-get 'result parsed)))
+        (should-not (alist-get 'model (alist-get 'config (alist-get 'result parsed))))
+        (should-not (alist-get 'dedicated_tools
+                               (alist-get 'memories
+                                          (alist-get 'config (alist-get 'result parsed)))))))))
+
+(ert-deftest codex-test-app-server-memories-overridden-null-reenables-generation ()
+  "A null effective knob uses the default even if the old state was disabled."
+  (codex-test--with-memory-session
+    (setq context (plist-put context :generate nil))
+    (codex--app-server-read-memory-settings context t)
+    (cl-letf (((symbol-function 'codex--app-server-handle-message)
+               (lambda (message)
+                 (funcall (nth 2 (car requests)) (alist-get 'result message) nil))))
+      (codex--app-server-handle-line
+       "{\"id\":2,\"result\":{\"config\":{\"memories\":{\"use_memories\":false,\"generate_memories\":null}}}}"))
+    (should (equal (car (cadr requests)) "thread/memoryMode/set"))
+    (should (equal (alist-get 'mode (nth 1 (cadr requests))) "enabled"))))
+
+(ert-deftest codex-test-app-server-memories-menu-saves-both-toggles ()
+  "Both controls can change before Save; the generation request waits for write."
+  (codex-test--with-memory-session
+    (let ((keys (list ?u ?g ?s)))
+      (cl-letf (((symbol-function 'read-multiple-choice)
+                 (lambda (&rest _) (list (pop keys)))))
+        (codex--app-server-memory-settings-menu context)))
+    (let* ((params (nth 1 (car requests)))
+           (edits (append (alist-get 'edits params) nil)))
+      (should (eq (alist-get 'reloadUserConfig params) t))
+      (should (equal (mapcar (lambda (edit) (alist-get 'keyPath edit)) edits)
+                     '("memories.use_memories" "memories.generate_memories")))
+      (dolist (edit edits)
+        (should (eq (alist-get 'value edit) :json-false))
+        (should (equal (alist-get 'mergeStrategy edit) "replace"))))
+    (should (= (length requests) 1))
+    (funcall (nth 2 (car requests)) (list (cons 'status "ok")) nil)
+    (should (equal (car (cadr requests)) "thread/memoryMode/set"))
+    (should (equal (alist-get 'mode (nth 1 (cadr requests))) "disabled"))
+    (funcall (nth 2 (cadr requests)) nil nil)
+    (should (string-match-p "current thread updated" (car statuses)))))
+
+(ert-deftest codex-test-app-server-memories-unchanged-generation-skips-runtime ()
+  "Changing only use does not send a generation update to the current thread."
+  (codex-test--with-memory-session
+    (codex--app-server-save-memory-settings context nil t)
+    (funcall (nth 2 (car requests)) (list (cons 'status "ok")) nil)
+    (should (= (length requests) 1))
+    (should (string-match-p "new threads" (car statuses)))))
+
+(ert-deftest codex-test-app-server-memories-overridden-write-uses-effective-generation ()
+  "An overridden requested value cannot override the server's effective value."
+  (codex-test--with-memory-session
+    (codex--app-server-save-memory-settings context nil nil)
+    (funcall (nth 2 (car requests)) (list (cons 'status "okOverridden")) nil)
+    (should (equal (car (cadr requests)) "config/read"))
+    (funcall (nth 2 (cadr requests))
+             (list (cons 'config
+                         (list (cons 'memories
+                                     (list (cons 'use_memories nil)
+                                           (cons 'generate_memories t)))))) nil)
+    (should (= (length requests) 2))
+    (should (string-match-p "Effective.*generate on" (car statuses)))
+    (should (seq-some (lambda (text) (string-match-p "overridden" text)) statuses))))
+
+(ert-deftest codex-test-app-server-memories-overridden-change-updates-runtime ()
+  "Readback can reveal a generation change even when the requested change was use."
+  (codex-test--with-memory-session
+    (codex--app-server-save-memory-settings context nil t)
+    (funcall (nth 2 (car requests)) (list (cons 'status "okOverridden")) nil)
+    (funcall (nth 2 (cadr requests))
+             (list (cons 'config
+                         (list (cons 'memories
+                                     (list (cons 'generate_memories nil)))))) nil)
+    (should (equal (car (nth 2 requests)) "thread/memoryMode/set"))
+    (should (equal (alist-get 'mode (nth 1 (nth 2 requests))) "disabled"))))
+
+(ert-deftest codex-test-app-server-memories-sparse-readback-uses-server-default ()
+  "An omitted effective knob takes Codex's default, never the old local value."
+  (codex-test--with-memory-session
+    (setq context (plist-put context :generate nil))
+    (codex--app-server-save-memory-settings context nil nil)
+    (funcall (nth 2 (car requests)) (list (cons 'status "okOverridden")) nil)
+    (funcall (nth 2 (cadr requests))
+             (list (cons 'config
+                         (list (cons 'memories
+                                     (list (cons 'use_memories nil)))))) nil)
+    (should (equal (car (nth 2 requests)) "thread/memoryMode/set"))
+    (should (equal (alist-get 'mode (nth 1 (nth 2 requests))) "enabled"))))
+
+(ert-deftest codex-test-app-server-memories-failed-readback-never-applies-requested-value ()
+  "Failed or missing effective readback is reported without a thread update."
+  (dolist (reply '(nil ((config))))
+    (codex-test--with-memory-session
+      (codex--app-server-save-memory-settings context nil nil)
+      (funcall (nth 2 (car requests)) (list (cons 'status "okOverridden")) nil)
+      (funcall (nth 2 (cadr requests)) (copy-tree reply)
+               (unless reply (list (cons 'message "Read failed"))))
+      (should (= (length requests) 2))
+      (should (string-match-p "saved.*could not be read" (car statuses))))))
+
+(ert-deftest codex-test-app-server-memories-write-and-runtime-errors-are-distinct ()
+  "A failed write does not update the thread; runtime failure preserves saved status."
+  (dolist (failure '(write runtime))
+    (codex-test--with-memory-session
+      (codex--app-server-save-memory-settings context nil nil)
+      (funcall (nth 2 (car requests)) (list (cons 'status "ok"))
+               (and (eq failure 'write) (list (cons 'message "Write failed"))))
+      (if (eq failure 'write)
+          (progn
+            (should (= (length requests) 1))
+            (should (string-match-p "Failed to save" (car statuses))))
+        (funcall (nth 2 (cadr requests)) nil (list (cons 'message "Thread failed")))
+        (should (string-match-p "saved.*current-thread update failed" (car statuses)))))))
+
+(ert-deftest codex-test-app-server-memories-reset-requires-confirmation ()
+  "Declining reset sends nothing; confirmed reset uses memory/reset alone."
+  (codex-test--with-memory-session
+    (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) nil)))
+      (should-not (codex--app-server-reset-memories)))
+    (should-not requests)
+    (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+      (should (codex--app-server-reset-memories)))
+    (should (equal (caar requests) "memory/reset"))
+    (funcall (nth 2 (car requests)) nil nil)
+    (should (equal (car statuses) "Reset local memories"))))
+
+(ert-deftest codex-test-app-server-memories-does-not-change-a-switched-thread ()
+  "A configuration save cannot accidentally update a subsequently displayed thread."
+  (codex-test--with-memory-session
+    (codex--app-server-save-memory-settings context nil nil)
+    (setq-local codex--app-server-thread-id "different-thread")
+    (funcall (nth 2 (car requests)) (list (cons 'status "ok")) nil)
+    (should (= (length requests) 1))
+    (should (string-match-p "not updated" (car statuses)))))
+
 (ert-deftest codex-test-app-server-current-time-read-answers-with-unix-seconds ()
   "A real JSON request receives whole Unix seconds without an approval prompt."
   (with-temp-buffer
