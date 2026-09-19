@@ -352,7 +352,7 @@
       "status": "wont-implement"
     },
     "mcpServer/elicitation/request": {
-      "note": "Allow and Cancel implemented against a captured request and the CLI's own prompt. The CLI also offers 'Allow for this session' and 'Always allow'; those record the choice in the response _meta, an encoding that was not captured, so they are deliberately not offered. Form-mode input is also unimplemented: every captured request had an empty requestedSchema.",
+      "note": "Form-mode MCP requests support strings, booleans, single-select enums, required/default/optional fields, and advertised session/always permission choices. Actual CLI and native forms returned matching blue/false/small; native session permission suppressed repeat approval; the client permanent-response encoding persisted across fresh real server processes. Live cancellation sent action:cancel and completed the turn. Unsupported/native-identity modes explicitly cancel instead of offering invalid generic Allow. Commit a52a632; native identity proof remains a separate worklist gap.",
       "status": "handled"
     },
     "mcpServer/event/stream/notification": {
@@ -769,15 +769,15 @@
       "status": "handled"
     },
     "thread/realtime/item/completed": {
-      "note": "Triaged 2026-09-19 against installed experimental schema and official rust-v0.155.1 source; no live capture. Canonical realtime timeline/history events coexist with role-based legacy transcript events. core/realtime_history.rs:202-217 derives canonical transcript streams from Input/OutputTranscriptDelta/Done; app-server bespoke_event_handling.rs forwards both families. Official TUI chatwidget/protocol.rs:336-339 deliberately ignores all three canonical notifications while rendering legacy transcript/delta and transcript/done (:286-295). Keep legacy display to avoid duplicate transcripts; timeline/replay support is a separate feature. Done-only final text still needs correct legacy handling.",
+      "note": "Triaged 2026-09-19 against installed experimental schema and official rust-v0.155.1 source; no live capture. Canonical realtime timeline/history events coexist with role-based legacy transcript events. core/realtime_history.rs:202-217 derives canonical transcript streams from Input/OutputTranscriptDelta/Done; app-server bespoke_event_handling.rs forwards both families. Official TUI chatwidget/protocol.rs:336-339 deliberately ignores all three canonical notifications while rendering legacy transcript/delta and transcript/done (:286-295). Keep legacy display to avoid duplicate transcripts; timeline/replay support is a separate feature. Legacy final-text handling was subsequently implemented and live compared with the TUI in commit 2c33220; canonical events remain deliberately ignored to avoid duplication.",
       "status": "wont-implement"
     },
     "thread/realtime/item/started": {
-      "note": "Triaged 2026-09-19 against installed experimental schema and official rust-v0.155.1 source; no live capture. Canonical realtime timeline/history events coexist with role-based legacy transcript events. core/realtime_history.rs:202-217 derives canonical transcript streams from Input/OutputTranscriptDelta/Done; app-server bespoke_event_handling.rs forwards both families. Official TUI chatwidget/protocol.rs:336-339 deliberately ignores all three canonical notifications while rendering legacy transcript/delta and transcript/done (:286-295). Keep legacy display to avoid duplicate transcripts; timeline/replay support is a separate feature. Done-only final text still needs correct legacy handling.",
+      "note": "Triaged 2026-09-19 against installed experimental schema and official rust-v0.155.1 source; no live capture. Canonical realtime timeline/history events coexist with role-based legacy transcript events. core/realtime_history.rs:202-217 derives canonical transcript streams from Input/OutputTranscriptDelta/Done; app-server bespoke_event_handling.rs forwards both families. Official TUI chatwidget/protocol.rs:336-339 deliberately ignores all three canonical notifications while rendering legacy transcript/delta and transcript/done (:286-295). Keep legacy display to avoid duplicate transcripts; timeline/replay support is a separate feature. Legacy final-text handling was subsequently implemented and live compared with the TUI in commit 2c33220; canonical events remain deliberately ignored to avoid duplication.",
       "status": "wont-implement"
     },
     "thread/realtime/item/transcript/delta": {
-      "note": "Triaged 2026-09-19 against installed experimental schema and official rust-v0.155.1 source; no live capture. Canonical realtime timeline/history events coexist with role-based legacy transcript events. core/realtime_history.rs:202-217 derives canonical transcript streams from Input/OutputTranscriptDelta/Done; app-server bespoke_event_handling.rs forwards both families. Official TUI chatwidget/protocol.rs:336-339 deliberately ignores all three canonical notifications while rendering legacy transcript/delta and transcript/done (:286-295). Keep legacy display to avoid duplicate transcripts; timeline/replay support is a separate feature. Done-only final text still needs correct legacy handling.",
+      "note": "Triaged 2026-09-19 against installed experimental schema and official rust-v0.155.1 source; no live capture. Canonical realtime timeline/history events coexist with role-based legacy transcript events. core/realtime_history.rs:202-217 derives canonical transcript streams from Input/OutputTranscriptDelta/Done; app-server bespoke_event_handling.rs forwards both families. Official TUI chatwidget/protocol.rs:336-339 deliberately ignores all three canonical notifications while rendering legacy transcript/delta and transcript/done (:286-295). Keep legacy display to avoid duplicate transcripts; timeline/replay support is a separate feature. Legacy final-text handling was subsequently implemented and live compared with the TUI in commit 2c33220; canonical events remain deliberately ignored to avoid duplication.",
       "status": "wont-implement"
     },
     "thread/realtime/itemAdded": {
@@ -807,10 +807,12 @@
       "status": "handled"
     },
     "thread/realtime/transcript/delta": {
-      "status": "handled"
+      "status": "handled",
+      "note": "Per-role partial regions are finalized with authoritative text in completion order. Actual installed TUI and native Emacs captures match corrected-final, done-only, interleaved roles in both completion orders, and distinct same-prefix finals. Unsent input/ordinary output/lifecycle behavior tested. Explicit notification injection verifies renderer, not voice service/audio. Commit 2c33220."
     },
     "thread/realtime/transcript/done": {
-      "status": "handled"
+      "status": "handled",
+      "note": "Per-role partial regions are finalized with authoritative text in completion order. Actual installed TUI and native Emacs captures match corrected-final, done-only, interleaved roles in both completion orders, and distinct same-prefix finals. Unsent input/ordinary output/lifecycle behavior tested. Explicit notification injection verifies renderer, not voice service/audio. Commit 2c33220."
     },
     "thread/resume": {
       "status": "handled"

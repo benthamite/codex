@@ -150,3 +150,19 @@ loopback model provider, without account credentials or paid requests.
 
 See the worklist for remaining behavior gaps; named-method counts do not
 measure completed feature parity.
+
+MCP follow-up captured actual form/approval UI from a disposable MCP server.
+Native forms returned the same string, false boolean, and enum values as the
+CLI. Session approval suppressed the next tool approval, and the client
+permanent-response encoding persisted across fresh server processes. Canceling
+a live native form sent `action:cancel` and allowed the turn to complete.
+Unsupported native-identity requests now explicitly cancel; this is not
+biometric support.
+
+Realtime acceptance used the actual TUI caption renderer while connecting,
+with an isolated bridge intercepting realtime requests before any SDP answer
+or audio device access. The same injected notifications passed through the
+live native JSON dispatcher. Caption text, speaker prefixes and finalization
+order matched for corrected finals, final-only messages, interleaved speakers
+and successive captions sharing a prefix. This verifies rendering, not a
+working voice-service connection.

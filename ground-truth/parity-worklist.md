@@ -10,11 +10,11 @@ behavioral gap here. Evidence is for installed Codex 0.155.1.
 | Select server-discovered Plan/Default modes | Done | Actual CLI preset/settings capture; native `/plan` selected medium, `/default` restored high, and `/plan text` completed a loopback turn carrying the mode. FIFO and selection-failure regressions tested. |
 | Answer external-clock requests | Done | Native Emacs answered real external-clock callbacks with whole Unix seconds; the resulting time reminder reached the loopback model and the turn completed. |
 | Match `/memories` controls | Do | Capture use/generate/reset settings, persist effective config and current-thread generation; test reset only in an owned disposable memory store. |
-| Preserve final realtime transcript text | Do | Compare final-only, corrected-final, and delta-plus-final transcript rendering against actual CLI behavior. |
+| Preserve final realtime transcript text | Done for caption rendering | Actual TUI and native captures match corrected-final, done-only, interleaved-role completion order and distinct same-prefix captions. Native input survives. Notifications were injected; no voice backend or audio acceptance is claimed. |
 | Hydrate persisted realtime history | Defer: server unsupported | Actual 0.155.1 server resumed an owned mixed-history fixture and served ordinary turn pages, but `thread/timeline/list` returned -32601, “not supported yet”. Revisit after server support exists. |
 | Branch before an earlier prompt for editing | Investigate | Capture the current source-preserving CLI backtracking flow; do not substitute destructive in-place revert. |
 | Support native user verification | Defer pending safe capture | The CLI requests native identity proof during some MCP elicitations. Exercise cancellation/error paths with isolated requests; a real proof may require the user's biometric interaction. |
-| Complete MCP elicitation choices and forms | Investigate | Earlier baseline lacks session/permanent allow choices and form data. Capture exact response metadata and form types using an owned probe server. |
+| Complete MCP elicitation choices and forms | Done for supported form types | Actual CLI and native forms returned matching string/false/enum values. Native session permission suppressed repeat approval. Client permanent-response encoding persisted across fresh real server processes. Required/default/optional/quit and unsupported-schema behavior tested. Native identity verification remains separate. |
 | Verify tool-question presentation | Investigate | Earlier handler was schema-based. Capture a real CLI question flow with an owned provider/tool fixture. |
 
 No external publication, account reconfiguration, paid requests, or mutation of
