@@ -3937,10 +3937,13 @@ when it follows the item bullet, which precedes START on the same line."
         (put-text-property (match-beginning 0) (match-end 0) 'face face)))))
 
 (defun codex--app-server-handle-server-request (message)
-  "Prompt for and answer an app-server request MESSAGE."
-  (let ((buffer (current-buffer)))
-    (run-at-time 0 nil #'codex--app-server-answer-server-request
-                 buffer message)))
+  "Answer app-server request MESSAGE, deferring interactive approvals."
+  (if (equal (alist-get 'method message) "currentTime/read")
+      (codex--app-server-send-response
+       (alist-get 'id message) `((currentTimeAt . ,(floor (float-time)))))
+    (let ((buffer (current-buffer)))
+      (run-at-time 0 nil #'codex--app-server-answer-server-request
+                   buffer message))))
 
 (defun codex--app-server-answer-server-request (buffer message)
   "Answer app-server MESSAGE in BUFFER."

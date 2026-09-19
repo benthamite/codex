@@ -8,6 +8,24 @@
 (require 'ert)
 (require 'codex)
 
+(ert-deftest codex-test-app-server-current-time-read-answers-with-unix-seconds ()
+  "A real JSON request receives whole Unix seconds without an approval prompt."
+  (with-temp-buffer
+    (let (sent)
+      (cl-letf (((symbol-function 'float-time) (lambda (&rest _) 1700000000.875))
+                ((symbol-function 'codex--app-server-send-json)
+                 (lambda (message) (setq sent (json-encode message))))
+                ((symbol-function 'codex--app-server-read-approval)
+                 (lambda (&rest _) (ert-fail "Clock request prompted for approval"))))
+        (codex--app-server-handle-line
+         "{\"method\":\"currentTime/read\",\"id\":0,\"params\":{\"threadId\":\"clock-thread\"}}"))
+      (let* ((response (json-parse-string sent :object-type 'alist))
+             (time (alist-get 'currentTimeAt (alist-get 'result response))))
+        (should (equal (alist-get 'id response) 0))
+        (should (integerp time))
+        (should (= time 1700000000))
+        (should-not (assq 'error response))))))
+
 (defmacro codex-test--with-mode-session (&rest body)
   "Run BODY with fresh collaboration state and request recording."
   (declare (indent 0) (debug t))

@@ -164,7 +164,7 @@ The user option @code{codex-terminal-backend} selects the Codex backend.  The ch
 
 In the native backend, @samp{/plan} selects the server's Plan preset and @samp{/default} returns to Default mode.  An optional message after either command is submitted only after the server accepts the mode change; during an active turn it is queued for the next turn.  Plan uses its advertised reasoning effort, or @samp{plan_mode_reasoning_effort} from the Codex configuration.  Returning to Default restores the non-Plan effort.  The current mode appears beside the composer status, and subsequent turns carry that mode explicitly.  If discovery or selection fails, an inline message and its attachments remain available for retry.
 
-The native backend displays authentication-recovery start and completion messages, and warns when strict automatic approval review requires additional safety checks.  These notices follow the active thread; notifications for another thread do not appear in its buffer.
+The native backend displays authentication-recovery start and completion messages, and warns when strict automatic approval review requires additional safety checks.  These notices follow the active thread; notifications for another thread do not appear in its buffer.  When Codex requests the client's clock for timed actions, the native backend replies immediately with whole Unix seconds without an approval prompt.
 
 
 New sessions started with @code{codex} or @code{codex-new-instance} use the global default value of @code{codex-terminal-backend}.  Existing Codex session buffers keep their actual backend in a buffer-local value so commands that act on that buffer continue to dispatch correctly.
