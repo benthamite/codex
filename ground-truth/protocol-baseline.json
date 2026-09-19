@@ -1,5 +1,5 @@
 {
-  "codex_version": "codex-cli 0.145.0",
+  "codex_version": "codex-cli 0.155.1",
   "methods": {
     "account/chatgptAuthTokens/refresh": {
       "note": "the CLI manages its own tokens",
@@ -71,6 +71,10 @@
     "attestation/generate": {
       "note": "enterprise attestation; no user-visible behavior",
       "status": "wont-implement"
+    },
+    "autoApprovalReview/strictReviewRequired": {
+      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Carries threadId, turnId and startedAtMs. Capture the trigger and CLI presentation before adding a review indicator; existing exclusions for item-level auto-review events do not establish equivalence with guardianWarning.",
+      "status": "todo"
     },
     "command/exec": {
       "note": "client->server, not server->client: codex.el would be the caller, never a terminal host. Verified live ({command:[...]} -> {exitCode,stdout,stderr}). Thread-less, for GUI clients running commands in the server sandbox outside a turn; codex.el already covers the user-visible feature via thread/shellCommand (the CLI's ! prefix) and thread/backgroundTerminals/*.",
@@ -145,6 +149,10 @@
     },
     "externalAgentConfig/import/readHistories": {
       "note": "one-time import from other agents; not an ongoing feature",
+      "status": "wont-implement"
+    },
+    "externalAgentConfig/import/recordHistory": {
+      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Records results of an externally completed import under a provider ID and returns an import ID. Part of the one-time migration workflow already excluded, including import-history reading.",
       "status": "wont-implement"
     },
     "feedback/upload": {
@@ -307,6 +315,10 @@
       "note": "Allow and Cancel implemented against a captured request and the CLI's own prompt. The CLI also offers 'Allow for this session' and 'Always allow'; those record the choice in the response _meta, an encoding that was not captured, so they are deliberately not offered. Form-mode input is also unimplemented: every captured request had an empty requestedSchema.",
       "status": "handled"
     },
+    "mcpServer/event/stream/notification": {
+      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Forwards arbitrary MCP notifications with subscriptionId and notification.method/params. Investigate the subscription mechanism and capture a relevant event before choosing a client surface; no matching subscription request appears in the generated ClientRequest schema.",
+      "status": "todo"
+    },
     "mcpServer/oauth/login": {
       "note": "reachable but not completable here: an unconfigured name returns -32600, and all three configured MCP servers are local stdio with no OAuth. Completing it needs a remote OAuth provider and interactive browser consent, so the {authorizationUrl} response was never observed.",
       "status": "wont-implement"
@@ -343,6 +355,14 @@
       "note": "informational only",
       "status": "wont-implement"
     },
+    "modelProvider/authRecoveryCompleted": {
+      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Carries message, provider, threadId and turnId; ignored by the current dispatcher. Capture authentication-recovery start/completion messages and ordering before adding status rendering. The schema does not define a success/failure field.",
+      "status": "todo"
+    },
+    "modelProvider/authRecoveryStarted": {
+      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Carries message, provider, threadId and turnId; ignored by the current dispatcher. Capture authentication-recovery start/completion messages and ordering before adding status rendering. The schema does not define a success/failure field.",
+      "status": "todo"
+    },
     "modelProvider/capabilities/read": {
       "note": "captured response is feature flags {namespaceTools, imageGeneration, webSearch}; nothing in the buffer is gated on them.",
       "status": "wont-implement"
@@ -363,6 +383,10 @@
     "plugin/read": {
       "note": "plugin/list already covers the Emacs surface",
       "status": "wont-implement"
+    },
+    "plugin/reconcile": {
+      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Response describes changed bundles, enablement/removals and failed remote updates/materializations. Existing plugin list/install/uninstall operations do not perform this request. Investigate refresh integration and CLI behavior; reconciliation is explicitly not a runtime-readiness acknowledgement.",
+      "status": "todo"
     },
     "plugin/share/checkout": {
       "note": "plugin sharing has no Emacs surface",
@@ -399,6 +423,10 @@
       "note": "same legacy process/* family as process/exited; not observed even when spawning (buffered mode). Unreachable without adopting the deprecated family.",
       "status": "wont-implement"
     },
+    "project/changed": {
+      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Carries projectId and a created/updated/deleted changeType. The client uses local working directories and has no server-project metadata display or cache to invalidate. Revisit if a server-project interface is introduced; this is a scope decision, not evidence that the CLI ignores it.",
+      "status": "wont-implement"
+    },
     "remoteControl/status/changed": {
       "note": "remote control state; agent.el reads this from the footer today",
       "status": "handled"
@@ -412,8 +440,8 @@
       "status": "wont-implement"
     },
     "skills/changed": {
-      "note": "nothing to invalidate: codex.el never caches skills, it calls skills/list with forceReload each time /skills runs. Verified to fire in response to skills/extraRoots/set.",
-      "status": "wont-implement"
+      "note": "Refreshed 2026-09-19 from client source: the notification dispatcher now calls codex--app-server-refresh-mention-rows. The older exclusion predates this handler. Source inspection only, not a new live parity verification.",
+      "status": "handled"
     },
     "skills/config/write": {
       "status": "handled"
@@ -434,6 +462,22 @@
     },
     "thread/archived": {
       "note": "emits {threadId} right after the thread/archive response. Redundant for codex.el's own /archive, which already reports from the response. Only value would be an archive performed by another client, and there is no cached thread list to refresh -- /resume re-queries thread/list every time.",
+      "status": "wont-implement"
+    },
+    "thread/attachment/add": {
+      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Adds a durable stored resource association, such as a pull request identity, independently of conversation history. No resource-association UI; this is not prompt image/file delivery. Confirmed by the upstream app-server README at rust-v0.155.1.",
+      "status": "wont-implement"
+    },
+    "thread/attachment/list": {
+      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Lists durable resource associations, including for unloaded threads. No resource-association browser in this client. Confirmed by the upstream app-server README at rust-v0.155.1.",
+      "status": "wont-implement"
+    },
+    "thread/attachment/remove": {
+      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Removes a durable resource association without deleting its resource or rewriting history. No resource-association UI. Confirmed by the upstream app-server README at rust-v0.155.1.",
+      "status": "wont-implement"
+    },
+    "thread/attachment/updated": {
+      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Reports durable resource association creation/removal. The client neither displays nor caches these associations. Confirmed by the upstream app-server README at rust-v0.155.1.",
       "status": "wont-implement"
     },
     "thread/closed": {
@@ -485,6 +529,10 @@
       "note": "programmatic injection, not a user action",
       "status": "wont-implement"
     },
+    "thread/items/list": {
+      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Cursor-paginated history hydration, optionally filtered by turn. Evaluate with thread/turns/list: the schema deprecates full-history hydration for paginated threads. Capture resume behavior and choose full-turn versus individual-item loading; both methods need not be used if one provides the required history.",
+      "status": "todo"
+    },
     "thread/list": {
       "status": "handled"
     },
@@ -502,6 +550,14 @@
     "thread/name/updated": {
       "status": "handled"
     },
+    "thread/project/updated": {
+      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Carries threadId and nullable projectId. No server-project association is displayed or cached by this client; local cwd is not a server project ID. Revisit with a server-project interface.",
+      "status": "wont-implement"
+    },
+    "thread/queue/changed": {
+      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Carries only threadId. The existing Tab queue is client-local; the schema does not establish its relationship to this server queue or how to fetch the queue state. Capture an emitting scenario and establish the API before choosing behavior.",
+      "status": "todo"
+    },
     "thread/read": {
       "note": "captured response returns the same thread object thread/list and thread/start already return (id, preview, forkedFromId, historyMode, timestamps). No surface needs a single-thread fetch.",
       "status": "wont-implement"
@@ -511,6 +567,18 @@
     },
     "thread/realtime/error": {
       "status": "handled"
+    },
+    "thread/realtime/item/completed": {
+      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Experimental canonical item finalization includes transcript segments, session lifecycle and promoted-item variants. Capture finalization/replay and deduplication relative to legacy notifications before adapting rendering.",
+      "status": "todo"
+    },
+    "thread/realtime/item/started": {
+      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Experimental canonical realtime item starts before content streams. Existing text rendering handles legacy transcript/itemAdded events. Capture coexistence and ordering, then establish item-ID tracking to prevent duplicate rendering.",
+      "status": "todo"
+    },
+    "thread/realtime/item/transcript/delta": {
+      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Experimental transcript delta carries threadId, itemId and delta, unlike the role-based legacy renderer. Associate it with the canonical started item and capture coexistence with legacy events before adapting rendering.",
+      "status": "todo"
     },
     "thread/realtime/itemAdded": {
       "status": "handled"
@@ -535,8 +603,20 @@
     "thread/resume": {
       "status": "handled"
     },
+    "thread/revert": {
+      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. History-edit candidate for paginated threads: removes beforeTurnId and all subsequent turns, not local file changes. Reevaluate the old rollback exclusion now this replacement exists; capture the CLI interaction first. The response requires paginated history hydration.",
+      "status": "todo"
+    },
+    "thread/reverted": {
+      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. History invalidation carries only threadId. Evaluate with thread/revert and paginated hydration so displayed history can be rebuilt; capture actual delivery and ordering.",
+      "status": "todo"
+    },
     "thread/rollback": {
       "note": "schema says verbatim 'DEPRECATED: thread/rollback will be removed soon', and it only edits thread history without reverting files the agent wrote. codex.el has no undo surface; building one on a method upstream is removing would be wasted.",
+      "status": "wont-implement"
+    },
+    "thread/section/move": {
+      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Moves a thread into, within or out of server-owned section ordering. The existing resume picker has no section organization UI. Revisit with a section-aware picker.",
       "status": "wont-implement"
     },
     "thread/settings/updated": {
@@ -559,6 +639,10 @@
     "thread/tokenUsage/updated": {
       "status": "handled"
     },
+    "thread/turns/list": {
+      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Priority: resume code still requests and reads initialTurnsPage.data, absent from the installed resume schema, which exposes backwards cursors instead. Local JSONL replay can mask the protocol mismatch. Confirm live behavior and capture CLI history before implementing paginated hydration; itemsView defaults to summary, not full.",
+      "status": "todo"
+    },
     "thread/unarchive": {
       "note": "archive is handled, unarchive is not",
       "status": "handled"
@@ -569,6 +653,22 @@
     },
     "thread/unsubscribe": {
       "note": "protocol bookkeeping",
+      "status": "wont-implement"
+    },
+    "threadSection/create": {
+      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Creates a named, independently persisted section with optional appearance. The existing resume picker is flat and neither displays nor caches sections. Excluded as an interface scope decision; no claim about CLI availability.",
+      "status": "wont-implement"
+    },
+    "threadSection/delete": {
+      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Deletes an independently persisted section. The existing resume picker is flat and neither displays nor caches sections. Excluded as an interface scope decision; no claim about CLI availability.",
+      "status": "wont-implement"
+    },
+    "threadSection/list": {
+      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Paginates independently persisted sections. The existing resume picker is flat and neither displays nor caches sections. Excluded as an interface scope decision; no claim about CLI availability.",
+      "status": "wont-implement"
+    },
+    "threadSection/update": {
+      "note": "Triaged 2026-09-19 against the 0.155.1 schema and client source; no live CLI capture. Changes a section name and optional synchronized appearance. The existing resume picker is flat and neither displays nor caches sections. Excluded as an interface scope decision; no claim about CLI availability.",
       "status": "wont-implement"
     },
     "turn/completed": {

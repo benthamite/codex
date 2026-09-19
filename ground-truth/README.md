@@ -121,6 +121,9 @@ Each method carries a decision in the baseline, so the report stays short. Set
 `note` saying why), or `todo`. Everything starts as `unreviewed`; triaging those
 once means later runs show only what actually changed.
 
+The [0.155.1 triage](triage-0.155.1.md) records the 2026-09-19 decisions for
+25 additions since 0.145.0, their evidence limits, and follow-up priorities.
+
 ## `elicit_server.py` — provoking an MCP elicitation
 
 No configured MCP server asks the user anything during an ordinary turn, so
