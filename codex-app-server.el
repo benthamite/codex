@@ -4989,8 +4989,10 @@ The original conversation and its draft remain untouched.  No prompt is sent."
         (unwind-protect
             (when (equal (car token) codex--app-server-thread-id)
               (codex--app-server-choose-edit-prompt (car token) turns))
-          (when (eq token codex--app-server-edit-selection)
-            (setq codex--app-server-edit-selection nil)))))))
+          (when (buffer-live-p buffer)
+            (with-current-buffer buffer
+              (when (eq token codex--app-server-edit-selection)
+                (setq codex--app-server-edit-selection nil)))))))))
 
 (defun codex--app-server-choose-edit-prompt (thread-id turns)
   "Choose a prompt from canonical TURNS belonging to THREAD-ID."

@@ -3409,6 +3409,27 @@ the same request with {}."
          (current-buffer) token (list (codex-test--edit-turn "one" "first"))))
       (should-not codex--app-server-edit-selection))))
 
+(ert-deftest codex-test-app-server-edit-selection-clears-source-after-switch ()
+  "Opening a branch must release the original buffer's selection lock."
+  (with-temp-buffer
+    (let ((source (current-buffer))
+          (branch (generate-new-buffer " *codex-edit-selection-test*"))
+          (token (list "source")))
+      (unwind-protect
+          (progn
+            (setq-local codex--app-server-thread-id "source")
+            (setq-local codex--app-server-edit-selection token)
+            (with-current-buffer branch
+              (setq-local codex--app-server-edit-selection 'branch-token))
+            (cl-letf (((symbol-function 'codex--app-server-choose-edit-prompt)
+                       (lambda (&rest _) (set-buffer branch))))
+              (codex--app-server-finish-edit-selection source token nil))
+            (with-current-buffer source
+              (should-not codex--app-server-edit-selection))
+            (with-current-buffer branch
+              (should (eq codex--app-server-edit-selection 'branch-token))))
+        (kill-buffer branch)))))
+
 (ert-deftest codex-test-app-server-edit-selection-cancel-preserves-source ()
   "Canceling canonical prompt selection makes no branch and keeps the draft."
   (with-temp-buffer
