@@ -861,8 +861,8 @@
       "status": "handled"
     },
     "thread/timeline/list": {
-      "note": "Triaged 2026-09-19 from installed experimental schema and official rust-v0.155.1 source; not live verified. Interleaves ordinary turns and realtime history in rollout order. Existing history fallback fetches thread/turns/list only; determine whether resumable realtime history is lost before excluding or integrating timeline. Evidence: Generated experimental schema and read-only rust-v0.155.1 source; not live captured",
-      "status": "todo"
+      "status": "wont-implement",
+      "note": "Runtime-probed 2026-09-19 with installed codex-cli 0.155.1 and an owned mixed ordinary/realtime rollout. thread/resume and full thread/turns/list succeeded, but thread/timeline/list returned JSON-RPC -32601: thread/timeline/list is not supported yet. Schema presence is not server implementation. Revisit when the server supports this endpoint; do not silently replace complete turn history with an unsupported API."
     },
     "thread/tokenUsage/updated": {
       "status": "handled"
