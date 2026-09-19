@@ -328,6 +328,15 @@ keys; see `codex--app-server-take-submission'.")
 (defvar-local codex--app-server-current-reasoning-effort nil
   "Reasoning effort currently selected for this app-server thread.")
 
+(defvar-local codex--app-server-collaboration-mode nil
+  "Selected collaboration mode, or nil until its state is known.")
+
+(defvar-local codex--app-server-default-effort nil
+  "Non-Plan reasoning effort retained while a collaboration mode is selected.")
+
+(defvar-local codex--app-server-mode-change-pending-p nil
+  "Whether collaboration-mode discovery or selection is outstanding.")
+
 (defvar-local codex--app-server-model-cache nil
   "Models most recently returned by `model/list'.")
 
@@ -655,6 +664,7 @@ can arrive before this buffer has learned its thread id; both belong here."
     (when (codex--app-server-current-thread-notification-p params)
       (pcase method
         ("thread/started" (codex--app-server-thread-started params))
+        ("thread/settings/updated" (codex--app-server-settings-updated params))
         ("turn/started" (codex--app-server-turn-started params))
         ("turn/completed" (codex--app-server-turn-completed params))
         ("item/agentMessage/delta"
@@ -791,6 +801,9 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
       (setq codex--app-server-current-reasoning-effort effort)
       (setq-local codex-reasoning-effort effort))
     (unless (equal codex--app-server-thread-id thread-id)
+      (setq codex--app-server-collaboration-mode nil
+            codex--app-server-default-effort nil
+            codex--app-server-mode-change-pending-p nil)
       (setq codex--app-server-thread-id thread-id)
       (codex--record-session-metadata thread-id thread-path)
       (codex--app-server-render-header thread)
@@ -936,6 +949,8 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
     (concat "  " model
             (if effort (concat " " effort) "")
             (if tier (concat " " tier) "")
+            (when codex--app-server-collaboration-mode
+              (concat " · " (capitalize codex--app-server-collaboration-mode)))
             " · " directory)))
 
 (defun codex--app-server-weekly-limit-warning ()
@@ -947,6 +962,8 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
 (defun codex--app-server-send-input ()
   "Send the app-server input region text as a Codex turn or slash command."
   (interactive)
+  (when codex--app-server-mode-change-pending-p
+    (user-error "Waiting for Codex mode selection"))
   (let ((text (string-trim (codex--app-server-input-text))))
     (if (string-empty-p text)
         (message "Codex input is empty")
@@ -969,6 +986,8 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
       ("/fork" (codex-fork nil))
       ("/permissions" (codex--app-server-list-permission-profiles))
       ("/model" (codex--app-server-change-model))
+      ("/plan" (codex--app-server-select-mode "plan" argument))
+      ("/default" (codex--app-server-select-mode "default" argument))
       ("/mention" (codex-app-server-attach-mention))
       ("/skills" (codex--app-server-list-skills))
       ("/raw" (codex--app-server-toggle-raw))
@@ -1018,6 +1037,115 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
        (codex--app-server-submit-command (codex--app-server-slash-prompt command argument)))
       (_ (codex--app-server-insert-status
           (format "Unsupported command: %s" command))))))
+
+(defun codex--app-server-select-mode (mode argument)
+  "Select collaboration MODE and optionally submit inline ARGUMENT.
+Discovery supplies the server's presets rather than locally invented modes."
+  (codex--app-server-ensure-direct-input)
+  (unless codex--app-server-thread-id
+    (user-error "No active Codex thread"))
+  (let ((thread-id codex--app-server-thread-id)
+        (submission (unless (string-empty-p argument)
+                      (plist-put (codex--app-server-take-submission argument)
+                                 :literal t))))
+    (setq codex--app-server-mode-change-pending-p t)
+    (codex--app-server-send-mode-request
+     mode submission "collaborationMode/list" nil
+     (lambda (result error)
+       (when (equal thread-id codex--app-server-thread-id)
+         (let ((preset (cl-find mode (append (alist-get 'data result) nil)
+                                :key (lambda (p) (alist-get 'mode p))
+                                :test #'equal)))
+           (if (or error (null preset))
+               (codex--app-server-mode-selection-failed
+                mode submission (or error "Mode unavailable"))
+             (codex--app-server-apply-mode preset submission))))))))
+
+(defun codex--app-server-apply-mode (preset submission)
+  "Apply PRESET and submit captured inline SUBMISSION after success."
+  (let* ((mode (alist-get 'mode preset))
+         (thread-id codex--app-server-thread-id)
+         (model (or (alist-get 'model preset)
+                    codex--app-server-current-model-id codex-model))
+         (base-effort (if codex--app-server-collaboration-mode
+                          codex--app-server-default-effort
+                        codex-reasoning-effort))
+         (effort (or (and (equal mode "plan")
+                          (codex--app-server-config-string
+                           "plan_mode_reasoning_effort"))
+                     (alist-get 'reasoning_effort preset) base-effort)))
+    (if (not (and (stringp model) (not (string-empty-p model))))
+        (codex--app-server-mode-selection-failed
+         mode submission "Current model is unavailable")
+      (codex--app-server-send-mode-request
+       mode submission "thread/settings/update"
+       `((threadId . ,thread-id)
+         (collaborationMode
+          . ,(codex--app-server-collaboration-settings mode model effort)))
+       (lambda (_result error)
+         (when (equal thread-id codex--app-server-thread-id)
+           (if error
+               (codex--app-server-mode-selection-failed mode submission error)
+             (setq codex--app-server-mode-change-pending-p nil
+                   codex--app-server-default-effort base-effort)
+             (codex--app-server-record-mode mode model effort)
+             (codex--app-server-insert-status
+              (format "%s mode" (capitalize mode)))
+             (when submission
+               (codex--app-server-enqueue-submission submission))
+             (unless (or codex--app-server-turn-active-p
+                         codex--app-server-turn-start-pending-p)
+               (codex--app-server-flush-turn-queue)))))))))
+
+(defun codex--app-server-send-mode-request (mode submission method params callback)
+  "Send MODE selection METHOD with PARAMS and CALLBACK.
+Restore SUBMISSION if the transport signals before accepting the request."
+  (condition-case error
+      (codex--app-server-send-request method params callback)
+    (error (codex--app-server-mode-selection-failed mode submission error))))
+
+(defun codex--app-server-collaboration-settings (mode model effort)
+  "Build collaboration MODE settings with MODEL and reasoning EFFORT."
+  `((mode . ,mode)
+    (settings . ((model . ,model)
+                 (reasoning_effort . ,effort)
+                 (developer_instructions . nil)))))
+
+(defun codex--app-server-record-mode (mode model effort)
+  "Record effective collaboration MODE, MODEL and EFFORT."
+  (setq codex--app-server-collaboration-mode mode
+        codex--app-server-current-model-id model
+        codex--app-server-current-reasoning-effort effort)
+  (setq-local codex-reasoning-effort effort)
+  (when (equal mode "default")
+    (setq codex--app-server-default-effort effort)))
+
+(defun codex--app-server-mode-selection-failed (mode submission error)
+  "Report failed MODE selection with ERROR and restore inline SUBMISSION."
+  (setq codex--app-server-mode-change-pending-p nil)
+  (codex--app-server-insert-status
+   (format "Codex %s mode selection failed: %s" mode error))
+  (unless (or codex--app-server-turn-active-p
+              codex--app-server-turn-start-pending-p)
+    (codex--app-server-flush-turn-queue))
+  (when submission
+    (codex--app-server-restore-submission
+     (plist-put (copy-sequence submission) :text
+                (concat "/" mode " " (plist-get submission :text))))))
+
+(defun codex--app-server-settings-updated (params)
+  "Synchronize effective thread settings reported in PARAMS."
+  (let* ((settings (alist-get 'threadSettings params))
+         (mode (alist-get 'collaborationMode settings))
+         (kind (alist-get 'mode mode))
+         (model (or (alist-get 'model settings)
+                    (alist-get 'model (alist-get 'settings mode))))
+         (effort (if (assq 'effort settings) (alist-get 'effort settings)
+                   (alist-get 'reasoning_effort (alist-get 'settings mode)))))
+    (when (and (member kind '("plan" "default")) model)
+      (unless codex--app-server-collaboration-mode
+        (setq codex--app-server-default-effort codex-reasoning-effort))
+      (codex--app-server-record-mode kind model effort))))
 
 (defun codex--app-server-current-cwd ()
   "Return the absolute working directory for app-server requests."
@@ -2070,9 +2198,18 @@ than appends."
 (defun codex--app-server-apply-model (model &optional effort)
   "Apply MODEL and optional EFFORT via `thread/settings/update'."
   (let* ((id (or (alist-get 'model model) (alist-get 'id model)))
+         (mode codex--app-server-collaboration-mode)
+         (effective-effort (if (equal mode "plan") codex-reasoning-effort
+                             (or effort codex-reasoning-effort)))
          (params `((threadId . ,codex--app-server-thread-id) (model . ,id))))
-    (when effort
-      (setq params (append params `((effort . ,effort)))))
+    (when (or effort mode)
+      (setq params (append params `((effort . ,effective-effort)))))
+    (when mode
+      (setq params
+            (append params
+                    `((collaborationMode
+                       . ,(codex--app-server-collaboration-settings
+                           mode id effective-effort))))))
     (codex--app-server-send-request
      "thread/settings/update"
      params
@@ -2083,11 +2220,13 @@ than appends."
          (setq-local codex-model id)
          (setq-local codex--app-server-current-model-id id)
          (when effort
-           (setq-local codex-reasoning-effort effort)
-           (setq codex--app-server-current-reasoning-effort effort))
+           (setq codex--app-server-default-effort effort))
+         (when (or effort mode)
+           (setq-local codex-reasoning-effort effective-effort)
+           (setq codex--app-server-current-reasoning-effort effective-effort))
          (codex--app-server-insert-status
-          (if effort
-              (format "Model set to %s (%s reasoning)" id effort)
+          (if effective-effort
+              (format "Model set to %s (%s reasoning)" id effective-effort)
             (format "Model set to %s" id))))))))
 
 (defun codex--app-server-copy-last-message ()
@@ -2494,7 +2633,8 @@ in the transcript.  The server sends one of `disabled', `connecting',
 
 (defun codex--app-server-flush-turn-queue ()
   "Submit the next Tab-queued input, if any, as a new turn."
-  (when codex--app-server-queued-turn-inputs
+  (when (and codex--app-server-queued-turn-inputs
+             (not codex--app-server-mode-change-pending-p))
     (let ((submission (pop codex--app-server-queued-turn-inputs)))
       (codex--app-server-render-queue)
       (apply 'codex--app-server-submit-command
@@ -2555,7 +2695,7 @@ END is updated to the new end of the replaced region."
   '("/archive" "/clear" "/compact" "/copy" "/debug-config" "/delete"
     "/diff" "/exit" "/experimental" "/fast" "/feedback" "/fork" "/goal"
     "/goal-clear" "/hooks" "/init" "/logout" "/mcp" "/memories" "/mention"
-    "/model" "/new" "/permissions" "/personality" "/plugins" "/ps" "/quit"
+    "/model" "/new" "/plan" "/default" "/permissions" "/personality" "/plugins" "/ps" "/quit"
     "/raw" "/rename" "/resume" "/review" "/skills" "/status" "/stop"
     "/unarchive" "/usage")
   "Slash commands recognized by the app-server backend, used for completion.
@@ -2824,6 +2964,8 @@ With no active turn, send the input immediately like Return."
              (new (nth new-index levels)))
         (setq-local codex-reasoning-effort new)
         (setq codex--app-server-current-reasoning-effort new)
+        (when (equal codex--app-server-collaboration-mode "default")
+          (setq codex--app-server-default-effort new))
         (message "Reasoning effort: %s" new)))))
 
 (defun codex--app-server-request-models-for-reasoning ()
@@ -4208,11 +4350,13 @@ attachments."
   (codex--run-command-submitted-hook)
   (let ((trimmed (string-trim-left command)))
     (cond
-     ((string-prefix-p "/" trimmed)
+     ((and (not (plist-get submission :literal))
+           (string-prefix-p "/" trimmed))
       (when submission
         (codex--app-server-restore-submission-attachments submission))
       (codex--app-server-dispatch-slash (string-trim command)))
-     ((string-prefix-p "!" trimmed)
+     ((and (not (plist-get submission :literal))
+           (string-prefix-p "!" trimmed))
       (when submission
         (codex--app-server-restore-submission-attachments submission))
       (codex--app-server-run-shell-command
@@ -4252,6 +4396,8 @@ Its output arrives as a command-execution item like the CLI's \"!\"."
 (defun codex--app-server-send-turn-input (submission)
   "Send captured SUBMISSION to the app-server as a turn input."
   (cond
+   (codex--app-server-mode-change-pending-p
+    (user-error "Waiting for Codex mode selection"))
    (codex--app-server-history-loading-p
     (user-error "Waiting for Codex history to finish loading"))
    ((not (eq codex--app-server-direct-input-p t))
@@ -4269,6 +4415,8 @@ Its output arrives as a command-execution item like the CLI's \"!\"."
 
 (defun codex--app-server-ensure-direct-input ()
   "Signal a user error unless the current thread accepts direct input."
+  (when codex--app-server-mode-change-pending-p
+    (user-error "Waiting for Codex mode selection"))
   (when codex--app-server-history-loading-p
     (user-error "Waiting for Codex history to finish loading"))
   (pcase codex--app-server-direct-input-p
@@ -4298,7 +4446,13 @@ When FRONT is non-nil, preserve it ahead of already queued submissions."
          (input . ,(codex--app-server-user-input-vector submission))
          (cwd . ,codex--buffer-directory)
          (approvalPolicy . ,(codex--app-server-approval-policy))
-         (effort . ,codex-reasoning-effort))
+         (effort . ,codex-reasoning-effort)
+         ,@(when codex--app-server-collaboration-mode
+             `((collaborationMode
+                . ,(codex--app-server-collaboration-settings
+                    codex--app-server-collaboration-mode
+                    codex--app-server-current-model-id
+                    codex-reasoning-effort)))))
        (lambda (result error)
          (setq codex--app-server-turn-start-pending-p nil)
          (if error

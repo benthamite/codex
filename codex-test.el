@@ -8,6 +8,221 @@
 (require 'ert)
 (require 'codex)
 
+(defmacro codex-test--with-mode-session (&rest body)
+  "Run BODY with fresh collaboration state and request recording."
+  (declare (indent 0) (debug t))
+  `(with-temp-buffer
+     (setq-local codex--app-server-thread-id "mode-thread")
+     (setq-local codex--app-server-current-model-id "fixture")
+     (setq-local codex-reasoning-effort "high")
+     (let (requests statuses)
+       (cl-letf (((symbol-function 'codex--app-server-send-request)
+                  (lambda (method params callback)
+                    (setq requests (append requests
+                                           (list (list method params callback))))))
+                 ((symbol-function 'codex--app-server-insert-status)
+                  (lambda (text) (push text statuses)))
+                 ((symbol-function 'codex--app-server-render-queue) #'ignore)
+                 ((symbol-function 'codex--app-server-config-string)
+                  (lambda (_key) nil)))
+         ,@body))))
+
+(defun codex-test--mode-presets ()
+  "Return a fresh server collaboration preset response."
+  (list (cons 'data
+              (list (list (cons 'mode "plan") (cons 'reasoning_effort "medium"))
+                    (list (cons 'mode "default"))))))
+
+(ert-deftest codex-test-app-server-mode-plan-default-restores-effort ()
+  "Plan uses its preset; Default restores the pre-Plan effort."
+  (codex-test--with-mode-session
+    (codex--app-server-dispatch-slash "/plan")
+    (should (equal (caar requests) "collaborationMode/list"))
+    (funcall (nth 2 (car requests)) (codex-test--mode-presets) nil)
+    (let* ((params (nth 1 (cadr requests)))
+           (mode (alist-get 'collaborationMode params))
+           (settings (alist-get 'settings mode)))
+      (should (equal (alist-get 'mode mode) "plan"))
+      (should (equal (alist-get 'model settings) "fixture"))
+      (should (equal (alist-get 'reasoning_effort settings) "medium"))
+      (should (assq 'developer_instructions settings))
+      (should-not (alist-get 'developer_instructions settings)))
+    (funcall (nth 2 (cadr requests)) nil nil)
+    (should (equal codex-reasoning-effort "medium"))
+    (should (equal codex--app-server-default-effort "high"))
+    (setq requests nil)
+    (codex--app-server-dispatch-slash "/default")
+    (funcall (nth 2 (car requests)) (codex-test--mode-presets) nil)
+    (funcall (nth 2 (cadr requests)) nil nil)
+    (should (equal codex-reasoning-effort "high"))
+    (should (equal codex--app-server-collaboration-mode "default"))))
+
+(ert-deftest codex-test-app-server-mode-inline-waits-for-settings ()
+  "Inline input waits for discovery and settings acknowledgement."
+  (codex-test--with-mode-session
+    (let (submitted)
+      (cl-letf (((symbol-function 'codex--app-server-submit-command)
+                 (lambda (text submission) (setq submitted (cons text submission)))))
+        (codex--app-server-dispatch-slash "/plan design this")
+        (should-not submitted)
+        (should-error (codex--app-server-ensure-direct-input) :type 'user-error)
+        (funcall (nth 2 (car requests)) (codex-test--mode-presets) nil)
+        (should-not submitted)
+        (funcall (nth 2 (cadr requests)) nil nil)
+        (should (equal (car submitted) "design this"))
+        (should (plist-get (cdr submitted) :literal))
+        (should-not codex--app-server-mode-change-pending-p)))))
+
+(ert-deftest codex-test-app-server-mode-completed-turn-keeps-queue-order ()
+  "Inline mode input stays after earlier messages when a turn ends mid-change."
+  (codex-test--with-mode-session
+    (setq-local codex--app-server-queued-turn-inputs
+                (list (list :text "earlier")))
+    (setq-local codex--app-server-turn-active-p t)
+    (let (submitted)
+      (cl-letf (((symbol-function 'codex--app-server-submit-command)
+                 (lambda (text _submission)
+                   (push text submitted)
+                   (setq codex--app-server-turn-start-pending-p t))))
+        (codex--app-server-dispatch-slash "/plan later")
+        (setq codex--app-server-turn-active-p nil)
+        (codex--app-server-flush-turn-queue)
+        (should-not submitted)
+        (funcall (nth 2 (car requests)) (codex-test--mode-presets) nil)
+        (funcall (nth 2 (cadr requests)) nil nil)
+        (should (equal submitted '("earlier")))
+        (should (equal (plist-get (car codex--app-server-queued-turn-inputs) :text)
+                       "later"))))))
+
+(ert-deftest codex-test-app-server-mode-failure-resumes-waiting-queue ()
+  "A failed mode change resumes old queued input and leaves retry text a draft."
+  (dolist (failure '(discovery update))
+    (codex-test--with-mode-session
+      (setq-local codex--app-server-queued-turn-inputs
+                  (list (list :text "earlier")))
+      (setq-local codex--app-server-turn-active-p t)
+      (let (submitted restored)
+        (cl-letf (((symbol-function 'codex--app-server-submit-command)
+                   (lambda (text _submission)
+                     (push text submitted)
+                     (setq codex--app-server-turn-start-pending-p t)))
+                  ((symbol-function 'codex--app-server-replace-input)
+                   (lambda (text) (setq restored text))))
+          (codex--app-server-dispatch-slash "/plan retry")
+          (setq codex--app-server-turn-active-p nil)
+          (codex--app-server-flush-turn-queue)
+          (should-not submitted)
+          (if (eq failure 'discovery)
+              (funcall (nth 2 (car requests)) nil '((message . "Failed")))
+            (funcall (nth 2 (car requests)) (codex-test--mode-presets) nil)
+            (funcall (nth 2 (cadr requests)) nil '((message . "Failed"))))
+          (should (equal submitted '("earlier")))
+          (should (equal restored "/plan retry"))
+          (should-not codex--app-server-queued-turn-inputs)
+          (should-not codex--app-server-mode-change-pending-p))))))
+
+(ert-deftest codex-test-app-server-mode-notification-before-response-keeps-base ()
+  "Plan's settings event before its response cannot replace the Default effort."
+  (codex-test--with-mode-session
+    (codex--app-server-dispatch-slash "/plan")
+    (funcall (nth 2 (car requests)) (codex-test--mode-presets) nil)
+    (codex--app-server-settings-updated
+     (list (cons 'threadSettings
+                 (list (cons 'model "fixture") (cons 'effort "medium")
+                       (cons 'collaborationMode (list (cons 'mode "plan")))))))
+    (should (equal codex--app-server-default-effort "high"))
+    (funcall (nth 2 (cadr requests)) nil nil)
+    (should (equal codex--app-server-default-effort "high"))
+    (setq requests nil)
+    (codex--app-server-dispatch-slash "/default")
+    (funcall (nth 2 (car requests)) (codex-test--mode-presets) nil)
+    (funcall (nth 2 (cadr requests)) nil nil)
+    (should (equal codex-reasoning-effort "high"))))
+
+(ert-deftest codex-test-app-server-mode-errors-restore-inline-input ()
+  "Discovery and selection errors preserve draft text and attachments."
+  (dolist (failure '(discovery unavailable update transport))
+    (codex-test--with-mode-session
+      (let (restored)
+        (setq-local codex--app-server-pending-images (list "/tmp/owned.png"))
+        (cl-letf (((symbol-function 'codex--app-server-replace-input)
+                   (lambda (text) (setq restored text))))
+          (if (eq failure 'transport)
+              (cl-letf (((symbol-function 'codex--app-server-send-request)
+                         (lambda (&rest _) (error "Disconnected"))))
+                (codex--app-server-dispatch-slash "/plan retained"))
+            (codex--app-server-dispatch-slash "/plan retained")
+            (funcall (nth 2 (car requests))
+                     (unless (memq failure '(discovery unavailable))
+                       (codex-test--mode-presets))
+                     (and (eq failure 'discovery) '((message . "No method"))))
+            (when (eq failure 'update)
+              (funcall (nth 2 (cadr requests)) nil '((message . "Rejected")))))
+          (should (equal restored "/plan retained"))
+          (should (equal codex--app-server-pending-images '("/tmp/owned.png")))
+          (should-not codex--app-server-collaboration-mode)
+          (should (equal codex-reasoning-effort "high"))
+          (should-not codex--app-server-mode-change-pending-p))))))
+
+(ert-deftest codex-test-app-server-mode-notifications-are-thread-scoped ()
+  "Foreign settings cannot switch this buffer; its own updates synchronize."
+  (codex-test--with-mode-session
+    (let ((event (list (cons 'method "thread/settings/updated")
+                       (cons 'params
+                             (list (cons 'threadId "foreign")
+                                   (cons 'threadSettings
+                                         (list (cons 'model "fixture")
+                                               (cons 'effort "medium")
+                                               (cons 'collaborationMode
+                                                     (list (cons 'mode "plan"))))))))))
+      (codex--app-server-handle-notification event)
+      (should-not codex--app-server-collaboration-mode)
+      (setf (alist-get 'threadId (alist-get 'params event)) "mode-thread")
+      (codex--app-server-handle-notification event)
+      (should (equal codex--app-server-collaboration-mode "plan"))
+      (should (equal codex-reasoning-effort "medium"))
+      (should (equal codex--app-server-default-effort "high")))))
+
+(ert-deftest codex-test-app-server-mode-model-changes-preserve-plan-effort ()
+  "Changing models keeps Plan's effort and stores the Default effort."
+  (codex-test--with-mode-session
+    (setq-local codex--app-server-collaboration-mode "plan")
+    (setq-local codex-reasoning-effort "medium")
+    (codex--app-server-apply-model (list (cons 'model "other-model")) "low")
+    (let ((params (nth 1 (car requests))))
+      (should (equal (alist-get 'effort params) "medium"))
+      (should (equal (alist-get 'mode (alist-get 'collaborationMode params)) "plan")))
+    (funcall (nth 2 (car requests)) nil nil)
+    (should (equal codex-reasoning-effort "medium"))
+    (should (equal codex--app-server-default-effort "low"))
+    (should (equal codex--app-server-current-model-id "other-model"))))
+
+(ert-deftest codex-test-app-server-mode-turn-start-carries-effective-settings ()
+  "A known mode reaches turn/start; an unknown resumed mode is not invented."
+  (codex-test--with-mode-session
+    (codex--app-server-send-turn-start (list :text "hello"))
+    (should-not (assq 'collaborationMode (nth 1 (car requests))))
+    (setq requests nil)
+    (codex--app-server-record-mode "plan" "fixture" "medium")
+    (codex--app-server-send-turn-start (list :text "hello"))
+    (let* ((params (nth 1 (car requests)))
+           (settings (alist-get 'settings (alist-get 'collaborationMode params))))
+      (should (equal (alist-get 'effort params) "medium"))
+      (should (equal (alist-get 'reasoning_effort settings) "medium"))
+      (should (equal (alist-get 'model settings) "fixture")))))
+
+(ert-deftest codex-test-app-server-mode-inline-queues-during-active-turn ()
+  "Inline Plan input starts a later turn rather than steering the current one."
+  (codex-test--with-mode-session
+    (setq-local codex--app-server-turn-active-p t)
+    (cl-letf (((symbol-function 'codex--app-server-render-queue) #'ignore))
+      (codex--app-server-dispatch-slash "/plan later")
+      (funcall (nth 2 (car requests)) (codex-test--mode-presets) nil)
+      (funcall (nth 2 (cadr requests)) nil nil)
+      (should (= (length requests) 2))
+      (should (equal (plist-get (car codex--app-server-queued-turn-inputs) :text)
+                     "later")))))
+
 (defvar eat-term-inside-emacs)
 (defvar eat-term-name)
 (defvar eat-term-scrollback-size)
@@ -2274,7 +2489,7 @@ the same request with {}."
 
 (ert-deftest codex-test-app-server-omits-frontend-slash-substitutions ()
   "App-server completion does not advertise unrelated Emacs substitutes."
-  (dolist (command '("/agent" "/ide" "/keymap" "/pets" "/plan" "/side"
+  (dolist (command '("/agent" "/ide" "/keymap" "/pets" "/side"
                      "/statusline" "/theme" "/title" "/vim"))
     (should-not (member command codex--app-server-slash-commands))))
 
@@ -3130,7 +3345,8 @@ the same request with {}."
 
 (ert-deftest codex-test-app-server-slash-commands-match-cli ()
   "The completion set includes the CLI's commands and omits non-CLI /help."
-  (dolist (cmd '("/archive" "/rename" "/model" "/fork" "/review"))
+  (dolist (cmd '("/archive" "/rename" "/model" "/fork" "/review"
+                "/plan" "/default"))
     (should (member cmd codex--app-server-slash-commands)))
   (should-not (member "/help" codex--app-server-slash-commands)))
 
