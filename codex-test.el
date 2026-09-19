@@ -3217,6 +3217,34 @@ the same request with {}."
                  (should-not (assq 'beforeTurnId params)))))
       (codex--app-server-begin-edit-branch))))
 
+(ert-deftest codex-test-app-server-edit-first-prompt-ready-without-materialization ()
+  "Fresh threads restore the draft after permissions without listing turns."
+  (dolist (profile '(nil ((id . "profile"))))
+    (with-temp-buffer
+      (setq-local codex--app-server-thread-id "fresh")
+      (setq-local codex--app-server-history-loading-p t)
+      (setq-local codex--app-server-startup-edit
+                  `(:submission (:text "first")
+                    :permissions ((approvalPolicy . "on-request")
+                                  (approvalsReviewer . "user")
+                                  (activePermissionProfile . ,profile)
+                                  (sandboxPolicy . ((type . "readOnly"))))))
+      (let (update)
+        (cl-letf (((symbol-function 'codex--app-server-send-request)
+                   (lambda (method _params callback)
+                     (should (equal method "thread/settings/update"))
+                     (setq update callback)))
+                  ((symbol-function 'codex--app-server-load-history-page)
+                   (lambda (&rest _) (ert-fail "Fresh thread is not materialized"))))
+          (codex--app-server-prepare-edit-history codex--app-server-startup-edit)
+          (unless profile
+            (should codex--app-server-history-loading-p)
+            (should-not codex--app-server-input-marker)
+            (funcall update nil nil))
+          (should-not codex--app-server-history-loading-p)
+          (should (equal (codex--app-server-input-text) "first"))
+          (should codex--app-server-edit-literal-p))))))
+
 (ert-deftest codex-test-app-server-edit-records-effective-permission-changes ()
   "Fresh branches preserve a selected profile and reviewer from current settings."
   (with-temp-buffer
@@ -3606,6 +3634,106 @@ the same request with {}."
             (should (marker-position codex--app-server-input-marker))
             (should (string-match-p "Retained response" (buffer-string)))
             (should-not (string-match-p ":null" (buffer-string)))))
+      (delete-file file))))
+
+(ert-deftest codex-test-app-server-transcript-user-kind-alignment ()
+  "Replay user text without leaking context, even when text resembles context."
+  (let ((payload
+         '((role . "user")
+           (content . (((type . "input_text") (text . "hidden context"))
+                       ((type . "input_text") (text . "<environment_context>literal"))
+                       ((type . "input_text") (text . "second part"))))
+           (internal_chat_message_metadata_passthrough
+            (content_item_kinds . ("environments.environment_context"
+                                   "user.text" "user.text"))))))
+    (should (equal (codex--app-server-response-message-event payload)
+                   '(user . "<environment_context>literal\nsecond part")))
+    (dolist (kinds '(nil ("user.text")
+                        ("user.text" "user.text" "user.text" "user.text")
+                        ("unknown" "unknown" "unknown")))
+      (setf (alist-get 'content_item_kinds
+                       (alist-get 'internal_chat_message_metadata_passthrough
+                                  payload)) kinds)
+      (should-not (codex--app-server-response-message-event payload)))))
+
+(defun codex-test--transcript-user-response (text &optional turn-id)
+  "Return a classified response item containing user TEXT and optional TURN-ID."
+  `((type . "response_item")
+    (payload
+     (type . "message") (role . "user")
+     (content . [((type . "input_text") (text . ,text))])
+     (internal_chat_message_metadata_passthrough
+      (turn_id . ,turn-id) (content_item_kinds . ["user.text"])))))
+
+(ert-deftest codex-test-app-server-transcript-user-representation-pairing ()
+  "Pair duplicate formats without losing repeated prompts or later turns."
+  (let ((file (make-temp-file "codex-user-records" nil ".jsonl"))
+        (legacy '((type . "event_msg")
+                  (payload (type . "user_message") (message . "repeat"))))
+        (response (codex-test--transcript-user-response "repeat")))
+    (unwind-protect
+        (dolist (case
+                 `(((,legacy ,response) . 1)
+                   ((,response ,legacy) . 1)
+                   ((,legacy ,legacy ,response ,response) . 2)
+                   ((,response ,legacy ,response ,legacy) . 2)
+                   ((,response ,response) . 2)
+                   ((,legacy
+                     ((type . "event_msg") (payload (type . "task_started")))
+                     ,response) . 2)
+                   ((,response ((type . "turn_context") (payload)) ,legacy) . 2)
+                   ((,legacy
+                     ((type . "event_msg")
+                      (payload (type . "agent_message") (message . "answer")))
+                     ,response) . 2)
+                   ((,(codex-test--transcript-user-response "repeat" "one")
+                     ((type . "event_msg")
+                      (payload (type . "user_message") (message . "repeat")
+                               (turn_id . "two")))) . 2)))
+          (with-temp-file file
+            (dolist (entry (car case)) (insert (json-encode entry) "\n")))
+          (should (= (cl-count 'user (codex--app-server-transcript-events file)
+                               :key #'car)
+                     (cdr case))))
+      (delete-file file))))
+
+(ert-deftest codex-test-app-server-resume-classified-user-response-history ()
+  "Modern response-only user records replay before assistant text and input."
+  (let ((file (make-temp-file "codex-modern-transcript" nil ".jsonl")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"INJECTED_CONTEXT\"}],\"internal_chat_message_metadata_passthrough\":{\"content_item_kinds\":[\"environments.environment_context\"]}}}\n")
+            (dotimes (index 3)
+              (insert (json-encode
+                       (codex-test--transcript-user-response
+                        (format "PROMPT_%d" index) (format "turn-%d" index)))
+                      "\n"
+                      (json-encode
+                       `((type . "response_item")
+                         (payload
+                          (type . "message") (role . "assistant")
+                          (content . [((type . "output_text")
+                                       (text . ,(format "ANSWER_%d" index)))]))))
+                      "\n")))
+          (with-temp-buffer
+            (setq-local codex--app-server-agent-items
+                        (make-hash-table :test 'equal))
+            (setq-local codex--app-server-command-items
+                        (make-hash-table :test 'equal))
+            (cl-letf (((symbol-function 'codex--app-server-send-request)
+                       (lambda (_method _params callback)
+                         (funcall callback
+                                  `((thread (id . "modern") (path . ,file))) nil))))
+              (codex--app-server-send-resume
+               "thread/resume" `((id . "modern") (path . ,file))))
+            (should-not codex--app-server-history-loading-p)
+            (should (marker-position codex--app-server-input-marker))
+            (should-not (string-match-p "INJECTED_CONTEXT" (buffer-string)))
+            (goto-char (point-min))
+            (dotimes (index 3)
+              (should (search-forward (format "› PROMPT_%d" index) nil t))
+              (should (search-forward (format "ANSWER_%d" index) nil t)))))
       (delete-file file))))
 
 (ert-deftest codex-test-app-server-resume-renders-response-item-assistant-message ()

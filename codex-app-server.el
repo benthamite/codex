@@ -3894,19 +3894,46 @@ event."
 
 (defun codex--app-server-transcript-events (file)
   "Return user-visible transcript events from JSONL FILE."
-  (let (events)
+  (let ((user-records (make-hash-table :test 'equal))
+        events turn-id)
     (with-temp-buffer
       (insert-file-contents file)
       (dolist (line (split-string (buffer-string) "\n" t))
         (when-let* ((entry (ignore-errors
-                             (json-parse-string line
-                                                :object-type 'alist
-                                                :array-type 'list
-                                                :null-object nil
-                                                :false-object nil)))
-                    (event (codex--app-server-transcript-event entry)))
-          (push event events))))
+                            (json-parse-string line
+                                               :object-type 'alist
+                                               :array-type 'list
+                                               :null-object nil
+                                               :false-object nil))))
+          (let* ((payload (alist-get 'payload entry))
+                 (id (or (alist-get 'turn_id payload)
+                         (alist-get 'turn_id
+                                    (alist-get
+                                     'internal_chat_message_metadata_passthrough
+                                     payload))))
+                 (event (codex--app-server-transcript-event entry)))
+            (when (or (and id turn-id (not (equal id turn-id)))
+                      (equal (alist-get 'type entry) "turn_context")
+                      (member (alist-get 'type payload)
+                              '("task_started" "task_complete" "turn_aborted"))
+                      (and event (not (eq (car event) 'user))))
+              (clrhash user-records))
+            (when id (setq turn-id id))
+            (when (and event
+                       (not (and (eq (car event) 'user)
+                                 (codex--app-server-duplicate-user-record-p
+                                  entry event user-records))))
+              (push event events))))))
     (nreverse events)))
+
+(defun codex--app-server-duplicate-user-record-p (entry event records)
+  "Pair opposite representations of user EVENT from ENTRY within RECORDS."
+  (let* ((source (alist-get 'type entry))
+         (other (if (equal source "event_msg") "response_item" "event_msg"))
+         (key (cons source (cdr event)))
+         (count (1+ (gethash key records 0))))
+    (puthash key count records)
+    (<= count (gethash (cons other (cdr event)) records 0))))
 
 (defun codex--app-server-transcript-event (entry)
   "Return a renderable transcript event from JSONL ENTRY, or nil."
@@ -3933,17 +3960,38 @@ event."
           '(tool . nil)))))))
 
 (defun codex--app-server-response-message-event (payload)
-  "Return a transcript event for assistant message PAYLOAD, or nil."
-  (when (equal (alist-get 'role payload) "assistant")
-    (let ((text
-           (string-join
-            (delq nil
-                  (mapcar (lambda (part)
-                            (when (equal (alist-get 'type part) "output_text")
-                              (alist-get 'text part)))
-                          (append (alist-get 'content payload) nil)))
-            "\n")))
-      (codex--app-server-transcript-event-with-text 'agent text))))
+  "Return a visible user or assistant transcript event from message PAYLOAD."
+  (pcase (alist-get 'role payload)
+    ("user" (codex--app-server-response-user-event payload))
+    ("assistant"
+     (let ((text
+            (string-join
+             (delq nil
+                   (mapcar (lambda (part)
+                             (when (equal (alist-get 'type part) "output_text")
+                               (alist-get 'text part)))
+                           (append (alist-get 'content payload) nil)))
+             "\n")))
+       (codex--app-server-transcript-event-with-text 'agent text)))))
+
+(defun codex--app-server-response-user-event (payload)
+  "Return only authoritatively classified user text from message PAYLOAD."
+  (let* ((content (alist-get 'content payload))
+         (kinds (alist-get
+                 'content_item_kinds
+                 (alist-get 'internal_chat_message_metadata_passthrough payload))))
+    (when (and (listp content) (listp kinds)
+               (= (length content) (length kinds)))
+      (codex--app-server-transcript-event-with-text
+       'user
+       (string-join
+        (cl-loop for part in content
+                 for kind in kinds
+                 when (and (equal kind "user.text")
+                           (equal (alist-get 'type part) "input_text")
+                           (stringp (alist-get 'text part)))
+                 collect (alist-get 'text part))
+        "\n")))))
 
 (defun codex--app-server-transcript-event-with-text (role text)
   "Return a transcript event with ROLE and TEXT when TEXT is meaningful."
@@ -5142,8 +5190,7 @@ The original conversation and its draft remain untouched.  No prompt is sent."
   (let* ((settings (plist-get edit :permissions))
          (thread-id codex--app-server-thread-id))
     (if (alist-get 'id (alist-get 'activePermissionProfile settings))
-        (codex--app-server-load-history-page
-         thread-id nil #'codex--app-server-finish-edit-branch)
+        (codex--app-server-load-edit-history edit)
       (codex--app-server-send-request
        "thread/settings/update"
        `((threadId . ,thread-id)
@@ -5155,8 +5202,14 @@ The original conversation and its draft remain untouched.  No prompt is sent."
            (if error
                (codex--app-server-insert-status
                 (format "Cannot preserve source permissions; branch input blocked: %S" error))
-             (codex--app-server-load-history-page
-              thread-id nil #'codex--app-server-finish-edit-branch))))))))
+             (codex--app-server-load-edit-history edit))))))))
+
+(defun codex--app-server-load-edit-history (edit)
+  "Load retained turns for EDIT, or prepare its fresh thread immediately."
+  (if (plist-get edit :before-turn-id)
+      (codex--app-server-load-history-page
+       codex--app-server-thread-id nil #'codex--app-server-finish-edit-branch)
+    (codex--app-server-finish-edit-branch t)))
 
 (defun codex--app-server-finish-edit-branch (success)
   "Restore the unsent edited prompt after history hydration SUCCESS."
