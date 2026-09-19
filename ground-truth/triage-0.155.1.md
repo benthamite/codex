@@ -188,3 +188,19 @@ native request was still snoozed at 145 seconds, and a matching resolution
 notification dismissed it without sending an answer. The
 `serverRequest/resolved` exclusion was obsolete: queued and active questions
 now honor resolution, with lifecycle and stale-timer regression coverage.
+
+Prompt editing now matches the observed source-preserving CLI flow. Native
+second-prompt editing kept the first turn and restored the second unsent;
+editing the first prompt created a fresh empty thread. Selecting prompt 102
+retained 101 turns across 100+1 pages while the source retained all 103 turns
+and its draft. Launch home, effective permissions and literal external-editor
+submission were verified. The first edited turn did not overwrite server-side
+approval settings, and repeated editing released the source selection state.
+
+Live acceptance also exposed two current-server compatibility details: fresh
+threads reject history listing before their first message, and modern local
+rollouts store user prompts as classified response items. Fresh edit branches
+now become ready directly after permission setup. Local replay reads only
+aligned `user.text` items, excludes injected context and avoids duplicate legacy
+representations. Null transcript metadata no longer breaks resumed headers.
+These are live-observed fixes, beyond method-name coverage.

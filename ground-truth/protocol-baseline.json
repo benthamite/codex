@@ -662,7 +662,8 @@
       "status": "wont-implement"
     },
     "thread/fork": {
-      "status": "handled"
+      "status": "handled",
+      "note": "Live 0.155.1 acceptance 2026-09-19: /edit forks before the selected turn with excludeTurns and deferGoalContinuation, retains all chronological pages, and restores the selected input unsent in a separate buffer. First-prompt edit starts a fresh empty thread. Source draft/history, launch home, effective permissions and literal external-editor submission verified; 103-source/101-retained pagination checked."
     },
     "thread/goal/clear": {
       "note": "goal is partly handled; cleared is, clear is not",
@@ -818,11 +819,11 @@
       "status": "handled"
     },
     "thread/revert": {
-      "note": "Reviewed 2026-09-19 against official TUI app_backtrack.rs and chatwidget/protocol.rs: editing an earlier prompt now sends ForkSessionForPromptEdit to preserve the original conversation, not an in-place revert. The TUI explicitly ignores ThreadReverted. Do not implement destructive history rewriting as the backtracking equivalent. Source-preserving prompt-edit branching is tracked separately as a feature gap.",
+      "note": "Reviewed 2026-09-19 against official TUI app_backtrack.rs and chatwidget/protocol.rs: editing an earlier prompt now sends ForkSessionForPromptEdit to preserve the original conversation, not an in-place revert. The TUI explicitly ignores ThreadReverted. Do not implement destructive history rewriting as the backtracking equivalent. Source-preserving /edit branching is now implemented and live verified through thread/fork (or fresh thread/start for the first prompt).",
       "status": "wont-implement"
     },
     "thread/reverted": {
-      "note": "Reviewed 2026-09-19 against official TUI app_backtrack.rs and chatwidget/protocol.rs: editing an earlier prompt now sends ForkSessionForPromptEdit to preserve the original conversation, not an in-place revert. The TUI explicitly ignores ThreadReverted. Do not implement destructive history rewriting as the backtracking equivalent. Source-preserving prompt-edit branching is tracked separately as a feature gap.",
+      "note": "Reviewed 2026-09-19 against official TUI app_backtrack.rs and chatwidget/protocol.rs: editing an earlier prompt now sends ForkSessionForPromptEdit to preserve the original conversation, not an in-place revert. The TUI explicitly ignores ThreadReverted. Do not implement destructive history rewriting as the backtracking equivalent. Source-preserving /edit branching is now implemented and live verified through thread/fork (or fresh thread/start for the first prompt).",
       "status": "wont-implement"
     },
     "thread/rollback": {
