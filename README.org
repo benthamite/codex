@@ -100,6 +100,10 @@ On the =app-server= backend, slash commands typed into the input are handled by 
 
 Extensions can use ~codex-app-server-turn-completed-hook~ after a turn becomes idle and before Codex submits queued input.
 
+Tool questions display option descriptions and select the first option by default.  RET submits the selection; ~C-c C-n~ adds optional notes, and “None of the above” opens a notes prompt.  Freeform questions and notes use the server's ~user_note:~ answer encoding.  ~C-g~ interrupts the question's own turn without submitting an answer, including from nested notes.  Queued questions wait for the minibuffer; requests resolved elsewhere or belonging to a completed turn are dismissed.  Secret input remains masked.
+
+Nonblocking tool questions wait 60 seconds, then show a 60-second countdown before automatically returning an empty answers object.  Any interaction with the question permanently stops that countdown.  Blocking questions do not expire.  The native interface asks multiple questions sequentially, confirms unanswered entries, and lets you revisit them without discarding other answers.  Completed answers remain in the transcript, with secret values masked; general backtracking to already answered questions is not provided.
+
 The experimental realtime channel is handled too: ~codex-app-server-realtime-start~, ~codex-app-server-realtime-stop~, and ~codex-app-server-realtime-send-text~ control a text-output realtime session, and realtime lifecycle and transcript events render in the buffer (audio streaming and SDP signaling are accepted but not rendered, since they have no text representation).
 Realtime captions preserve final-only text and replace partial wording with the final transcript.  Interleaved speakers finish independently, and completed captions appear in completion order without duplicating earlier partial text.
 

@@ -6807,10 +6807,10 @@ reply (:answers (ID (:answers [ANSWER])))."
                                                (description . "de"))]))
                                  ((id . "q2") (header . "Note")
                                   (question . "Anything else?"))])))))
-      (should (equal (alist-get 'answers (alist-get 'q1 (alist-get 'answers body)))
+      (should (equal (alist-get 'answers (gethash "q1" (alist-get 'answers body)))
                      ["Berlin"]))
-      (should (equal (alist-get 'answers (alist-get 'q2 (alist-get 'answers body)))
-                     ["free text"])))))
+      (should (equal (alist-get 'answers (gethash "q2" (alist-get 'answers body)))
+                     ["user_note: free text"])))))
 
 (ert-deftest codex-test-app-server-user-input-reads-secrets-without-echo ()
   "Ask a secret question with `read-passwd', not `read-string'."
@@ -6839,7 +6839,8 @@ reply (:answers (ID (:answers [ANSWER])))."
                '((method . "item/tool/requestUserInput")
                  (params . ((questions . [])))))))
     (should (plist-get spec :ask))
-    (should (equal (codex--app-server-read-approval spec) '((answers))))))
+    (should (equal (json-encode (codex--app-server-read-approval spec))
+                   "{\"answers\":{}}"))))
 
 (ert-deftest codex-test-app-server-status-includes-account ()
   "Report the active account in /status, as the CLI's panel does.
@@ -7610,3 +7611,280 @@ the menu, exactly as `@' opens the file equivalent."
       (should (string-match-p "Earlier caption" (buffer-string)))
       (should (string-match-p "New final" (buffer-string)))
       (should-not codex--app-server-realtime-segments))))
+
+(ert-deftest codex-test-app-server-tool-question-default-descriptions-notes ()
+  "Keep labels clean while showing descriptions and accepting separate notes."
+  (cl-letf (((symbol-function 'completing-read)
+             (lambda (prompt choices predicate require-match initial history default)
+               (ignore predicate initial history)
+               (should (string-match-p "Use blue" prompt))
+               (should (equal choices '("Blue" "Green" "None of the above")))
+               (should require-match)
+               (should (equal default "Blue"))
+               (should (eq (lookup-key minibuffer-local-must-match-map
+                                      (kbd "C-c C-n"))
+                           #'codex--app-server-question-add-notes))
+               (codex--app-server-question-add-notes)
+               default))
+            ((symbol-function 'read-string) (lambda (&rest _) "  NOTE  ")))
+    (should
+     (equal
+      (codex--app-server-user-input-answer
+       '((id . "colour") (question . "Colour?") (isOther . t)
+         (options . [((label . "Blue") (description . "Use blue"))
+                     ((label . "Green") (description . "Use green"))])))
+      '("colour" (answers . ["Blue" "user_note: NOTE"]))))))
+
+(ert-deftest codex-test-app-server-tool-question-none-of-above ()
+  "Other is a literal option that opens notes instead of arbitrary completion."
+  (cl-letf (((symbol-function 'completing-read)
+             (lambda (_prompt choices _predicate require-match &rest _)
+               (should require-match)
+               (should (member "None of the above" choices))
+               "None of the above"))
+            ((symbol-function 'read-string) (lambda (&rest _) " Something else ")))
+    (should
+     (equal
+      (codex--app-server-user-input-answer
+       '((id . "q") (question . "Q?") (isOther . t)
+         (options . [((label . "One") (description . "First"))])))
+      '("q" (answers . ["None of the above" "user_note: Something else"]))))))
+
+(ert-deftest codex-test-app-server-tool-question-no-other-and-blank-freeform ()
+  "Omit Other when disallowed and serialize empty freeform as an empty array."
+  (cl-letf (((symbol-function 'completing-read)
+             (lambda (_prompt choices &rest _)
+               (if (member "Submit unanswered" choices)
+                   "Submit unanswered"
+                 (should (equal choices '("One"))) "One")))
+            ((symbol-function 'read-string) (lambda (&rest _) "  \n ")))
+    (let ((body (codex--app-server-answer-user-input
+                 '((questions . [((id . "q") (question . "Q?")
+                                  (options . [((label . "One")
+                                               (description . "First"))]))
+                                 ((id . "empty") (question . "Notes?")
+                                  (isOther . t) (options . []))])))))
+      (should (equal (json-encode body)
+                     "{\"answers\":{\"q\":{\"answers\":[\"One\"]},\"empty\":{\"answers\":[]}}}")))))
+
+(ert-deftest codex-test-app-server-tool-question-cancel-is-request-specific ()
+  "Quit interrupts the requested turn, sends no answer, and drops its queue."
+  (with-temp-buffer
+    (setq-local codex--app-server-thread-id "different-thread"
+                codex--app-server-current-turn-id "different-turn")
+    (let* ((message '((id . 1) (method . "item/tool/requestUserInput")
+                      (params (threadId . "requested-thread")
+                              (turnId . "requested-turn") (questions . []))))
+           (other '((id . 3) (params (threadId . "other") (turnId . "other"))))
+           (codex--app-server-question-queue (list message other))
+           sent)
+      (cl-letf (((symbol-function 'run-at-time) (lambda (&rest _) nil))
+                ((symbol-function 'codex--app-server-answer-user-input)
+                 (lambda (_) (signal 'quit nil)))
+                ((symbol-function 'codex--app-server-send-response)
+                 (lambda (&rest _) (ert-fail "Cancellation sent an answer")))
+                ((symbol-function 'codex--app-server-send-request)
+                 (lambda (method params _callback) (setq sent (list method params)))))
+        (codex--app-server-run-question message)
+        (should (equal sent '("turn/interrupt"
+                              ((threadId . "requested-thread")
+                               (turnId . "requested-turn")))))
+        (should (equal codex--app-server-question-queue (list other)))
+        (codex--app-server-queue-question message)
+        (should (equal codex--app-server-question-queue (list other)))
+        (should-not codex--app-server-question-active)))))
+
+(ert-deftest codex-test-app-server-tool-question-nested-quit-exits-request ()
+  "The question's C-g command exits its whole request, including nested notes."
+  (let* ((tag (make-symbol "question"))
+         (codex--app-server-question-context (list :tag tag :status nil)))
+    (should (eq (catch tag (codex--app-server-question-quit) 'not-exited) nil))
+    (should (eq (plist-get codex--app-server-question-context :status)
+                'interrupted))))
+
+(ert-deftest codex-test-app-server-tool-question-timeout-wire-object ()
+  "Automatic resolution sends an empty answers object without interruption."
+  (with-temp-buffer
+    (let (sent)
+      (cl-letf (((symbol-function 'run-at-time) (lambda (&rest _) nil))
+                ((symbol-function 'codex--app-server-answer-user-input)
+                 (lambda (_params)
+                   (setf (plist-get codex--app-server-question-context :status)
+                         'timeout)
+                   (throw (plist-get codex--app-server-question-context :tag) nil)))
+                ((symbol-function 'codex--app-server-send-response)
+                 (lambda (id result) (setq sent (list id (json-encode result)))))
+                ((symbol-function 'codex--app-server-send-request)
+                 (lambda (&rest _) (ert-fail "Timeout interrupted turn"))))
+        (codex--app-server-run-question
+         '((id . "timed") (params (isBlocking) (questions . []))))
+        (should (equal sent '("timed" "{\"answers\":{}}")))))))
+
+(ert-deftest codex-test-app-server-tool-question-timing-and-snooze ()
+  "Only explicitly nonblocking, untouched prompts expire after 120 seconds."
+  (with-temp-buffer
+    (dolist (params '(((isBlocking)) ((isBlocking . t)) nil))
+      (let ((context (list :message `((params . ,params)) :started 100
+                           :snoozed nil :status nil)))
+        (setq-local codex--app-server-question-active context)
+        (cl-letf (((symbol-function 'active-minibuffer-window) (lambda () nil)))
+          (dolist (elapsed '(59 60 119))
+            (cl-letf (((symbol-function 'float-time)
+                       (lambda (&rest _) (+ 100 elapsed))))
+              (codex--app-server-question-tick (current-buffer) context)
+              (should-not (plist-get context :status))))
+          (cl-letf (((symbol-function 'float-time) (lambda (&rest _) 220)))
+            (codex--app-server-question-tick (current-buffer) context)
+            (should (eq (plist-get context :status)
+                        (and (equal params '((isBlocking))) 'timeout)))))))
+    (let* ((context (list :message '((params (isBlocking))) :started 0
+                          :snoozed nil :status nil))
+           (codex--app-server-question-context context))
+      (setq-local codex--app-server-question-active context)
+      (codex--app-server-question-interacted)
+      (cl-letf (((symbol-function 'float-time) (lambda (&rest _) 999))
+                ((symbol-function 'active-minibuffer-window) (lambda () nil)))
+        (codex--app-server-question-tick (current-buffer) context)
+        (should-not (plist-get context :status))))))
+
+(ert-deftest codex-test-app-server-tool-question-resolved-suppresses-reply ()
+  "A resolved active request and matching queued request cannot answer late."
+  (with-temp-buffer
+    (let* ((message '((id . 4) (params (threadId . "thread") (questions . []))))
+           (other '((id . 4) (params (threadId . "other"))))
+           (codex--app-server-question-queue (list message other)))
+      (cl-letf (((symbol-function 'run-at-time) (lambda (&rest _) nil))
+                ((symbol-function 'codex--app-server-answer-user-input)
+                 (lambda (_params)
+                   (codex--app-server-resolve-question
+                    '((threadId . "thread") (requestId . 4)))
+                   '((answers . nil))))
+                ((symbol-function 'codex--app-server-send-response)
+                 (lambda (&rest _) (ert-fail "Resolved question replied"))))
+        (codex--app-server-run-question message)
+        (should (equal codex--app-server-question-queue (list other)))
+        (should-not codex--app-server-question-active)))))
+
+(ert-deftest codex-test-app-server-tool-question-queue-waits-for-minibuffer ()
+  "An existing minibuffer delays a queued question without nesting it."
+  (with-temp-buffer
+    (let ((codex--app-server-question-queue '(((id . 1)))) scheduled)
+      (cl-letf (((symbol-function 'active-minibuffer-window) (lambda () t))
+                ((symbol-function 'run-at-time)
+                 (lambda (&rest _) (setq scheduled t)))
+                ((symbol-function 'codex--app-server-run-question)
+                 (lambda (&rest _) (ert-fail "Nested question prompt"))))
+        (codex--app-server-show-next-question (current-buffer))
+        (should scheduled)
+        (should (equal codex--app-server-question-queue '(((id . 1)))))))))
+
+(ert-deftest codex-test-app-server-tool-question-revisits-only-unanswered ()
+  "Revisiting a blank question preserves another question's committed answer."
+  (let ((calls nil) (freeform '("" "Final note")))
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_prompt choices &rest _)
+                 (if (member "Revisit unanswered" choices)
+                     "Revisit unanswered"
+                   (push 'choice calls) "Blue")))
+              ((symbol-function 'read-string)
+               (lambda (&rest _) (push 'notes calls) (pop freeform))))
+      (let ((result
+             (codex--app-server-answer-user-input
+              '((questions . [((id . "choice") (question . "Choose?")
+                               (options . [((label . "Blue") (description . "Blue"))]))
+                              ((id . "note") (question . "Notes?"))])))))
+        (should (equal (nreverse calls) '(choice notes notes)))
+        (should (equal (alist-get 'answers
+                                  (gethash "note" (alist-get 'answers result)))
+                       ["user_note: Final note"]))))))
+
+(ert-deftest codex-test-app-server-tool-question-result-summary-and-privacy ()
+  "Display selected answers and notes, mask secrets, and mark missing answers."
+  (with-temp-buffer
+    (let ((answers (make-hash-table :test 'equal)))
+      (puthash "q" '((answers . ["Blue" "user_note: NOTE"])) answers)
+      (puthash "secret" '((answers . ["user_note: PRIVATEVALUE"])) answers)
+      (codex--app-server-render-question-result
+       '((questions . [((id . "q") (question . "Colour?") (options . [one]))
+                       ((id . "secret") (question . "Secret?") (isSecret . t))
+                       ((id . "missing") (question . "Missing?"))]))
+       `((answers . ,answers)))
+      (should (equal (buffer-string)
+                     (concat "• Questions 2/3 answered\n  • Colour?"
+                             "\n    answer: Blue\n    note: NOTE"
+                             "\n  • Secret?\n    answer: ••••••"
+                             "\n  • Missing? (unanswered)"))))))
+
+(ert-deftest codex-test-app-server-tool-question-timeout-summary ()
+  "Timeout summaries show questions as unanswered without inventing answers."
+  (with-temp-buffer
+    (codex--app-server-render-question-result
+     '((questions . [((id . "q") (question . "Colour?"))]))
+     `((answers . ,(make-hash-table :test 'equal))))
+    (should (equal (buffer-string)
+                   "• Questions 0/1 answered\n  • Colour? (unanswered)"))))
+
+(ert-deftest codex-test-app-server-tool-question-resolved-cross-thread ()
+  "Resolve the matching request even when the buffer displays another thread."
+  (with-temp-buffer
+    (setq-local codex--app-server-thread-id "displayed")
+    (let ((codex--app-server-question-queue
+           '(((id . "q") (params (threadId . "requested"))))))
+      (codex--app-server-handle-notification
+       '((method . "serverRequest/resolved")
+         (params (threadId . "requested") (requestId . "q"))))
+      (should-not codex--app-server-question-queue))))
+
+(ert-deftest codex-test-app-server-tool-question-tick-leaves-unrelated-prompt ()
+  "A dynamically inherited context does not make an unrelated prompt ours."
+  (save-window-excursion
+    (with-temp-buffer
+      (switch-to-buffer (current-buffer))
+      (let* ((context (list :message '((params (isBlocking))) :started 0
+                            :status nil :snoozed nil :tag (make-symbol "q")))
+             (codex--app-server-question-context context))
+        (setq-local codex--app-server-question-active context)
+        (should-not (local-variable-p 'codex--app-server-question-context))
+        (cl-letf (((symbol-function 'active-minibuffer-window) #'selected-window)
+                  ((symbol-function 'float-time) (lambda (&rest _) 120)))
+          (codex--app-server-question-tick (current-buffer) context)
+          (should (eq (plist-get context :status) 'timeout)))))))
+
+(ert-deftest codex-test-app-server-tool-question-tick-ignores-obsolete-context ()
+  "An obsolete timer cannot change the current question or time itself out."
+  (with-temp-buffer
+    (let ((old (list :message '((params (isBlocking))) :started 0
+                     :status nil :snoozed nil)))
+      (setq-local codex--app-server-question-active '(:status nil))
+      (cl-letf (((symbol-function 'float-time) (lambda (&rest _) 999)))
+        (codex--app-server-question-tick (current-buffer) old)
+        (should-not (plist-get old :status))))))
+
+(ert-deftest codex-test-app-server-tool-question-turn-and-disconnect-dismissal ()
+  "Turn completion and disconnection dismiss questions without replying."
+  (with-temp-buffer
+    (let* ((message '((id . 1) (params (threadId . "t") (turnId . "u"))))
+           (context (list :message message :status nil)))
+      (setq-local codex--app-server-question-active context
+                  codex--app-server-question-queue (list message))
+      (codex--app-server-resolve-question-turn
+       '((threadId . "t") (turn (id . "u"))))
+      (should (eq (plist-get context :status) 'resolved))
+      (should-not codex--app-server-question-queue)
+      (codex--app-server-dismiss-questions)
+      (should (eq (plist-get context :status) 'disconnected))
+      (should-not codex--app-server-question-queue-timer))))
+
+(ert-deftest codex-test-app-server-tool-question-ui-error-does-not-reply ()
+  "UI errors report failure and never submit an answer on a dead transport."
+  (with-temp-buffer
+    (cl-letf (((symbol-function 'run-at-time) (lambda (&rest _) nil))
+              ((symbol-function 'codex--app-server-answer-user-input)
+               (lambda (_) (error "UI broke")))
+              ((symbol-function 'codex--app-server-send-response)
+               (lambda (&rest _) (ert-fail "UI error sent answer")))
+              ((symbol-function 'codex--app-server-send-request)
+               (lambda (&rest _) (ert-fail "Dead transport used"))))
+      (codex--app-server-run-question '((id . 1) (params (questions . []))))
+      (should (string-match-p "Codex question failed: UI broke" (buffer-string)))
+      (should-not codex--app-server-question-active))))

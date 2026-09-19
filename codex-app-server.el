@@ -156,6 +156,24 @@ because per-tool hooks can be frequent."
 (defvar-local codex--app-server-pending-requests nil
   "Hash table mapping app-server request ids to callbacks.")
 
+(defvar-local codex--app-server-question-queue nil
+  "Queued tool question request messages.")
+
+(defvar-local codex--app-server-question-queue-timer nil
+  "Timer waiting to display the next tool question.")
+
+(defvar-local codex--app-server-question-active nil
+  "Mutable context of the active tool question request.")
+
+(defvar-local codex--app-server-question-canceled-turns nil
+  "Thread and turn pairs whose tool questions were interrupted.")
+
+(defvar codex--app-server-question-context nil
+  "Dynamically bound tool question context, also local to its minibuffers.")
+
+(defvar codex--app-server-question-notes nil
+  "Dynamically bound optional notes for the question being answered.")
+
 (defvar-local codex--app-server-thread-id nil
   "Current app-server thread id.")
 
@@ -570,6 +588,7 @@ arguments."
 
 (cl-defmethod codex--term-cleanup ((_backend (eql app-server)))
   "Clean up app-server buffer-local state."
+  (codex--app-server-dismiss-questions)
   (codex--app-server-cancel-markdown-render)
   (codex--app-server-stop-status-timer)
   (codex--app-server-stop-composer-placeholder-timer)
@@ -681,12 +700,16 @@ can arrive before this buffer has learned its thread id; both belong here."
   "Handle app-server notification MESSAGE."
   (let ((method (alist-get 'method message nil nil #'equal))
         (params (alist-get 'params message)))
+    (when (equal method "serverRequest/resolved")
+      (codex--app-server-resolve-question params))
     (when (codex--app-server-current-thread-notification-p params)
       (pcase method
         ("thread/started" (codex--app-server-thread-started params))
         ("thread/settings/updated" (codex--app-server-settings-updated params))
         ("turn/started" (codex--app-server-turn-started params))
-        ("turn/completed" (codex--app-server-turn-completed params))
+        ("turn/completed"
+         (codex--app-server-resolve-question-turn params)
+         (codex--app-server-turn-completed params))
         ("item/agentMessage/delta"
          (codex--app-server-render-agent-delta params))
         ("item/reasoning/summaryTextDelta"
@@ -825,6 +848,9 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
       (setq codex--app-server-collaboration-mode nil
             codex--app-server-default-effort nil
             codex--app-server-mode-change-pending-p nil)
+      (unless (equal codex--app-server-thread-id thread-id)
+        (codex--app-server-dismiss-questions)
+        (setq codex--app-server-question-canceled-turns nil))
       (setq codex--app-server-thread-id thread-id)
       (codex--record-session-metadata thread-id thread-path)
       (codex--app-server-render-header thread)
@@ -1384,6 +1410,7 @@ There is no CLI rendering to mirror here: the CLI's own TUI stays
 subscribed for as long as it runs, so its threads are never unloaded this
 way.  The wording below is therefore this client's own."
   (when (equal (alist-get 'threadId params) codex--app-server-thread-id)
+    (codex--app-server-dismiss-questions)
     (setq codex--app-server-thread-id nil)
     (codex--app-server-insert-status
      "Thread closed by the server after being idle; /resume to continue")))
@@ -4170,12 +4197,14 @@ when it follows the item bullet, which precedes START on the same line."
 
 (defun codex--app-server-handle-server-request (message)
   "Answer app-server request MESSAGE, deferring interactive approvals."
-  (if (equal (alist-get 'method message) "currentTime/read")
-      (codex--app-server-send-response
-       (alist-get 'id message) `((currentTimeAt . ,(floor (float-time)))))
-    (let ((buffer (current-buffer)))
-      (run-at-time 0 nil #'codex--app-server-answer-server-request
-                   buffer message))))
+  (pcase (alist-get 'method message)
+    ("currentTime/read"
+     (codex--app-server-send-response
+      (alist-get 'id message) `((currentTimeAt . ,(floor (float-time))))))
+    ("item/tool/requestUserInput" (codex--app-server-queue-question message))
+    (_ (let ((buffer (current-buffer)))
+         (run-at-time 0 nil #'codex--app-server-answer-server-request
+                      buffer message)))))
 
 (defun codex--app-server-answer-server-request (buffer message)
   "Answer app-server MESSAGE in BUFFER."
@@ -4277,36 +4306,313 @@ Captured CLI prompt:
               (path (alist-get 'path (alist-get 'path entry))))
     (format "%s %s" access path)))
 
-(defun codex--app-server-answer-user-input (params)
-  "Ask the questions in PARAMS and return the answers response body.
-Handles `item/tool/requestUserInput', where a tool asks the user one or
-more questions.  Each question carries an id, a header, and the question
-text, and optionally a list of options; `isSecret' asks without echo, and
-`isOther' means a free-text answer is acceptable alongside the options.
-The reply maps question ids to answers.
+(defun codex--app-server-queue-question (message)
+  "Queue tool question MESSAGE without nesting another active minibuffer."
+  (unless (member (codex--app-server-question-turn message)
+                  codex--app-server-question-canceled-turns)
+    (setq codex--app-server-question-queue
+          (nconc codex--app-server-question-queue (list message)))
+    (codex--app-server-schedule-question)))
 
-Unlike the other requests handled here, the CLI's own presentation was not
-captured: no configured tool asks this, and no listed experimental feature
-enables it.  The request and reply shapes come from the app-server schema,
-which is authoritative, but the prompt wording is this client's own and
-has not been diffed against the CLI."
-  (let ((answers (mapcar #'codex--app-server-user-input-answer
-                         (append (alist-get 'questions params) nil))))
+(defun codex--app-server-question-turn (message)
+  "Return MESSAGE's thread and turn identifiers."
+  (let ((params (alist-get 'params message)))
+    (cons (alist-get 'threadId params) (alist-get 'turnId params))))
+
+(defun codex--app-server-schedule-question ()
+  "Schedule the next queued tool question when none is already active."
+  (when (and codex--app-server-question-queue
+             (not codex--app-server-question-active)
+             (not (timerp codex--app-server-question-queue-timer)))
+    (setq codex--app-server-question-queue-timer
+          (run-at-time 0.1 nil #'codex--app-server-show-next-question
+                       (current-buffer)))))
+
+(defun codex--app-server-show-next-question (buffer)
+  "Show the next queued question in BUFFER once the minibuffer is free."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq codex--app-server-question-queue-timer nil)
+      (if (active-minibuffer-window)
+          (codex--app-server-schedule-question)
+        (when-let* ((message (pop codex--app-server-question-queue)))
+          (codex--app-server-run-question message))))))
+
+(defun codex--app-server-run-question (message)
+  "Read answers for MESSAGE, handling interruption and timed dismissal."
+  (let* ((buffer (current-buffer))
+         (params (alist-get 'params message))
+         (context (list :message message :started (float-time) :snoozed nil
+                        :status nil :tag (make-symbol "codex-question")))
+         (codex--app-server-question-context context)
+         (timer nil))
+    (setq codex--app-server-question-active context)
+    (unwind-protect
+        (condition-case err
+            (let ((result
+                   (catch (plist-get context :tag)
+                     (setq timer
+                           (run-at-time 1 1 #'codex--app-server-question-tick
+                                        buffer context))
+                     (codex--app-server-answer-user-input params))))
+              (pcase (plist-get context :status)
+                ('interrupted (codex--app-server-interrupt-question message))
+                ((or 'nil 'timeout)
+                 (when (eq (plist-get context :status) 'timeout)
+                   (setq result `((answers . ,(make-hash-table :test 'equal)))))
+                 (codex--app-server-send-response (alist-get 'id message) result)
+                 (setf (plist-get context :status) 'answered)
+                 (codex--app-server-render-question-result params result))))
+          (quit
+           (unless (plist-get context :status)
+             (codex--app-server-interrupt-question message)))
+          (error
+           (when (buffer-live-p buffer)
+             (with-current-buffer buffer
+               (codex--app-server-insert-status
+                (format "Codex question failed: %s" (error-message-string err)))
+               (when (and (not (plist-get context :status))
+                          (process-live-p codex--app-server-process))
+                 (codex--app-server-interrupt-question message))))))
+      (when (timerp timer) (cancel-timer timer))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (setq codex--app-server-question-active nil)
+          (codex--app-server-schedule-question))))))
+
+(defun codex--app-server-question-tick (buffer context)
+  "Update CONTEXT's timeout or dismiss its resolved prompt from BUFFER."
+  (unless (buffer-live-p buffer)
+    (setf (plist-get context :status) 'disconnected))
+  (when (or (plist-get context :status)
+            (and (buffer-live-p buffer)
+                 (eq (buffer-local-value 'codex--app-server-question-active buffer)
+                     context)))
+    (let* ((params (alist-get 'params (plist-get context :message)))
+           (elapsed (- (float-time) (plist-get context :started)))
+           (nonblocking (and (assq 'isBlocking params)
+                             (null (alist-get 'isBlocking params))))
+           (window (active-minibuffer-window)))
+      (when (and nonblocking (not (plist-get context :snoozed))
+                 (not (plist-get context :status)) (>= elapsed 120))
+        (setf (plist-get context :status) 'timeout))
+      (when (and window
+                 (local-variable-p 'codex--app-server-question-context
+                                   (window-buffer window))
+                 (eq (buffer-local-value 'codex--app-server-question-context
+                                         (window-buffer window)) context))
+        (if (plist-get context :status)
+            (throw (plist-get context :tag) nil)
+          (when (and nonblocking (not (plist-get context :snoozed))
+                     (>= elapsed 60))
+            (minibuffer-message
+             "Auto-resolves in %ds; any key keeps this question open"
+             (ceiling (- 120 elapsed)))))))))
+
+(defun codex--app-server-render-question-result (params result)
+  "Render PARAMS's question summary and RESULT, masking secret answers."
+  (let* ((questions (append (alist-get 'questions params) nil))
+         (answers (alist-get 'answers result))
+         (answered (seq-count
+                    (lambda (question)
+                      (> (length (alist-get 'answers
+                                            (gethash (alist-get 'id question)
+                                                     answers))) 0))
+                    questions)))
+    (codex--app-server-insert-message
+     codex--app-server-bullet
+     (concat (format "Questions %d/%d answered" answered (length questions))
+             (mapconcat
+              (lambda (question)
+                (codex--app-server-question-result-text
+                 question (alist-get 'answers
+                                     (gethash (alist-get 'id question) answers))))
+              questions "")))))
+
+(defun codex--app-server-question-result-text (question answers)
+  "Return QUESTION's summary text for its ANSWERS vector."
+  (concat "\n  • " (alist-get 'question question)
+          (cond
+           ((zerop (length answers)) " (unanswered)")
+           ((eq (alist-get 'isSecret question) t) "\n    answer: ••••••")
+           (t (mapconcat
+               (lambda (answer)
+                 (if (string-prefix-p "user_note: " answer)
+                     (concat (if (alist-get 'options question)
+                                 "\n    note: " "\n    answer: ")
+                             (substring answer 11))
+                   (concat "\n    answer: " answer)))
+               (append answers nil) "")))))
+
+(defun codex--app-server-interrupt-question (message)
+  "Interrupt MESSAGE's own turn, discarding its other queued questions."
+  (let ((turn (codex--app-server-question-turn message)))
+    (setq codex--app-server-question-canceled-turns
+          (seq-take (cons turn (delete turn codex--app-server-question-canceled-turns))
+                    32))
+    (setq codex--app-server-question-queue
+          (seq-remove (lambda (queued)
+                        (equal turn (codex--app-server-question-turn queued)))
+                      codex--app-server-question-queue))
+    (codex--app-server-send-request
+     "turn/interrupt" `((threadId . ,(car turn)) (turnId . ,(cdr turn)))
+     (lambda (_result error)
+       (when error
+         (codex--app-server-insert-status
+          (format "Codex question interrupt failed: %S" error)))))))
+
+(defun codex--app-server-resolve-question (params)
+  "Dismiss the question whose request identity is carried by PARAMS."
+  (let ((matches
+         (lambda (message)
+           (and (equal (alist-get 'requestId params) (alist-get 'id message))
+                (equal (alist-get 'threadId params)
+                       (alist-get 'threadId (alist-get 'params message)))))))
+    (setq codex--app-server-question-queue
+          (seq-remove matches codex--app-server-question-queue))
+    (when (and codex--app-server-question-active
+               (funcall matches
+                        (plist-get codex--app-server-question-active :message)))
+      (setf (plist-get codex--app-server-question-active :status) 'resolved))))
+
+(defun codex--app-server-resolve-question-turn (params)
+  "Dismiss tool questions belonging to the completed turn in PARAMS."
+  (let* ((turn-id (alist-get 'id (alist-get 'turn params)))
+         (thread-id (or (alist-get 'threadId params) codex--app-server-thread-id))
+         (matches (lambda (message)
+                    (equal (codex--app-server-question-turn message)
+                           (cons thread-id turn-id)))))
+    (setq codex--app-server-question-queue
+          (seq-remove matches codex--app-server-question-queue))
+    (when (and codex--app-server-question-active
+               (funcall matches
+                        (plist-get codex--app-server-question-active :message)))
+      (setf (plist-get codex--app-server-question-active :status) 'resolved))))
+
+(defun codex--app-server-dismiss-questions ()
+  "Dismiss pending tool questions when their session disconnects or closes."
+  (setq codex--app-server-question-queue nil)
+  (when (timerp codex--app-server-question-queue-timer)
+    (cancel-timer codex--app-server-question-queue-timer))
+  (setq codex--app-server-question-queue-timer nil)
+  (when codex--app-server-question-active
+    (setf (plist-get codex--app-server-question-active :status) 'disconnected)))
+
+(defun codex--app-server-answer-user-input (params)
+  "Ask PARAMS's tool questions, confirming any unanswered entries."
+  (let ((answers (make-hash-table :test 'equal))
+        (pending (append (alist-get 'questions params) nil)))
+    (while pending
+      (dolist (question pending)
+        (let ((answer (codex--app-server-user-input-answer question)))
+          (puthash (car answer) (cdr answer) answers)))
+      (setq pending
+            (seq-filter
+             (lambda (question)
+               (zerop (length (alist-get 'answers
+                                        (gethash (alist-get 'id question) answers)))))
+             pending))
+      (when (and pending
+                 (equal (codex--app-server-read-question
+                         (lambda ()
+                           (completing-read
+                            (format "Leave %d question(s) unanswered? " (length pending))
+                            '("Revisit unanswered" "Submit unanswered")
+                            nil t nil nil "Revisit unanswered")))
+                        "Submit unanswered"))
+        (setq pending nil)))
     `((answers . ,answers))))
 
 (defun codex--app-server-user-input-answer (question)
-  "Ask QUESTION and return its answers entry, keyed by question id."
+  "Ask QUESTION and return its answers entry, keyed by its exact id."
   (let* ((id (alist-get 'id question))
          (prompt (codex--app-server-user-input-prompt question))
          (options (append (alist-get 'options question) nil))
-         (answer (cond
-                  ((eq (alist-get 'isSecret question) t) (read-passwd prompt))
-                  (options
-                   (completing-read
-                    prompt (mapcar (lambda (o) (alist-get 'label o)) options)
-                    nil (not (eq (alist-get 'isOther question) t))))
-                  (t (read-string prompt)))))
-    (cons (intern id) `((answers . ,(vector answer))))))
+         (codex--app-server-question-notes nil)
+         (answer
+          (cond
+           ((eq (alist-get 'isSecret question) t)
+            (codex--app-server-read-question
+             (lambda () (read-passwd prompt))))
+           (options (codex--app-server-read-question-choice prompt options
+                     (eq (alist-get 'isOther question) t)))
+           (t (codex--app-server-read-question
+               (lambda () (read-string prompt))))))
+         (selected (and options (not (eq (alist-get 'isSecret question) t))))
+         (notes (if selected codex--app-server-question-notes answer))
+         (entries (and selected (list answer))))
+    (when (and notes (not (string-blank-p notes)))
+      (setq entries (append entries (list (concat "user_note: "
+                                                 (string-trim notes))))))
+    (cons id `((answers . ,(vconcat entries))))))
+
+(defun codex--app-server-read-question-choice (prompt options other)
+  "Read PROMPT's OPTIONS, allowing OTHER with optional explanatory notes."
+  (let* ((choices (mapcar (lambda (option) (alist-get 'label option)) options))
+         (descriptions
+          (mapconcat (lambda (option)
+                       (format "  %s: %s" (alist-get 'label option)
+                               (alist-get 'description option)))
+                     options "\n")))
+    (when other
+      (setq choices (append choices '("None of the above"))))
+    (let* ((minibuffer-local-completion-map
+            (copy-keymap minibuffer-local-completion-map))
+           (minibuffer-local-must-match-map
+            (copy-keymap minibuffer-local-must-match-map))
+           (answer
+            (progn
+              (define-key minibuffer-local-completion-map (kbd "C-c C-n")
+                          #'codex--app-server-question-add-notes)
+              (define-key minibuffer-local-must-match-map (kbd "C-c C-n")
+                          #'codex--app-server-question-add-notes)
+              (codex--app-server-read-question
+               (lambda ()
+                 (completing-read
+                  (concat prompt "\n" descriptions
+                          "\nChoice (C-c C-n notes; C-g interrupt): ")
+                  choices nil t nil nil (car choices)))))))
+      (when (and (equal answer "None of the above")
+                 (null codex--app-server-question-notes))
+        (codex--app-server-question-add-notes))
+      answer)))
+
+(defun codex--app-server-question-add-notes ()
+  "Add optional notes to the tool question currently being answered."
+  (interactive)
+  (let ((enable-recursive-minibuffers t))
+    (setq codex--app-server-question-notes
+          (codex--app-server-read-question
+           (lambda ()
+             (read-string "Notes (optional): "
+                          codex--app-server-question-notes))))))
+
+(defun codex--app-server-read-question (reader)
+  "Call READER with request-owned minibuffer interaction tracking."
+  (let ((context codex--app-server-question-context))
+    (minibuffer-with-setup-hook
+        (lambda ()
+          (setq-local codex--app-server-question-context context)
+          (when context
+            (use-local-map (copy-keymap (current-local-map)))
+            (local-set-key (kbd "C-g") #'codex--app-server-question-quit))
+          (add-hook 'pre-command-hook #'codex--app-server-question-interacted
+                    nil t))
+      (funcall reader))))
+
+(defun codex--app-server-question-quit ()
+  "Interrupt the entire tool request, including a nested notes prompt."
+  (interactive)
+  (if codex--app-server-question-context
+      (progn
+        (setf (plist-get codex--app-server-question-context :status) 'interrupted)
+        (throw (plist-get codex--app-server-question-context :tag) nil))
+    (keyboard-quit)))
+
+(defun codex--app-server-question-interacted ()
+  "Permanently snooze the active tool question when its user interacts."
+  (when codex--app-server-question-context
+    (setf (plist-get codex--app-server-question-context :snoozed) t)))
 
 (defun codex--app-server-user-input-prompt (question)
   "Return the minibuffer prompt for QUESTION, showing its header."
@@ -5253,6 +5559,7 @@ The Codex CLI shows one blank line between successive output items."
                   codex--app-server-turn-start-time nil
                   codex--app-server-mcp-statuses nil
                   codex--app-server-mcp-start-time nil)
+            (codex--app-server-dismiss-questions)
             (codex--app-server-cancel-markdown-render)
             (codex--app-server-stop-status-timer)
             (codex--app-server-remove-status-overlay)
