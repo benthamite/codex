@@ -6416,18 +6416,137 @@ detected.\", so `/diff' must not shell out to `git diff'."
     (should-not codex--app-server-turn-diff)))
 
 (ert-deftest codex-test-app-server-elicitation-spec-uses-server-message ()
-  "Prompt with the message the server sent for an MCP elicitation.
-Captured request shape: (:threadId ID :turnId ID :serverName NAME
-:mode \"form\" :message TEXT :requestedSchema (:type \"object\"
-:properties ()) :_meta (:persist [\"session\" \"always\"] ...))."
+  "Read an elicitation through its typed responder with the server message."
   (let ((spec (codex--app-server-approval-spec
                '((method . "mcpServer/elicitation/request")
-                 (params . ((serverName . "elicit_probe")
-                            (mode . "form")
-                            (message . "Allow the elicit_probe MCP server to run tool \"ask_colour\"?")))))))
-    (should spec)
-    (should (string-match-p "ask_colour" (plist-get spec :prompt)))
-    (should (plist-get spec :responder))))
+                 (params . ((mode . "form") (message . "Allow ask_colour?")))))))
+    (cl-letf (((symbol-function 'read-multiple-choice)
+               (lambda (prompt &rest _)
+                 (should (equal prompt "Allow ask_colour?"))
+                 '(?a "Allow"))))
+      (should (equal (codex--app-server-read-approval spec)
+                     '((action . "accept")))))))
+
+(ert-deftest codex-test-app-server-elicitation-persistence-is-advertised ()
+  "Offer only advertised persistence and encode the chosen scope in metadata."
+  (dolist (scope '("session" "always"))
+    (let* ((params `((_meta . ((persist . ,scope)
+                              (codex_approval_kind . "mcp_tool_call")))))
+           (choices (codex--app-server-elicitation-choices params)))
+      (should (= (length choices) 3))
+      (should-not (assq ?d choices))
+      (should (member scope (mapcar (lambda (c) (nth 3 c)) choices))))
+    (should (equal (json-encode (codex--app-server-elicitation-response scope))
+                   (format "{\"action\":\"accept\",\"_meta\":{\"persist\":\"%s\"}}" scope))))
+  (should (assq ?d (codex--app-server-elicitation-choices)))
+  (should-not (assq ?s (codex--app-server-elicitation-choices)))
+  (should (= (length (codex--app-server-elicitation-choices
+                      '((_meta . ((persist . ("session" "always"))))))) 5)))
+
+(ert-deftest codex-test-app-server-elicitation-form-sends-typed-values ()
+  "Reproduce the captured CLI form reply, including JSON false."
+  (let ((params '((mode . "form") (message . "Choose settings")
+                  (requestedSchema
+                   . ((type . "object")
+                      (required . ("colour" "enabled" "size"))
+                      (properties
+                       . ((colour . ((type . "string")))
+                          (enabled . ((type . "boolean")))
+                          (size . ((type . "string")
+                                   (enum . ("small" "large")))))))))))
+    (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "blue"))
+              ((symbol-function 'completing-read)
+               (lambda (_prompt choices &rest _)
+                 (if (equal choices '("True" "False")) "False" "small"))))
+      (should (equal (json-encode (codex--app-server-answer-elicitation params))
+                     "{\"action\":\"accept\",\"content\":{\"colour\":\"blue\",\"enabled\":false,\"size\":\"small\"}}")))))
+
+(ert-deftest codex-test-app-server-elicitation-form-defaults-and-optional-skip ()
+  "Preserve false defaults and omit a skipped optional field."
+  (let ((params '((mode . "form")
+                  (requestedSchema
+                   . ((type . "object") (required . ("enabled" "name"))
+                      (properties
+                       . ((enabled . ((type . "boolean") (default . nil)))
+                          (name . ((type . "string") (default . "sample")))
+                          (extra . ((type . "string"))))))))))
+    (cl-letf (((symbol-function 'read-multiple-choice) (lambda (&rest _) '(?s "Skip")))
+              ((symbol-function 'read-string)
+               (lambda (_prompt _initial _history default &rest _) default))
+              ((symbol-function 'completing-read)
+               (lambda (_prompt _choices _predicate _match _initial _history default &rest _)
+                 (should (equal default "False"))
+                 default)))
+      (let ((content (alist-get 'content (codex--app-server-answer-elicitation params))))
+        (should (eq (gethash "enabled" content) :json-false))
+        (should (equal (gethash "name" content) "sample"))
+        (should-not (gethash "extra" content))))))
+
+(ert-deftest codex-test-app-server-elicitation-enum-labels-and-default ()
+  "Keep titled enum labels distinct and return the canonical value."
+  (let ((property '((type . "string") (default . "b")
+                    (oneOf . (((const . "a") (title . "Choice"))
+                              ((const . "b") (title . "Choice")))))))
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_prompt options _predicate _match _initial _history default &rest _)
+                 (should (= (length options) 2))
+                 (should (equal default "Choice [2]"))
+                 default)))
+      (should (equal (codex--app-server-read-elicitation-field "Pick: " property) "b")))))
+
+(ert-deftest codex-test-app-server-elicitation-enum-generated-label-collision ()
+  "Disambiguate repeated labels even when an existing label has a suffix."
+  (let ((options
+         (codex--app-server-elicitation-enum-options
+          '((type . "string") (enum . ("one" "two" "three"))
+            (enumNames . ("A" "A [3]" "A"))))))
+    (should (equal options '(("A" . "one") ("A [3]" . "two")
+                             ("A [4]" . "three"))))))
+
+(ert-deftest codex-test-app-server-elicitation-empty-selection-has-valid-default ()
+  "RET has a real boolean or enum default even when the schema omits it."
+  (cl-letf (((symbol-function 'completing-read)
+             (lambda (_prompt _options _predicate _match _initial _history default &rest _)
+               (should (and (stringp default) (not (string-empty-p default))))
+               default)))
+    (should (eq (codex--app-server-read-elicitation-field
+                 "Enabled: " '((type . "boolean"))) t))
+    (should (equal (codex--app-server-read-elicitation-field
+                    "Size: " '((type . "string") (enum . ("small" "large"))))
+                   "small"))))
+
+(ert-deftest codex-test-app-server-elicitation-unsupported-cancels-before-input ()
+  "Preflight rejects unsupported forms and native verification without approval."
+  (dolist (params
+           '(((mode . "openai/userVerification") (challenge . "not-a-real-challenge"))
+             ((mode . "url") (url . "https://example.test/"))
+             ((mode . "form")
+              (requestedSchema
+               . ((type . "object")
+                  (properties . ((first . ((type . "string")))
+                                 (second . ((type . "number"))))))))))
+    (let (notice)
+      (cl-letf (((symbol-function 'read-string) (lambda (&rest _) (ert-fail "Prompted")))
+                ((symbol-function 'read-multiple-choice) (lambda (&rest _) (ert-fail "Approved")))
+                ((symbol-function 'codex--app-server-insert-status)
+                 (lambda (text &rest _) (setq notice text))))
+        (should (equal (codex--app-server-answer-elicitation params)
+                       '((action . "cancel"))))
+        (should (string-match-p "not supported\\|Unsupported" notice))))))
+
+(ert-deftest codex-test-app-server-elicitation-quit-sends-cancel-response ()
+  "C-g during the prompt completes the actual server RPC with cancellation."
+  (with-temp-buffer
+    (let (reply)
+      (cl-letf (((symbol-function 'read-multiple-choice)
+                 (lambda (&rest _) (signal 'quit nil)))
+                ((symbol-function 'codex--app-server-send-response)
+                 (lambda (id result) (setq reply (cons id result)))))
+        (codex--app-server-answer-server-request
+         (current-buffer)
+         '((id . 42) (method . "mcpServer/elicitation/request")
+           (params . ((mode . "form") (message . "Continue?"))))))
+      (should (equal reply '(42 (action . "cancel")))))))
 
 (ert-deftest codex-test-app-server-elicitation-response-uses-action ()
   "Answer an elicitation with `action', not with `decision'.

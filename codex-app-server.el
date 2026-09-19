@@ -3972,9 +3972,7 @@ when it follows the item bullet, which precedes START on the same line."
        (list :prompt (codex--app-server-file-approval-prompt params)
              :choices (codex--app-server-file-approval-choices method)))
       ("mcpServer/elicitation/request"
-       (list :prompt (or (alist-get 'message params) "MCP server request")
-             :choices (codex--app-server-elicitation-choices)
-             :responder #'codex--app-server-elicitation-response))
+       (list :ask (lambda () (codex--app-server-answer-elicitation params))))
       ("item/tool/requestUserInput"
        (list :ask (lambda () (codex--app-server-answer-user-input params))))
       ("item/permissions/requestApproval"
@@ -4086,23 +4084,140 @@ has not been diffed against the CLI."
         (format "%s: %s " header text)
       (format "%s " text))))
 
-(defun codex--app-server-elicitation-choices ()
-  "Return choices for an MCP elicitation, worded as the CLI words them.
-Captured from the CLI: it offers Allow, Allow for this session, Always
-allow, and Cancel.  Only the first and last are offered here, because the
-reply that records a persisted choice carries it in the response `_meta',
-and that encoding was not captured.  Offering a remembered choice that
-silently failed to persist would be worse than not offering it."
-  '((?a "Allow" "Run the tool and continue." "accept")
-    (?c "Cancel" "Cancel this tool call" "cancel")))
+(defun codex--app-server-answer-elicitation (params)
+  "Read an MCP elicitation described by PARAMS and return its reply.
+Quit or unsupported input cancels the request instead of leaving it pending."
+  (condition-case err
+      (let ((mode (alist-get 'mode params))
+            (schema (alist-get 'requestedSchema params)))
+        (unless (member mode '(nil "form"))
+          (user-error "MCP elicitation mode %s is not supported" mode))
+        (if (or (null schema)
+                (and (equal (alist-get 'type schema) "object")
+                     (assq 'properties schema)
+                     (null (alist-get 'properties schema))))
+            (codex--app-server-read-approval
+             (list :prompt (or (alist-get 'message params) "MCP server request")
+                   :choices (codex--app-server-elicitation-choices params)
+                   :responder #'codex--app-server-elicitation-response))
+          (codex--app-server-read-elicitation-form params schema)))
+    (quit '((action . "cancel")))
+    (error
+     (codex--app-server-insert-status
+      (format "MCP request canceled: %s" (error-message-string err)))
+     '((action . "cancel")))))
+
+(defun codex--app-server-elicitation-choices (&optional params)
+  "Return MCP choices, including persistence advertised by PARAMS."
+  (let* ((meta (alist-get '_meta params))
+         (persist (alist-get 'persist meta))
+         (modes (if (stringp persist) (list persist) (append persist nil)))
+         (tool-p (equal (alist-get 'codex_approval_kind meta) "mcp_tool_call")))
+    (append
+     '((?a "Allow" "Allow this request and continue" "accept"))
+     (when (member "session" modes)
+       '((?s "Allow for this session" "Remember for this session" "session")))
+     (when (member "always" modes)
+       '((?w "Always allow" "Remember for future requests" "always")))
+     (unless tool-p
+       '((?d "Deny" "Decline this request and continue" "decline")))
+     '((?c "Cancel" "Cancel this request" "cancel")))))
 
 (defun codex--app-server-elicitation-response (value)
-  "Return the elicitation reply body for choice VALUE.
-The action is one of `accept', `decline', or `cancel'.  No content is
-sent: the captured requests carry an empty `requestedSchema', so there
-are no fields to fill in.  A schema with properties would need form
-input, which is not implemented."
-  `((action . ,value)))
+  "Return the elicitation reply body for choice VALUE."
+  (if (member value '("session" "always"))
+      `((action . "accept") (_meta . ((persist . ,value))))
+    `((action . ,value))))
+
+(defun codex--app-server-read-elicitation-form (params schema)
+  "Read the form in SCHEMA for elicitation PARAMS."
+  (unless (and (equal (alist-get 'type schema) "object")
+               (consp (alist-get 'properties schema)))
+    (user-error "Unsupported MCP form schema"))
+  (let ((fields (alist-get 'properties schema))
+        (required (alist-get 'required schema))
+        (content (make-hash-table :test #'equal)))
+    (dolist (name required)
+      (unless (and (stringp name) (assq (intern name) fields))
+        (user-error "MCP form requires an unknown field: %s" name)))
+    (dolist (field fields)
+      (codex--app-server-elicitation-field-kind (cdr field)))
+    (dolist (field fields)
+      (let* ((name (symbol-name (car field)))
+             (property (cdr field))
+             (needed (member name required))
+             (prompt (format "%s\n%s%s: "
+                             (or (alist-get 'message params) "MCP server request")
+                             (concat (or (alist-get 'title property) name)
+                                     (when-let* ((description
+                                                  (alist-get 'description property)))
+                                       (concat " — " description)))
+                             (if needed " (required)" " (optional)"))))
+        (when (or needed
+                  (eq (car (read-multiple-choice
+                            prompt '((?a "Answer") (?s "Skip")))) ?a))
+          (puthash name
+                   (codex--app-server-read-elicitation-field prompt property)
+                   content))))
+    `((action . "accept") (content . ,content))))
+
+(defun codex--app-server-elicitation-field-kind (property)
+  "Validate PROPERTY and return its supported form field kind."
+  (let ((type (alist-get 'type property)))
+    (cond
+     ((and (equal type "string")
+           (or (assq 'enum property) (assq 'oneOf property)))
+      (unless (codex--app-server-elicitation-enum-options property)
+        (user-error "MCP enum has no choices"))
+      'enum)
+     ((equal type "string") 'string)
+     ((equal type "boolean") 'boolean)
+     (t (user-error "Unsupported MCP form field type: %s" type)))))
+
+(defun codex--app-server-read-elicitation-field (prompt property)
+  "Read one typed PROPERTY value using PROMPT."
+  (pcase (codex--app-server-elicitation-field-kind property)
+    ('string
+     (let ((value ""))
+       (while (string-empty-p value)
+         (setq value
+               (string-trim
+                (read-string prompt nil nil (alist-get 'default property)))))
+       value))
+    ('boolean
+     (let* ((default (if (and (assq 'default property)
+                              (not (alist-get 'default property)))
+                         "False" "True"))
+            (value (completing-read prompt '("True" "False") nil t nil nil default)))
+       (if (equal value "True") t :json-false)))
+    ('enum
+     (let* ((options (codex--app-server-elicitation-enum-options property))
+            (default (or (car (rassoc (alist-get 'default property) options))
+                         (caar options)))
+            (choice (completing-read prompt options nil t nil nil default)))
+       (cdr (assoc choice options))))))
+
+(defun codex--app-server-elicitation-enum-options (property)
+  "Return display labels paired with wire values for enum PROPERTY."
+  (let ((values (alist-get 'enum property))
+        (titles (alist-get 'enumNames property))
+        (entries (alist-get 'oneOf property))
+        (index 0)
+        options)
+    (dolist (entry (or entries values))
+      (let* ((value (if entries (alist-get 'const entry) entry))
+             (label (if entries (alist-get 'title entry)
+                      (or (nth index titles) value))))
+        (unless (and (stringp value) (stringp label))
+          (user-error "Unsupported MCP enum choice"))
+        (let ((base label)
+              (suffix (1+ index)))
+          (while (assoc label options)
+            (setq label (format "%s [%d]" base suffix)
+                  suffix (1+ suffix))))
+        (push (cons label value) options)
+        (setq index (1+ index))))
+    (nreverse options)))
 
 (defun codex--app-server-command-approval-prompt (params)
   "Return an approval prompt string for command request PARAMS."
