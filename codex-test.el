@@ -3231,6 +3231,41 @@ the same request with {}."
       (should (equal (alist-get 'message callback-error)
                      "Codex app-server exited abnormally")))))
 
+(ert-deftest codex-test-app-server-abnormal-exit-shows-stderr ()
+  "An app server that fails shows its stderr before the buffer is discarded."
+  (let ((stderr (generate-new-buffer " *codex-test-stderr*")))
+    (with-current-buffer stderr
+      (insert "codex: not logged in\n"))
+    (with-temp-buffer
+      (rename-buffer "*codex:/tmp/app-server-failed/*" t)
+      (codex--app-server-setup-input-region)
+      (setq-local codex--app-server-stderr-buffer stderr)
+      (setq-local codex--app-server-process 'fake)
+      (cl-letf (((symbol-function 'process-buffer)
+                 (lambda (_process) (current-buffer)))
+                ((symbol-function 'process-live-p) (lambda (_process) nil)))
+        (codex--app-server-process-sentinel
+         'fake "exited abnormally with code 1\n"))
+      (should (string-match-p "error output:\ncodex: not logged in"
+                              (buffer-string)))
+      (should-not (buffer-live-p stderr)))))
+
+(ert-deftest codex-test-app-server-normal-exit-omits-stderr ()
+  "An app server that exits normally does not echo its stderr."
+  (let ((stderr (generate-new-buffer " *codex-test-stderr*")))
+    (with-current-buffer stderr
+      (insert "routine log line\n"))
+    (with-temp-buffer
+      (rename-buffer "*codex:/tmp/app-server-finished/*" t)
+      (codex--app-server-setup-input-region)
+      (setq-local codex--app-server-stderr-buffer stderr)
+      (setq-local codex--app-server-process 'fake)
+      (cl-letf (((symbol-function 'process-buffer)
+                 (lambda (_process) (current-buffer)))
+                ((symbol-function 'process-live-p) (lambda (_process) nil)))
+        (codex--app-server-process-sentinel 'fake "finished\n"))
+      (should-not (string-match-p "routine log line" (buffer-string))))))
+
 (ert-deftest codex-test-app-server-experimental-toggle-persists-then-applies ()
   "Experimental toggles persist through config before runtime enablement."
   (let (requests)

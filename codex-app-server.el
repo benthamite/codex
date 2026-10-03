@@ -6138,10 +6138,26 @@ The Codex CLI shows one blank line between successive output items."
             (codex--app-server-fail-pending-requests message)
             (codex--app-server-cleanup-active-image-files)
             (force-mode-line-update)
-            (codex--app-server-insert-status message))
+            (codex--app-server-insert-status message)
+            (when-let* (((string-prefix-p "exited abnormally" event))
+                        (stderr (codex--app-server-stderr-text
+                                 codex--app-server-stderr-buffer)))
+              (codex--app-server-insert-status
+               (format "Codex app-server error output:\n%s" stderr))))
           (codex--app-server-kill-stderr-buffer
            codex--app-server-stderr-buffer)
           (setq-local codex--app-server-stderr-buffer nil))))))
+
+(defun codex--app-server-stderr-text (buffer)
+  "Return the end of app-server stderr BUFFER, or nil when it is empty.
+A failed start usually explains itself only on stderr, which is
+discarded with BUFFER, so the text is kept for display first."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (let ((text (string-trim
+                   (buffer-substring-no-properties
+                    (max (point-min) (- (point-max) 2000)) (point-max)))))
+        (unless (string-empty-p text) text)))))
 
 (defun codex--app-server-fail-pending-requests (message)
   "Fail and clear every pending request with error MESSAGE."
