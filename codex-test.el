@@ -3231,6 +3231,20 @@ the same request with {}."
       (should (equal (alist-get 'message callback-error)
                      "Codex app-server exited abnormally")))))
 
+(ert-deftest codex-test-app-server-startup-line-until-first-output ()
+  "A starting line shows until the app server first writes to the buffer."
+  (with-temp-buffer
+    (codex--app-server-show-startup-overlay)
+    (should (string-match-p
+             "Starting Codex app server"
+             (overlay-get codex--app-server-startup-overlay 'before-string)))
+    (should (= (buffer-size) 0))
+    (codex--app-server-insert-status "banner")
+    (should-not codex--app-server-startup-overlay)
+    (should-not (overlays-in (point-min) (point-max)))
+    (should-not (memq #'codex--app-server-remove-startup-overlay
+                      after-change-functions))))
+
 (ert-deftest codex-test-app-server-abnormal-exit-shows-stderr ()
   "An app server that fails shows its stderr before the buffer is discarded."
   (let ((stderr (generate-new-buffer " *codex-test-stderr*")))

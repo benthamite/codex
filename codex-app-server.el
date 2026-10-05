@@ -336,6 +336,9 @@ keys; see `codex--app-server-take-submission'.")
 (defvar-local codex--app-server-status-overlay nil
   "Overlay showing the in-buffer working status line above the prompt.")
 
+(defvar-local codex--app-server-startup-overlay nil
+  "Overlay showing that the app server has not yet written to the buffer.")
+
 (defvar-local codex--app-server-mcp-statuses nil
   "Alist of MCP server names to startup statuses for the current thread.")
 
@@ -613,7 +616,27 @@ arguments."
   (setq-local codex--app-server-owned-image-files nil)
   (setq-local codex--app-server-active-owned-image-files nil)
   (setq-local codex--app-server-pending-mentions nil)
+  (codex--app-server-show-startup-overlay)
   (codex--app-server-send-initialize))
+
+(defun codex--app-server-show-startup-overlay ()
+  "Show a starting line until the app server first writes to the buffer.
+A first start in a new `CODEX_HOME' can take minutes before the app
+server answers, and an empty buffer would look like a hang."
+  (setq codex--app-server-startup-overlay (make-overlay (point-min) (point-min)))
+  (overlay-put codex--app-server-startup-overlay 'before-string
+               (propertize "• Starting Codex app server…\n"
+                           'face 'codex-app-server-status-face))
+  (add-hook 'after-change-functions
+            #'codex--app-server-remove-startup-overlay nil t))
+
+(defun codex--app-server-remove-startup-overlay (&rest _)
+  "Remove the starting line shown before the app server first writes."
+  (remove-hook 'after-change-functions
+               #'codex--app-server-remove-startup-overlay t)
+  (when (overlayp codex--app-server-startup-overlay)
+    (delete-overlay codex--app-server-startup-overlay))
+  (setq codex--app-server-startup-overlay nil))
 
 (cl-defmethod codex--term-customize-faces ((_backend (eql app-server)))
   "Apply face customizations for the app-server backend.")
@@ -634,6 +657,7 @@ arguments."
   (codex--app-server-stop-status-timer)
   (codex--app-server-stop-composer-placeholder-timer)
   (codex--app-server-remove-status-overlay)
+  (codex--app-server-remove-startup-overlay)
   (codex--app-server-cleanup-owned-image-files)
   (codex--app-server-kill-stderr-buffer codex--app-server-stderr-buffer)
   (setq-local codex--app-server-stderr-buffer nil))
