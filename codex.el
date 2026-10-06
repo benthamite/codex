@@ -232,6 +232,28 @@ When nil, the CLI default is used."
   :type 'string
   :group 'codex)
 
+(defcustom codex-hook-answer-types '("PermissionRequest")
+  "Codex hook types whose answer from `codex-event-hook' Codex waits for.
+Codex waits up to `codex-hook-answer-timeout' seconds for Emacs to
+handle these, and the first non-nil value from `codex-event-hook' is
+returned to it, so a handler can approve, deny, or block.  Every other
+hook type is delivered in the background: Codex continues at once and
+the handlers' return values are discarded.  A session reads this
+option when it starts."
+  :type '(repeat string)
+  :group 'codex)
+
+(defcustom codex-hook-answer-timeout 5
+  "Seconds Codex waits for Emacs to answer a hook in `codex-hook-answer-types'.
+When Emacs does not answer in time, for instance because it is busy or
+stopped in the debugger, the hook fails without an answer and Codex
+proceeds as it would without the hook: for PermissionRequest, it shows
+its own approval prompt.  Keep this below `codex--hook-default-timeout',
+after which Codex kills the hook.  A session reads this option when it
+starts."
+  :type 'natnum
+  :group 'codex)
+
 (defcustom codex-transcript-sessions-directory "~/.codex/sessions"
   "Directory containing Codex JSONL session transcripts."
   :type 'directory
@@ -987,10 +1009,12 @@ After sending the command, move point to the end of the buffer."
     buffer))
 
 (defun codex--run-command-submitted-hook (&optional buffer)
-  "Run `codex-command-submitted-hook' for BUFFER or the current buffer."
+  "Run `codex-command-submitted-hook' for BUFFER or the current buffer.
+Also record the submission as the start of BUFFER's current turn."
   (let ((target (or buffer (current-buffer))))
     (when (buffer-live-p target)
       (with-current-buffer target
+        (codex--note-turn-start (float-time))
         (run-hook-with-args 'codex-command-submitted-hook target)))))
 
 (defun codex-prompt-input (&optional buffer)
@@ -1267,8 +1291,15 @@ FORK non-nil turns a RESUME-ID into a `codex fork' of that session."
 (defun codex--session-process-environment (buffer-name dir)
   "Return the process environment for BUFFER-NAME in DIR."
   (append `(,(format "CODEX_BUFFER_NAME=%s" buffer-name))
+          (codex--hook-answer-environment)
           (codex--session-extra-environment buffer-name dir)
           process-environment))
+
+(defun codex--hook-answer-environment ()
+  "Return the environment telling the hook wrapper which hooks to answer."
+  (list (format "CODEX_HOOK_ANSWER_TYPES=%s"
+                (string-join codex-hook-answer-types " "))
+        (format "CODEX_HOOK_ANSWER_TIMEOUT=%d" codex-hook-answer-timeout)))
 
 (defun codex--session-extra-environment (buffer-name dir)
   "Return extra environment entries for BUFFER-NAME in DIR."
@@ -1797,7 +1828,10 @@ With prefix ARG, show all Codex instances across all directories."
 ;;;; Hook handler
 
 (defconst codex--hook-default-timeout 30
-  "Seconds Codex waits for Emacs hook dispatch before timing out.")
+  "Seconds Codex lets a hook command run before killing it.
+The wrapper itself returns well before this: hooks outside
+`codex-hook-answer-types' at once, and the others within
+`codex-hook-answer-timeout'.")
 
 (defconst codex--hook-all-events-matcher "*"
   "Matcher used for hook types that should receive every event.")
@@ -1829,21 +1863,51 @@ name to match.")
 
 (defun codex-handle-hook (hook-type buffer-name &optional json-data &rest args)
   "Handle hook of HOOK-TYPE for BUFFER-NAME with JSON-DATA and ARGS."
-  (let ((message (list :type hook-type
-                       :buffer-name buffer-name
-                       :json-data json-data
-                       :args args)))
-    (when (codex--current-session-hook-p message)
-      (condition-case err
-          (codex--handle-internal-hook message)
-        (error
-         (message "Codex internal hook handling failed: %s"
-                  (error-message-string err))))
-      (let ((hook-response
-             (run-hook-with-args-until-success 'codex-event-hook message)))
-        (when (plist-get (codex--hook-spec hook-type) :notify)
-          (codex--notify nil))
-        hook-response))))
+  (codex--dispatch-hook-message (list :type hook-type
+                                      :buffer-name buffer-name
+                                      :json-data json-data
+                                      :args args)))
+
+(defun codex--dispatch-hook-message (message)
+  "Run internal handling and `codex-event-hook' for hook MESSAGE.
+MESSAGE is a plist with :type, :buffer-name, :json-data, and :args, and
+optionally :sent-at, the time the hook wrapper sent it.  Return the
+first non-nil value of `codex-event-hook'."
+  (when (and (codex--current-session-hook-p message)
+             (not (codex--stale-stop-hook-p message)))
+    (condition-case err
+        (codex--handle-internal-hook message)
+      (error
+       (message "Codex internal hook handling failed: %s"
+                (error-message-string err))))
+    (let ((hook-response
+           (run-hook-with-args-until-success 'codex-event-hook message)))
+      (when (plist-get (codex--hook-spec (plist-get message :type)) :notify)
+        (codex--notify nil))
+      hook-response)))
+
+(defvar-local codex--turn-started-at nil
+  "Time, as a float, at which the buffer's current Codex turn began.
+Nil until a turn starts.  Emacs sets it when it submits input, and a
+UserPromptSubmit hook advances it to the hook's send time.")
+
+(defun codex--note-turn-start (time)
+  "Record TIME as the start of the current buffer's turn, unless earlier."
+  (when (or (null codex--turn-started-at)
+            (> time codex--turn-started-at))
+    (setq-local codex--turn-started-at time)))
+
+(defun codex--stale-stop-hook-p (message)
+  "Return non-nil when MESSAGE is a Stop hook sent before its turn began.
+Hooks other than those in `codex-hook-answer-types' are delivered in
+the background, so while Emacs is stalled a turn's Stop can arrive after
+the next turn has started; applying it then would report a working
+session as finished."
+  (when-let* (((equal (plist-get message :type) "Stop"))
+              (sent-at (plist-get message :sent-at))
+              (buffer (get-buffer (plist-get message :buffer-name))))
+    (let ((started (buffer-local-value 'codex--turn-started-at buffer)))
+      (and started (< sent-at started)))))
 
 (defun codex--current-session-hook-p (message)
   "Return non-nil when hook MESSAGE belongs to its target session.
@@ -1866,40 +1930,64 @@ identified hooks only after the protocol establishes the matching thread."
                     (equal id codex--app-server-thread-id))))))))
 
 (defun codex-handle-hook-from-emacsclient ()
-  "Handle a Codex hook using `server-eval-args-left'."
+  "Handle a Codex hook using `server-eval-args-left'.
+Drop the hook when its JSON file is gone: the wrapper deletes it once
+its emacsclient stops waiting, so the hook reached Emacs too late to
+matter."
   (let ((invocation
          (codex--parse-hook-invocation
           (prog1 server-eval-args-left
             (setq server-eval-args-left nil)))))
-    (let ((response (apply #'codex-handle-hook
-                           (plist-get invocation :type)
-                           (plist-get invocation :buffer-name)
-                           (plist-get invocation :json-data)
-                           (plist-get invocation :args))))
-      (if-let* ((response-file (plist-get invocation :response-file)))
-          (codex--write-hook-response response response-file)
-        response))))
+    (unless (plist-get invocation :abandoned)
+      (let ((response (codex--dispatch-hook-message
+                       (codex--hook-invocation-message invocation))))
+        (if-let* ((response-file (plist-get invocation :response-file)))
+            (codex--write-hook-response response response-file)
+          response)))))
+
+(defun codex--hook-invocation-message (invocation)
+  "Return the hook message for parsed hook INVOCATION."
+  (list :type (plist-get invocation :type)
+        :buffer-name (plist-get invocation :buffer-name)
+        :json-data (plist-get invocation :json-data)
+        :args (plist-get invocation :args)
+        :sent-at (plist-get invocation :sent-at)))
 
 (defun codex--parse-hook-invocation (hook-args)
   "Parse HOOK-ARGS from `server-eval-args-left' into a plist.
 After hook type and buffer name, HOOK-ARGS uses one of two wire formats.  The
-wrapper format is (\"json-file\" JSON-FILE \"response-file\" RESPONSE-FILE .
-ARGS), which keeps large or secret hook JSON out of argv and gives Emacs a file
-for hook responses.  Direct callers may pass (JSON-DATA . ARGS)."
+wrapper format is (\"json-file\" JSON-FILE \"response-file\" RESPONSE-FILE
+[\"sent-at\" SENT-AT] . ARGS), which keeps large or secret hook JSON out of
+argv, gives Emacs a file for hook responses, and carries the time the wrapper
+sent the hook as a `float-time' string.  Direct callers may pass (JSON-DATA .
+ARGS).  When JSON-FILE no longer exists, the plist has a non-nil :abandoned."
   (let ((hook-type (pop hook-args))
         (buffer-name (pop hook-args)))
     (pcase hook-args
-      (`("json-file" ,json-file "response-file" ,response-file . ,args)
-       (list :type hook-type
-             :buffer-name buffer-name
-             :json-data (codex--read-hook-json-file json-file)
-             :args args
-             :response-file response-file))
+      (`("json-file" ,json-file "response-file" ,response-file . ,rest)
+       (let ((sent-at (and (equal (car rest) "sent-at")
+                           (codex--parse-hook-sent-at (cadr rest)))))
+         (when (equal (car rest) "sent-at")
+           (setq rest (cddr rest)))
+         (if (not (file-exists-p json-file))
+             (list :type hook-type :buffer-name buffer-name :abandoned t)
+           (list :type hook-type
+                 :buffer-name buffer-name
+                 :json-data (codex--read-hook-json-file json-file)
+                 :args rest
+                 :response-file response-file
+                 :sent-at sent-at))))
       (`(,json-data . ,args)
        (list :type hook-type
              :buffer-name buffer-name
              :json-data json-data
              :args args)))))
+
+(defun codex--parse-hook-sent-at (string)
+  "Return the send time in STRING as a float, or nil when it is not one."
+  (when (and (stringp string)
+             (string-match-p "\\`[0-9]+\\(?:\\.[0-9]+\\)?\\'" string))
+    (float (string-to-number string))))
 
 (defun codex--hook-spec (hook-type)
   "Return the hook spec for HOOK-TYPE."
@@ -1916,8 +2004,9 @@ for hook responses.  Direct callers may pass (JSON-DATA . ARGS)."
 (defun codex--write-hook-response (response file)
   "Write hook RESPONSE to FILE and return nil.
 String responses are written as raw output.  Non-string responses are encoded
-as JSON."
-  (when (and response file)
+as JSON.  Nothing is written when FILE no longer exists, because the wrapper
+that created it has stopped waiting and would leave the new file behind."
+  (when (and response file (file-exists-p file))
     (with-temp-file file
       (insert (if (stringp response)
                   response
@@ -1955,6 +2044,9 @@ transcript file.  Interactively, prompt only when neither is known."
          (buffer (and (stringp buffer-name) (get-buffer buffer-name))))
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
+        (when-let* (((equal (plist-get message :type) "UserPromptSubmit"))
+                    (sent-at (plist-get message :sent-at)))
+          (codex--note-turn-start sent-at))
         (codex--update-transcript-metadata message)
         (when (and codex-transcript-catch-up-on-stop
                    (string= (plist-get message :type) "Stop"))
@@ -1968,8 +2060,23 @@ transcript file.  Interactively, prompt only when neither is known."
              (message "Codex transcript catch-up failed: %s"
                       (error-message-string err)))))))))
 
+(defvar-local codex--hook-metadata-sent-at nil
+  "Send time of the latest hook whose session metadata was recorded.")
+
 (defun codex--update-transcript-metadata (message)
-  "Update current buffer transcript metadata from hook MESSAGE."
+  "Update current buffer transcript metadata from hook MESSAGE.
+Skip MESSAGE when it was sent before a hook already recorded: background
+delivery can reorder hooks, and an old session's late hook must not
+replace the identity of the session that followed it."
+  (let ((sent-at (plist-get message :sent-at)))
+    (unless (and sent-at codex--hook-metadata-sent-at
+                 (< sent-at codex--hook-metadata-sent-at))
+      (when sent-at
+        (setq-local codex--hook-metadata-sent-at sent-at))
+      (codex--record-hook-session-metadata message))))
+
+(defun codex--record-hook-session-metadata (message)
+  "Record the session id and transcript file named in hook MESSAGE."
   (let* ((data (codex--hook-json-object (plist-get message :json-data)))
          (session-id (codex--json-deep-find
                       data '(session_id sessionId session-id conversation_id)))

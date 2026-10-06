@@ -5,6 +5,16 @@
 # Usage: codex-hook-wrapper <hook-type> [--emacsclient PATH]
 #                           [--socket-name SOCKET | --server-file FILE]
 # The hook type is passed as the first argument (e.g., Stop, PreToolUse).
+#
+# Codex waits for every command hook, so a stalled Emacs server (a request
+# parked in the debugger or at a prompt, or Emacs busy in long Lisp) would
+# hold the Codex turn.  Only the hook types listed in
+# CODEX_HOOK_ANSWER_TYPES (default: PermissionRequest) wait for Emacs, and
+# for at most CODEX_HOOK_ANSWER_TIMEOUT seconds; when Emacs does not answer
+# in time the hook exits 1, which Codex records as a failed hook without a
+# decision, so it proceeds as if the hook were absent (for PermissionRequest,
+# its own approval prompt).  Every other hook type is sent in the background
+# and the wrapper exits at once with no output.
 
 usage() {
     printf 'Usage: codex-hook-wrapper <hook-type> [--emacsclient PATH] [--socket-name SOCKET | --server-file FILE]\n' >&2
@@ -91,17 +101,36 @@ trap cleanup EXIT
 
 dispatch_failure_exit=1
 gatekeeping_dispatch_failure_exit=2
+answer_timeout_exit=1
 dispatch_attempts=${CODEX_HOOK_DISPATCH_ATTEMPTS:-3}
 dispatch_retry_delay=${CODEX_HOOK_DISPATCH_RETRY_DELAY:-0.15}
+answer_types=${CODEX_HOOK_ANSWER_TYPES-PermissionRequest}
+answer_timeout=${CODEX_HOOK_ANSWER_TIMEOUT:-5}
+background_timeout=${CODEX_HOOK_BACKGROUND_TIMEOUT:-10}
 
-case "$dispatch_attempts" in
-    ''|*[!0-9]*)
-        dispatch_attempts=3
-        ;;
-esac
-if [ "$dispatch_attempts" -lt 1 ]; then
-    dispatch_attempts=1
-fi
+positive_integer_or() {
+    case "$1" in
+        ''|*[!0-9]*|0)
+            printf '%s\n' "$2"
+            ;;
+        *)
+            printf '%s\n' "$1"
+            ;;
+    esac
+}
+
+dispatch_attempts=$(positive_integer_or "$dispatch_attempts" 3)
+answer_timeout=$(positive_integer_or "$answer_timeout" 5)
+background_timeout=$(positive_integer_or "$background_timeout" 10)
+
+hook_needs_answer() {
+    case " $answer_types " in
+        *" $hook_type "*)
+            return 0
+            ;;
+    esac
+    return 1
+}
 
 json_file=$(mktemp "${TMPDIR:-/tmp}/codex-hook-json.XXXXXX") || exit 1
 response_file=$(mktemp "${TMPDIR:-/tmp}/codex-hook-response.XXXXXX") || exit 1
@@ -111,6 +140,12 @@ chmod 600 "$json_file" "$response_file" "$stderr_file" || exit 1
 buffer_name=$CODEX_BUFFER_NAME
 
 cat > "$json_file" || exit 1
+
+# The send time lets Emacs order events that background delivery can
+# reorder.  Without perl the event goes without one, and Emacs then
+# applies it whatever its order.
+sent_at=$(perl -MTime::HiRes=time -e 'printf "%.6f", time' 2>/dev/null) \
+    || sent_at=
 
 fail_for_dispatch_error() {
     message=$(cat "$stderr_file")
@@ -150,27 +185,37 @@ dispatch_error_is_transient() {
     grep -Eq "can't connect|Connection refused|No socket or alternate editor|No such file or directory" "$stderr_file"
 }
 
+dispatch_timed_out() {
+    grep -q "Server not responding; timed out" "$stderr_file"
+}
+
 run_emacsclient_once() {
     : > "$stderr_file"
     if [ -n "$socket_name" ]; then
         "$emacsclient_program" --socket-name "$socket_name" \
+          --timeout="$emacsclient_timeout" \
           --eval '(codex-handle-hook-from-emacsclient)' \
           "$hook_type" "$buffer_name" \
           json-file "$json_file" \
           response-file "$response_file" \
+          ${sent_at:+sent-at "$sent_at"} \
           "$@" >/dev/null 2>"$stderr_file"
     elif [ -n "$server_file" ]; then
         "$emacsclient_program" --server-file "$server_file" \
+          --timeout="$emacsclient_timeout" \
           --eval '(codex-handle-hook-from-emacsclient)' \
           "$hook_type" "$buffer_name" \
           json-file "$json_file" \
           response-file "$response_file" \
+          ${sent_at:+sent-at "$sent_at"} \
           "$@" >/dev/null 2>"$stderr_file"
     else
-        "$emacsclient_program" --eval '(codex-handle-hook-from-emacsclient)' \
+        "$emacsclient_program" --timeout="$emacsclient_timeout" \
+          --eval '(codex-handle-hook-from-emacsclient)' \
           "$hook_type" "$buffer_name" \
           json-file "$json_file" \
           response-file "$response_file" \
+          ${sent_at:+sent-at "$sent_at"} \
           "$@" >/dev/null 2>"$stderr_file"
     fi
 }
@@ -190,10 +235,32 @@ run_emacsclient_with_retry() {
 }
 
 # Hook JSON travels through a private temp file instead of argv, because hook
-# input may contain secrets and can be larger than ARG_MAX.  The json-file and
-# response-file labels form the argv protocol parsed by
-# `codex-handle-hook-from-emacsclient'.
-run_emacsclient_with_retry "$@" || fail_for_dispatch_error
+# input may contain secrets and can be larger than ARG_MAX.  The json-file,
+# response-file and optional sent-at labels form the argv protocol parsed by
+# `codex-handle-hook-from-emacsclient'.  A request that reaches Emacs after
+# its emacsclient gave up finds the JSON file gone, and Emacs drops it.
+if ! hook_needs_answer; then
+    # The background job owns the temp files from here on.  Its output is
+    # detached so that Codex, which reads the hook's stdout and stderr to
+    # EOF, does not wait for it.
+    trap - EXIT
+    (
+        trap cleanup EXIT
+        emacsclient_timeout=$background_timeout
+        run_emacsclient_with_retry "$@"
+    ) </dev/null >/dev/null 2>&1 &
+    exit 0
+fi
+
+emacsclient_timeout=$answer_timeout
+if ! run_emacsclient_with_retry "$@"; then
+    if dispatch_timed_out; then
+        printf 'codex hook %s: Emacs did not answer within %ss; continuing without its answer\n' \
+            "$hook_type" "$answer_timeout" >&2
+        exit "$answer_timeout_exit"
+    fi
+    fail_for_dispatch_error
+fi
 
 if [ -s "$response_file" ]; then
     cat "$response_file"

@@ -5575,6 +5575,135 @@ not a `markdown-mode' metadata key/value block."
       (delete-file json-file)
       (delete-file response-file))))
 
+;;;; Background hook delivery
+
+(defun codex-test--hook-invocation (type buffer-name json-file response-file
+                                         &optional sent-at)
+  "Return wrapper argv for TYPE, BUFFER-NAME, JSON-FILE and RESPONSE-FILE.
+SENT-AT, when non-nil, is the send time string."
+  (append (list type buffer-name "json-file" json-file
+                "response-file" response-file)
+          (and sent-at (list "sent-at" sent-at))))
+
+(ert-deftest codex-test-hook-from-emacsclient-parses-sent-at ()
+  "The wrapper's send time reaches handlers and is not left in :args."
+  (let ((json-file (make-temp-file "codex-hook-json"))
+        (response-file (make-temp-file "codex-hook-response"))
+        received)
+    (unwind-protect
+        (let ((codex-event-hook (list (lambda (m) (setq received m) nil))))
+          (cl-progv '(server-eval-args-left)
+              (list (append (codex-test--hook-invocation
+                             "PostToolUse" ":none:" json-file response-file
+                             "1700000000.250000")
+                            '("extra")))
+            (codex-handle-hook-from-emacsclient))
+          (should (equal (plist-get received :sent-at) 1700000000.25))
+          (should (equal (plist-get received :args) '("extra"))))
+      (delete-file json-file)
+      (delete-file response-file))))
+
+(ert-deftest codex-test-hook-from-emacsclient-drops-abandoned-hook ()
+  "A hook whose JSON file the wrapper already removed is not dispatched."
+  (let ((json-file (make-temp-file "codex-hook-json"))
+        (response-file (make-temp-file "codex-hook-response"))
+        (calls 0))
+    (delete-file json-file)
+    (delete-file response-file)
+    (let ((codex-event-hook (list (lambda (_) (cl-incf calls) "answer"))))
+      (cl-progv '(server-eval-args-left)
+          (list (codex-test--hook-invocation
+                 "PermissionRequest" ":none:" json-file response-file
+                 "1700000000.0"))
+        (should-not (codex-handle-hook-from-emacsclient))))
+    (should (= calls 0))
+    (should-not (file-exists-p response-file))))
+
+(ert-deftest codex-test-hook-response-not-written-after-wrapper-left ()
+  "A late answer does not recreate the response file the wrapper removed."
+  (let ((file (make-temp-file "codex-hook-response")))
+    (delete-file file)
+    (codex--write-hook-response "{\"x\":1}" file)
+    (should-not (file-exists-p file))))
+
+(ert-deftest codex-test-stale-stop-hook-dropped ()
+  "A Stop sent before the current turn began is not dispatched."
+  (let ((buffer (generate-new-buffer "*codex:/tmp/stale-stop/*"))
+        (events nil)
+        (notified 0))
+    (unwind-protect
+        (cl-letf (((symbol-function 'codex--notify)
+                   (lambda (&rest _) (cl-incf notified))))
+          (let ((codex-event-hook
+                 (list (lambda (m) (push (plist-get m :type) events) nil))))
+            (with-current-buffer buffer
+              (setq-local codex--turn-started-at 200.0))
+            (codex--dispatch-hook-message
+             (list :type "Stop" :buffer-name (buffer-name buffer)
+                   :json-data "{}" :args nil :sent-at 100.0))
+            (should-not events)
+            (should (= notified 0))
+            (codex--dispatch-hook-message
+             (list :type "Stop" :buffer-name (buffer-name buffer)
+                   :json-data "{}" :args nil :sent-at 300.0))
+            (should (equal events '("Stop")))
+            (should (= notified 1))))
+      (kill-buffer buffer))))
+
+(ert-deftest codex-test-turn-start-from-submit-and-prompt-hook ()
+  "Submitting input and a later UserPromptSubmit hook both start a turn."
+  (let ((buffer (generate-new-buffer "*codex:/tmp/turn-start/*"))
+        (codex-event-hook nil)
+        (codex-command-submitted-hook nil))
+    (unwind-protect
+        (progn
+          (codex--run-command-submitted-hook buffer)
+          (let ((submitted (buffer-local-value 'codex--turn-started-at buffer)))
+            (should (numberp submitted))
+            (codex--dispatch-hook-message
+             (list :type "UserPromptSubmit" :buffer-name (buffer-name buffer)
+                   :json-data "{}" :args nil :sent-at (- submitted 10)))
+            (should (= (buffer-local-value 'codex--turn-started-at buffer)
+                       submitted))
+            (codex--dispatch-hook-message
+             (list :type "UserPromptSubmit" :buffer-name (buffer-name buffer)
+                   :json-data "{}" :args nil :sent-at (+ submitted 10)))
+            (should (= (buffer-local-value 'codex--turn-started-at buffer)
+                       (+ submitted 10)))))
+      (kill-buffer buffer))))
+
+(ert-deftest codex-test-late-hook-keeps-newer-session-identity ()
+  "A hook sent before the latest recorded one cannot restore an old session."
+  (let ((buffer (generate-new-buffer "*codex:/tmp/session-order/*"))
+        (codex-event-hook nil)
+        (codex-transcript-sessions-directory (make-temp-file "codex-sess" t))
+        (old "11111111-1111-1111-1111-111111111111")
+        (new "22222222-2222-2222-2222-222222222222"))
+    (unwind-protect
+        (progn
+          (codex--dispatch-hook-message
+           (list :type "SessionStart" :buffer-name (buffer-name buffer)
+                 :json-data (format "{\"session_id\":\"%s\"}" new)
+                 :args nil :sent-at 200.0))
+          (codex--dispatch-hook-message
+           (list :type "PostToolUse" :buffer-name (buffer-name buffer)
+                 :json-data (format "{\"session_id\":\"%s\"}" old)
+                 :args nil :sent-at 100.0))
+          (should (equal (buffer-local-value 'codex--session-id buffer) new)))
+      (kill-buffer buffer)
+      (delete-directory codex-transcript-sessions-directory t))))
+
+(ert-deftest codex-test-session-environment-names-answer-hooks ()
+  "Sessions tell the hook wrapper which hooks to answer and for how long."
+  (let ((codex-hook-answer-types '("PermissionRequest" "PreToolUse"))
+        (codex-hook-answer-timeout 7)
+        (codex-process-environment-functions nil)
+        (process-environment nil))
+    (let ((env (codex--session-process-environment "*codex:/tmp/x/*" "/tmp/")))
+      (should (member "CODEX_HOOK_ANSWER_TYPES=PermissionRequest PreToolUse"
+                      env))
+      (should (member "CODEX_HOOK_ANSWER_TIMEOUT=7" env)))))
+
 (ert-deftest codex-test-transcript-final-message-prefers-task-complete ()
   "Transcript rendering uses task_complete when it is available."
   (let ((file (make-temp-file "codex-transcript" nil ".jsonl")))
