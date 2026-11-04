@@ -64,6 +64,8 @@ Emacs."
 (defvar codex--app-server-pending-startup-session-id)
 (defvar codex--app-server-deferred-resume-prompt)
 (defvar codex--app-server-thread-id)
+(declare-function codex--app-server-conditional-binding "codex-app-server"
+                  (command predicate))
 (declare-function codex--app-server-ensure-direct-input "codex-app-server" ())
 (declare-function codex--app-server-input-active-p "codex-app-server" ())
 (declare-function codex--app-server-prompt-input "codex-app-server" ())
@@ -717,6 +719,14 @@ SWITCHES is an optional list of command-line arguments."
       (define-key map (kbd "C-c C-<down>") #'codex-app-server-reasoning-down)
       (define-key map (kbd "M-p") #'codex-app-server-previous-input)
       (define-key map (kbd "M-n") #'codex-app-server-next-input)
+      (define-key map (kbd "<up>")
+                  (codex--app-server-conditional-binding
+                   #'codex-app-server-previous-input
+                   #'codex--app-server-on-first-composer-line-p))
+      (define-key map (kbd "<down>")
+                  (codex--app-server-conditional-binding
+                   #'codex-app-server-next-input
+                   #'codex--app-server-on-last-composer-line-p))
       (define-key map (kbd "C-c C-r") #'codex-app-server-search-input-history))
     (codex--term-bind-newline-keys map)
     (use-local-map map)))

@@ -2626,6 +2626,104 @@ assertion in `eat--t-cur-left' on the following cursor move."
     (codex-app-server-next-input)
     (should (equal (codex--app-server-input-text) ""))))
 
+(defmacro codex-test--with-composer (&rest body)
+  "Run BODY in an app-server buffer with a composer and its input keys."
+  (declare (indent 0) (debug t))
+  `(with-temp-buffer
+     (codex-app-server-mode)
+     (setq-local codex--app-server-agent-items (make-hash-table :test 'equal))
+     (codex--term-setup-keymap 'app-server)
+     (insert "transcript line\n")
+     (codex--app-server-setup-input-region)
+     ,@body))
+
+(defun codex-test--press (key)
+  "Run the command the current buffer's keymaps bind to KEY."
+  (let ((command (key-binding (kbd key))))
+    (should (commandp command))
+    (setq this-command command)
+    (call-interactively command)))
+
+(ert-deftest codex-test-app-server-arrows-navigate-history-at-composer-edges ()
+  "Up and down walk prompt history from a single-line composer."
+  (codex-test--with-composer
+    (codex--app-server-record-input "first")
+    (codex--app-server-record-input "second")
+    (codex-test--press "<up>")
+    (should (equal (codex--app-server-input-text) "second"))
+    (codex-test--press "<up>")
+    (should (equal (codex--app-server-input-text) "first"))
+    (codex-test--press "<down>")
+    (should (equal (codex--app-server-input-text) "second"))
+    (codex-test--press "<down>")
+    (should (equal (codex--app-server-input-text) ""))))
+
+(ert-deftest codex-test-app-server-arrows-move-inside-multiline-composer ()
+  "Up calls history only on the first line and down only on the last."
+  (codex-test--with-composer
+    (insert "one\ntwo\nthree")
+    (let ((previous #'codex-app-server-previous-input)
+          (next #'codex-app-server-next-input)
+          (start (marker-position codex--app-server-input-marker)))
+      (goto-char (+ start 2))
+      (should (eq (key-binding (kbd "<up>")) previous))
+      (should (eq (key-binding (kbd "<down>")) #'next-line))
+      (goto-char (+ start 5))
+      (should (eq (key-binding (kbd "<up>")) #'previous-line))
+      (should (eq (key-binding (kbd "<down>")) #'next-line))
+      (goto-char (point-max))
+      (should (eq (key-binding (kbd "<up>")) #'previous-line))
+      (should (eq (key-binding (kbd "<down>")) next)))))
+
+(ert-deftest codex-test-app-server-arrows-move-normally-outside-composer ()
+  "Up and down stay ordinary motion in the transcript and without a composer."
+  (codex-test--with-composer
+    (goto-char (point-min))
+    (should (eq (key-binding (kbd "<up>")) #'previous-line))
+    (should (eq (key-binding (kbd "<down>")) #'next-line))
+    (goto-char (1- codex--app-server-input-marker))
+    (should (eq (key-binding (kbd "<up>")) #'previous-line))
+    (should (eq (key-binding (kbd "<down>")) #'next-line))
+    (setq-local codex--app-server-input-marker nil)
+    (goto-char (point-max))
+    (should (eq (key-binding (kbd "<up>")) #'previous-line))
+    (should (eq (key-binding (kbd "<down>")) #'next-line))))
+
+(ert-deftest codex-test-app-server-arrows-move-across-wrapped-composer-rows ()
+  "Up and down treat a wrapped row as a line, as ordinary motion does."
+  (codex-test--with-composer
+    (save-window-excursion
+      (set-window-buffer nil (current-buffer))
+      (let ((start (marker-position codex--app-server-input-marker))
+            (width (window-body-width)))
+        (insert (make-string (* 3 width) ?x))
+        (goto-char (+ start (* 2 width) (/ width 2)))
+        (should (eq (key-binding (kbd "<up>")) #'previous-line))
+        (should (eq (key-binding (kbd "<down>")) #'next-line))
+        (goto-char (+ start 1))
+        (should (eq (key-binding (kbd "<up>"))
+                    #'codex-app-server-previous-input))
+        (should (eq (key-binding (kbd "<down>")) #'next-line))
+        (goto-char (point-max))
+        (should (eq (key-binding (kbd "<up>")) #'previous-line))
+        (should (eq (key-binding (kbd "<down>"))
+                    #'codex-app-server-next-input))
+        (let ((line-move-visual nil))
+          (goto-char (+ start 1))
+          (should (eq (key-binding (kbd "<down>"))
+                      #'codex-app-server-next-input))
+          (goto-char (point-max))
+          (should (eq (key-binding (kbd "<up>"))
+                      #'codex-app-server-previous-input)))))))
+
+(ert-deftest codex-test-terminal-backends-keep-arrow-keys ()
+  "Terminal backends do not gain the composer's arrow bindings."
+  (dolist (backend '(eat vterm))
+    (with-temp-buffer
+      (codex--term-setup-keymap backend)
+      (should-not (local-key-binding (kbd "<up>")))
+      (should-not (local-key-binding (kbd "<down>"))))))
+
 (ert-deftest codex-test-app-server-paste-image ()
   "Pasting a clipboard image writes a temp PNG and queues it for the next turn."
   (with-temp-buffer

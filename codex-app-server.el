@@ -5953,6 +5953,34 @@ returns untracked files, verified against a freshly created one."
          (nth codex--app-server-input-history-index
               codex--app-server-input-history))))))
 
+(defun codex--app-server-conditional-binding (command predicate)
+  "Return a key binding that runs COMMAND only while PREDICATE returns non-nil.
+Otherwise the lookup falls through to the next active keymap, so the key keeps
+whatever meaning it has outside the composer."
+  `(menu-item "" ,command
+              :filter ,(lambda (binding) (and (funcall predicate) binding))))
+
+(defun codex--app-server-on-first-composer-line-p ()
+  "Return non-nil when moving up from point would leave the composer."
+  (and (codex--app-server-point-in-composer-p)
+       (save-excursion
+         (if line-move-visual (vertical-motion 0) (forward-line 0))
+         (<= (point) codex--app-server-input-marker))))
+
+(defun codex--app-server-on-last-composer-line-p ()
+  "Return non-nil when moving down from point would leave the composer."
+  (and (codex--app-server-point-in-composer-p)
+       (save-excursion
+         (if line-move-visual
+             (zerop (vertical-motion 1))
+           (end-of-line)
+           (eobp)))))
+
+(defun codex--app-server-point-in-composer-p ()
+  "Return non-nil when point is in this buffer's editable input region."
+  (and (codex--app-server-input-active-p)
+       (>= (point) codex--app-server-input-marker)))
+
 (defun codex-app-server-search-input-history ()
   "Insert a prompt chosen from the input history by completion."
   (interactive)
