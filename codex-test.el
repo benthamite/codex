@@ -2724,6 +2724,101 @@ assertion in `eat--t-cur-left' on the following cursor move."
       (should-not (local-key-binding (kbd "<up>")))
       (should-not (local-key-binding (kbd "<down>"))))))
 
+(ert-deftest codex-test-app-server-line-start-stops-at-input ()
+  "C-a stops after the prompt on the first line and at bol on later lines."
+  (codex-test--with-composer
+    (let ((start (marker-position codex--app-server-input-marker)))
+      (insert-and-inherit "one\ntwo")
+      (codex-test--press "C-a")
+      (should (= (point) (+ start 4)))
+      (goto-char (+ start 2))
+      (codex-test--press "C-a")
+      (should (= (point) start))
+      (codex-test--press "C-a")
+      (should (= (point) start))
+      (should (equal (codex--app-server-input-text) "one\ntwo")))))
+
+(ert-deftest codex-test-app-server-backward-kill-word-stops-at-input ()
+  "M-DEL kills within the input and is harmless at its start."
+  (codex-test--with-composer
+    (let ((kill-ring nil)
+          (kill-ring-yank-pointer nil)
+          (start (marker-position codex--app-server-input-marker))
+          (before (buffer-substring-no-properties (point-min) (point-max))))
+      (should (eq (key-binding (kbd "M-DEL")) #'backward-kill-word))
+      (codex-test--press "M-DEL")
+      (should (= (point) start))
+      (should (equal (buffer-substring-no-properties (point-min) (point-max))
+                     before))
+      (insert-and-inherit "hello")
+      (codex-test--press "M-DEL")
+      (should (= (point) start))
+      (should (equal (codex--app-server-input-text) ""))
+      (should (equal (car kill-ring) "hello"))
+      (should (equal (buffer-substring-no-properties (point-min) (point-max))
+                     before)))))
+
+(ert-deftest codex-test-app-server-kill-to-input-line-start ()
+  "`s-<backspace>' kills back to the start of input on the current line only."
+  (codex-test--with-composer
+    (let ((kill-ring nil)
+          (kill-ring-yank-pointer nil)
+          (start (marker-position codex--app-server-input-marker)))
+      (insert-and-inherit "one two\nthree four")
+      (goto-char (- (point-max) 5))
+      (codex-test--press "s-<backspace>")
+      (should (equal (car kill-ring) "three"))
+      (should (equal (codex--app-server-input-text) "one two\n four"))
+      (should (= (point) (+ start 8)))
+      (setq kill-ring nil)
+      (codex-test--press "s-<backspace>")
+      (should-not kill-ring)
+      (should (equal (codex--app-server-input-text) "one two\n four"))
+      (goto-char (+ start 7))
+      (codex-test--press "s-<backspace>")
+      (should (equal (car kill-ring) "one two"))
+      (should (equal (codex--app-server-input-text) "\n four"))
+      (should (= (point) start))
+      (setq kill-ring nil)
+      (codex-test--press "s-<backspace>")
+      (should-not kill-ring)
+      (should (equal (codex--app-server-input-text) "\n four")))))
+
+(ert-deftest codex-test-app-server-kill-key-falls-through-outside-composer ()
+  "`s-<backspace>' belongs to the composer, not to the transcript or prompt."
+  (codex-test--with-composer
+    (goto-char (1- codex--app-server-input-marker))
+    (should-not (key-binding (kbd "s-<backspace>")))
+    (goto-char (point-min))
+    (should-not (key-binding (kbd "s-<backspace>")))
+    (goto-char (point-max))
+    (should (eq (key-binding (kbd "s-<backspace>"))
+                #'codex-app-server-kill-to-input-line-start))))
+
+(ert-deftest codex-test-app-server-prompt-field-leaves-text-unchanged ()
+  "The prompt's field changes neither typed, submitted nor copied text."
+  (codex-test--with-composer
+    (let ((kill-ring nil)
+          (kill-ring-yank-pointer nil)
+          (start (marker-position codex--app-server-input-marker))
+          submitted)
+      (insert-and-inherit "hello")
+      (should-not (get-text-property start 'read-only))
+      (should-not (get-text-property start 'field))
+      (goto-char start)
+      (codex-test--press "C-a")
+      (kill-new (filter-buffer-substring (- start 2) (point-max)))
+      (with-temp-buffer
+        (yank)
+        (should (equal (buffer-string) "› hello"))
+        (should-not (next-single-property-change (point-min) 'field))
+        (should-not (get-text-property (point-min) 'field)))
+      (cl-letf (((symbol-function 'codex--app-server-submit-command)
+                 (lambda (text) (setq submitted text))))
+        (codex--app-server-send-input))
+      (should (equal submitted "hello"))
+      (should (equal (codex--app-server-input-text) "")))))
+
 (ert-deftest codex-test-app-server-paste-image ()
   "Pasting a clipboard image writes a temp PNG and queues it for the next turn."
   (with-temp-buffer

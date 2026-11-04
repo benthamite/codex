@@ -727,6 +727,10 @@ SWITCHES is an optional list of command-line arguments."
                   (codex--app-server-conditional-binding
                    #'codex-app-server-next-input
                    #'codex--app-server-on-last-composer-line-p))
+      (define-key map (kbd "s-<backspace>")
+                  (codex--app-server-conditional-binding
+                   #'codex-app-server-kill-to-input-line-start
+                   #'codex--app-server-point-in-composer-p))
       (define-key map (kbd "C-c C-r") #'codex-app-server-search-input-history))
     (codex--term-bind-newline-keys map)
     (use-local-map map)))

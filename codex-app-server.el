@@ -994,6 +994,9 @@ When DEFER-INPUT is non-nil, leave input rendering to the caller."
       (insert prompt)
       (add-text-properties start (point)
                            '(read-only t face codex-app-server-status-face))
+      (add-text-properties (- (point) (length prompt)) (point)
+                           '(field codex-app-server-prompt
+                                   inhibit-line-move-field-capture t))
       (put-text-property (1- (point)) (point) 'rear-nonsticky t)
       (setq codex--app-server-output-marker (copy-marker start t))
       (setq codex--app-server-input-marker (copy-marker (point) nil))
@@ -5980,6 +5983,15 @@ whatever meaning it has outside the composer."
   "Return non-nil when point is in this buffer's editable input region."
   (and (codex--app-server-input-active-p)
        (>= (point) codex--app-server-input-marker)))
+
+(defun codex-app-server-kill-to-input-line-start ()
+  "Kill from point back to the start of input on the current line.
+On the composer's first line that is the end of the prompt.  Do nothing, and
+leave the kill ring alone, when point is already there."
+  (interactive)
+  (let ((start (max (pos-bol) codex--app-server-input-marker)))
+    (when (< start (point))
+      (kill-region start (point)))))
 
 (defun codex-app-server-search-input-history ()
   "Insert a prompt chosen from the input history by completion."
