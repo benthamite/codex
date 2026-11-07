@@ -732,6 +732,23 @@
       (should (equal codex-reasoning-effort "medium"))
       (should (equal codex--app-server-default-effort "high")))))
 
+(ert-deftest codex-test-app-server-notification-functions ()
+  "Extensions see this thread's notifications, not foreign ones, and errors stay contained."
+  (codex-test--with-mode-session
+    (let* ((seen nil)
+           (codex-app-server-notification-functions
+            (list (lambda (method params) (push (cons method params) seen))
+                  (lambda (&rest _) (error "Broken extension"))))
+           (params (list (cons 'threadId "mode-thread")
+                         (cons 'plan (vector (list (cons 'step "Read the code")
+                                                   (cons 'status "inProgress")))))))
+      (codex--app-server-handle-notification
+       (list (cons 'method "turn/plan/updated") (cons 'params params)))
+      (codex--app-server-handle-notification
+       (list (cons 'method "turn/plan/updated")
+             (cons 'params (list (cons 'threadId "foreign")))))
+      (should (equal seen (list (cons "turn/plan/updated" params)))))))
+
 (ert-deftest codex-test-app-server-mode-model-changes-preserve-plan-effort ()
   "Changing models keeps Plan's effort and stores the Default effort."
   (codex-test--with-mode-session

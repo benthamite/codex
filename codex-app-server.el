@@ -57,6 +57,13 @@
 (defvar codex-app-server-turn-completed-hook nil
   "Hook run after an app-server turn becomes idle and before queued input.")
 
+(defvar codex-app-server-notification-functions nil
+  "Abnormal hook run for each app-server notification of this buffer's thread.
+Each function is called in the session buffer with the notification's
+METHOD, a string such as \"turn/plan/updated\", and its PARAMS alist,
+after Codex has rendered it.  An error in a function is reported as a
+message rather than interrupting the session.")
+
 
 (defface codex-app-server-role-face
   '((t :inherit font-lock-keyword-face :weight bold))
@@ -855,7 +862,10 @@ can arrive before this buffer has learned its thread id; both belong here."
          (codex--app-server-insert-status
           (or (codex--app-server-notification-message params)
               (format "Codex %s" (string-replace "/" " " method)))))
-        (_ nil)))))
+        (_ nil))
+      (with-demoted-errors "codex-app-server-notification-functions: %S"
+        (run-hook-with-args 'codex-app-server-notification-functions
+                            method params)))))
 
 (defun codex--app-server-notification-message (params)
   "Return the human-readable message in notification PARAMS, or nil.
