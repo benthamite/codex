@@ -156,8 +156,14 @@ because per-tool hooks can be frequent."
 (defvar-local codex--app-server-stderr-buffer nil
   "Hidden buffer receiving app-server standard error output.")
 
-(defvar-local codex--app-server-pending-output ""
-  "Incomplete newline-delimited JSON output from app-server.")
+(defvar-local codex--app-server-pending-output nil
+  "Reverse-order chunks of incomplete newline-delimited app-server JSON.")
+
+(defvar-local codex--app-server-output-ready-p nil
+  "Non-nil when queued output includes a complete JSON line.")
+
+(defvar-local codex--app-server-output-draining-p nil
+  "Non-nil while dispatching complete lines; defer recursive filters.")
 
 (defvar-local codex--app-server-next-request-id 0
   "Next JSON-RPC request id for the current app-server buffer.")
@@ -512,7 +518,9 @@ arguments."
       (setq-local codex--app-server-launch-origin origin)
       (let ((inhibit-read-only t))
         (erase-buffer))
-      (setq-local codex--app-server-pending-output "")
+      (setq-local codex--app-server-pending-output nil
+                  codex--app-server-output-ready-p nil
+                  codex--app-server-output-draining-p nil)
       (setq-local codex--app-server-stderr-buffer stderr-buffer)
       (setq-local codex--app-server-output-marker nil)
       (setq-local codex--app-server-input-marker nil)
@@ -680,25 +688,40 @@ server answers, and an empty buffer would look like a hang."
         (kill-buffer buffer)))))
 
 (defun codex--app-server-process-filter (process output)
-  "Handle newline-delimited app-server OUTPUT from PROCESS."
-  (when-let* ((buffer (process-buffer process)))
-    (when (buffer-live-p buffer)
-      (with-current-buffer buffer
-        (when (eq process codex--app-server-process)
-          (setq codex--app-server-pending-output
-                (concat codex--app-server-pending-output output))
-          (codex--app-server-drain-lines))))))
+  "Handle newline-delimited app-server OUTPUT from PROCESS.
+Keep incomplete frames as chunks, scanning only newly received text."
+  (save-match-data
+    (when-let* ((buffer (process-buffer process)))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (when (and (eq process codex--app-server-process)
+                     (not (string-empty-p output)))
+            (push output codex--app-server-pending-output)
+            (when (string-search "\n" output)
+              (setq codex--app-server-output-ready-p t))
+            (unless codex--app-server-output-draining-p
+              (let ((codex--app-server-output-draining-p t))
+                (while codex--app-server-output-ready-p
+                  (codex--app-server-drain-lines))))))))))
 
 (defun codex--app-server-drain-lines ()
-  "Process complete app-server JSON lines in the current buffer."
-  (let (line)
-    (while (string-match "\n" codex--app-server-pending-output)
-      (setq line (substring codex--app-server-pending-output
-                            0 (match-beginning 0)))
+  "Assemble queued chunks once and dispatch their complete JSON lines."
+  (let ((output (apply #'concat
+                       (nreverse codex--app-server-pending-output)))
+        (start 0)
+        end lines)
+    (setq codex--app-server-pending-output nil
+          codex--app-server-output-ready-p nil)
+    (while (setq end (string-search "\n" output start))
+      (unless (= start end)
+        (push (substring output start end) lines))
+      (setq start (1+ end)))
+    ;; Save the unfinished tail before callbacks can reenter this filter.
+    (when (< start (length output))
       (setq codex--app-server-pending-output
-            (substring codex--app-server-pending-output (match-end 0)))
-      (unless (string-empty-p line)
-        (codex--app-server-handle-line line)))))
+            (list (substring output start))))
+    (dolist (line (nreverse lines))
+      (codex--app-server-handle-line line))))
 
 (defun codex--app-server-handle-line (line)
   "Parse and handle one app-server JSON LINE.
