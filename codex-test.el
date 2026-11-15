@@ -8768,12 +8768,12 @@ the menu, exactly as `@' opens the file equivalent."
                  (lambda (method _params callback)
                    (push method methods)
                    (funcall callback
-                            (if (equal method "plugin/list")
+                            (if (equal method "plugin/installed")
                                 codex-test--plugin-list-result
                               codex-test--skill-list-result)
                             nil))))
         (codex--app-server-request-mention-rows))
-      (should (equal (nreverse methods) '("plugin/list" "skills/list")))
+      (should (equal (nreverse methods) '("plugin/installed" "skills/list")))
       (should (equal (mapcar #'car codex--app-server-mention-rows)
                      '("browser" "visualize" "superpowers:brainstorming"
                        "browser:control-in-app-browser" "add-bib-entry"))))))
@@ -9180,3 +9180,13 @@ the menu, exactly as `@' opens the file equivalent."
       (codex--app-server-run-question '((id . 1) (params (questions . []))))
       (should (string-match-p "Codex question failed: UI broke" (buffer-string)))
       (should-not codex--app-server-question-active))))
+
+(ert-deftest codex-test-app-server-explicit-plugin-browser-keeps-full-catalog ()
+  "Reducing startup traffic must not hide uninstalled plugins in the browser."
+  (with-temp-buffer
+    (setq-local codex--buffer-directory "/tmp/project")
+    (let (method)
+      (cl-letf (((symbol-function 'codex--app-server-send-request)
+                 (lambda (value _params _callback) (setq method value))))
+        (codex--app-server-list-plugins))
+      (should (equal method "plugin/list")))))
