@@ -218,7 +218,7 @@
                (lambda (&rest _) (ert-fail "Obsolete exit failed new callbacks"))))
       (codex--app-server-process-filter 'obsolete "PRIVATE_OLD_FRAME\n")
       (codex--app-server-process-sentinel 'obsolete "exited\n")
-      (should (equal codex--app-server-pending-output ""))
+      (should-not codex--app-server-pending-output)
       (should (string-empty-p (buffer-string))))))
 
 (ert-deftest codex-test-app-server-verification-defers-busy-ui ()
@@ -9180,3 +9180,79 @@ the menu, exactly as `@' opens the file equivalent."
       (codex--app-server-run-question '((id . 1) (params (questions . []))))
       (should (string-match-p "Codex question failed: UI broke" (buffer-string)))
       (should-not codex--app-server-question-active))))
+
+;;; Chunked app-server protocol output.
+
+(defmacro codex-test-app-server-chunked-output--session (&rest body)
+  (declare (indent 0) (debug t))
+  `(with-temp-buffer
+     (setq-local codex--app-server-process 'source)
+     (let (received)
+       (cl-letf (((symbol-function 'process-buffer) (lambda (_p) (current-buffer)))
+                 ((symbol-function 'codex--app-server-handle-line)
+                  (lambda (line) (push line received))))
+         ,@body))))
+
+(ert-deftest codex-test-app-server-chunked-output-fragments-unicode-and-batches ()
+  (codex-test-app-server-chunked-output--session
+    (dolist (chunk '("{\"a\":\"日本" "語\"}" "\n\n{\"b\":2}\n{\"c\":" "3}\n"))
+      (codex--app-server-process-filter 'source chunk))
+    (should (equal (nreverse received)
+                   '("{\"a\":\"日本語\"}" "{\"b\":2}" "{\"c\":3}")))
+    (should-not codex--app-server-pending-output)))
+
+(ert-deftest codex-test-app-server-chunked-output-fragmentation-independent ()
+  "Splitting at any character preserves the same protocol frames."
+  (let ((wire "{\"a\":\"日本語\\n本文\"}\n\n{\"b\":2}\ntrailer"))
+    (dotimes (cut (1+ (length wire)))
+      (codex-test-app-server-chunked-output--session
+        (codex--app-server-process-filter 'source (substring wire 0 cut))
+        (codex--app-server-process-filter 'source (substring wire cut))
+        (should (equal (nreverse received)
+                       '("{\"a\":\"日本語\\n本文\"}" "{\"b\":2}")))
+        (should (equal (apply #'concat (reverse codex--app-server-pending-output))
+                       "trailer"))))))
+
+(ert-deftest codex-test-app-server-chunked-output-large-partial-frame-is-not-reassembled ()
+  "No growing-frame assembly before its newline arrives."
+  (codex-test-app-server-chunked-output--session
+    (let ((chunk (make-string 65536 ?あ))
+          (drains 0)
+          (original (symbol-function 'codex--app-server-drain-lines)))
+      (cl-letf (((symbol-function 'codex--app-server-drain-lines)
+                 (lambda () (cl-incf drains) (funcall original))))
+        (dotimes (_ 320)
+          (codex--app-server-process-filter 'source chunk))
+        (should (= drains 0))
+        (should-not received)
+        (codex--app-server-process-filter 'source "\n")
+        (should (= drains 1))
+        (should (= (length (car received)) (* 320 65536)))
+        (should (= (aref (car received) (1- (* 320 65536))) ?あ))))))
+
+(ert-deftest codex-test-app-server-chunked-output-reentrant-filter-preserves-order ()
+  (codex-test-app-server-chunked-output--session
+    (cl-letf (((symbol-function 'codex--app-server-handle-line)
+               (lambda (line)
+                 (push line received)
+                 (when (equal line "first")
+                   (codex--app-server-process-filter 'source "third\n")))))
+      (codex--app-server-process-filter 'source "first\nsecond\n"))
+    (should (equal (nreverse received) '("first" "second" "third")))
+    (should-not codex--app-server-pending-output)))
+
+(ert-deftest codex-test-app-server-chunked-output-reentrant-partial-frame ()
+  (codex-test-app-server-chunked-output--session
+    (cl-letf (((symbol-function 'codex--app-server-handle-line)
+               (lambda (line)
+                 (push line received)
+                 (when (equal line "first")
+                   (codex--app-server-process-filter 'source "rd\n")))))
+      (codex--app-server-process-filter 'source "first\nsecond\nthi"))
+    (should (equal (nreverse received) '("first" "second" "third")))))
+
+(ert-deftest codex-test-app-server-chunked-output-obsolete-process-does-not-buffer ()
+  (codex-test-app-server-chunked-output--session
+    (codex--app-server-process-filter 'old "obsolete\n")
+    (should-not received)
+    (should-not codex--app-server-pending-output)))
