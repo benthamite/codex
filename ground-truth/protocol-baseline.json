@@ -434,8 +434,8 @@
       "status": "handled"
     },
     "plugin/installed": {
-      "note": "drop-in for codex--app-server-plugin-records, which already parses the identical marketplaces->plugins structure, but it only pre-filters to installed plugins. /plugins re-queries plugin/list and shows install state, so the saving is a narrower payload, not a user-visible difference.",
-      "status": "wont-implement"
+      "note": "Used with skills/list to prepare installed-and-enabled plugin mentions at startup. It has the same marketplaces->plugins shape as plugin/list but omits the uninstalled catalog. /plugins and /apps still use plugin/list for explicit browsing. A live 0.163.0 capture returned 10 installed plugins in 20 KB versus 12,910 catalog entries in 34.8 MB for plugin/list.",
+      "status": "handled"
     },
     "plugin/list": {
       "status": "handled"

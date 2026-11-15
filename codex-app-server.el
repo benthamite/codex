@@ -1606,7 +1606,7 @@ the same set the CLI menu shows instead of waiting on two requests."
   "Send the two requests the `$' menu is built from."
   (let ((buffer (current-buffer)))
     (codex--app-server-send-request
-     "plugin/list"
+     "plugin/installed"
      `((cwds . ,(vector (codex--app-server-current-cwd))))
      (lambda (plugins plugin-error)
        (unless plugin-error
